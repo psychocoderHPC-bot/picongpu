@@ -500,7 +500,7 @@ pic_dependency_set_status(FFTW3 ${FFTW3_FOUND})
 ################################################################################
 
 set(PIC_COMPUTE_CURRENT_THREAD_LIMITER_DEFAULT OFF)
-if(ALPAKA_ACC_GPU_HIP_ENABLE)
+if(alpaka_DEP_HIP)
     set(PIC_COMPUTE_CURRENT_THREAD_LIMITER_DEFAULT ON)
 endif()
 option(
