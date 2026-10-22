@@ -234,8 +234,15 @@ namespace pmacc
             if(m_isMpiInitialized)
             {
                 eventSystem::waitForAllTasks();
-                // Required by scorep for flushing the buffers
-                ::alpaka::onHost::wait(manager::Device<ComputeDevice>::get().current());
+                /* The device may already have been reset (e.g. by the QueueController
+                 * destructor); current() dereferences an empty optional in that case, which
+                 * is undefined behavior in release builds. Only flush when it still exists. */
+                auto& deviceManager = manager::Device<ComputeDevice>::get();
+                if(deviceManager.id() != -1)
+                {
+                    // Required by scorep for flushing the buffers
+                    ::alpaka::onHost::wait(deviceManager.current());
+                }
                 m_isMpiInitialized = false;
                 /* Free the MPI context.
                  * The gpu context is freed by the `QueueController`, because

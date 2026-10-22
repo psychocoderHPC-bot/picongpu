@@ -58,7 +58,19 @@ namespace pmacc
             using Api = typename detail::DeviceSpecOf<DeviceType>::Api;
             using DeviceKind = typename detail::DeviceSpecOf<DeviceType>::DeviceKind;
 
-            std::optional<DeviceType> m_device;
+            /** Handle to the alpaka device.
+             *
+             * The handle is intentionally leaked by giving it a no-op deleter. alpaka3's
+             * unifiedCudaHip::Device destructor calls hipDeviceReset()/cudaDeviceReset().
+             * PMacc keeps the handle in this function-local static, so without the leak the
+             * last reference is released from QueueController's static destructor while the
+             * CUDA/HIP runtime's own atexit cleanup is still pending. hipDeviceReset() then
+             * tears down the context underneath that cleanup and the process aborts with a
+             * double free in libamdhip64 during __cxa_finalize (seen on ROCm 7.2).
+             * The backend runtime owns context teardown and releases the leaked resources at
+             * process exit, so the no-op deleter is safe for both HIP and CUDA.
+             */
+            std::shared_ptr<DeviceType> m_device;
 
             int m_devIdx = -1;
 
@@ -105,7 +117,10 @@ namespace pmacc
                     {
                         throw std::runtime_error(e.what());
                     }
-                    m_device = std::move(dev);
+                    /* Intentionally never destroy the handle, see the m_device comment. */
+                    m_device = std::shared_ptr<DeviceType>(
+                        new DeviceType(std::move(*dev)),
+                        [](DeviceType*) { /* no-op deleter: intentionally leak the handle */ });
                     m_devIdx = idx;
                     return *m_device;
                 }
@@ -127,6 +142,8 @@ namespace pmacc
                 else
                 {
                     m_devIdx = -1;
+                    /* Drop our reference but keep the handle alive: the no-op deleter above
+                     * must not run at static-destruction time. */
                     m_device.reset();
                 }
             }
@@ -138,7 +155,7 @@ namespace pmacc
 
             auto current() -> DeviceType&
             {
-                assert(m_device.has_value());
+                assert(m_device);
                 return *m_device;
             }
 
