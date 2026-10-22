@@ -100,6 +100,12 @@ add_executable(
 # We don't need ranges in <nlohmann/json.hpp>
 target_compile_definitions(${_TARGET_NAME} PRIVATE JSON_HAS_RANGES=0)
 
+# Mirror the main PIConGPU build, which always defines ENABLE_OPENPMD (0 when
+# openPMD is not enabled). Many headers test `#if (ENABLE_OPENPMD == 1)`, so
+# omitting the definition here breaks the header check with -Wundef. The header
+# check never links openPMD, therefore the plugin code stays disabled.
+target_compile_definitions(${_TARGET_NAME} PRIVATE ENABLE_OPENPMD=0)
+
 target_link_libraries(${_TARGET_NAME} PUBLIC Catch2 Catch2WithMain)
 target_link_libraries(${_TARGET_NAME} PRIVATE pmacc::pmacc)
 target_include_directories(

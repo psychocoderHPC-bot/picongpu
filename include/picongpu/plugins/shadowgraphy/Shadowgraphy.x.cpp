@@ -22,7 +22,7 @@
 
 #include <pmacc/math/Complex.hpp>
 
-#if (SIMDIM == DIM3 && PIC_ENABLE_FFTW3 == 1 && ENABLE_OPENPMD == 1)
+#if (SIMDIM == DIM3 && defined(PIC_ENABLE_FFTW3) && PIC_ENABLE_FFTW3 == 1 && ENABLE_OPENPMD == 1)
 
 // clang-format of
 #    include "picongpu/param/shadowgraphy.param"

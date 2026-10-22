@@ -19,6 +19,11 @@
 
 #pragma once
 
+/** Select the TWTSTight implementation (1) or the legacy TWTS implementation (0). */
+#ifndef PARAM_TWTSTIGHT
+#    define PARAM_TWTSTIGHT 0
+#endif
+
 /** Load pre-defined templates */
 #if PARAM_TWTSTIGHT == 1
 #    include "picongpu/fields/background/templates/twtstight/TWTSTight.hpp"
