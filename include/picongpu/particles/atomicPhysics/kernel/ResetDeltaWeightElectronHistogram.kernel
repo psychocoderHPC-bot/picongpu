@@ -64,7 +64,7 @@ namespace picongpu::particles::atomicPhysics::kernel
 
             auto forEachBin = pmacc::lockstep::makeForEach<T_Histogram::numberBins, T_Worker>(worker);
             T_Histogram& histogram = histogramBox(superCellFieldIdx);
-            forEachBin([&worker, &histogram](uint32_t const binIndex) { histogram.setDeltaWeight(binIndex, 0._X); });
+            forEachBin([&histogram](uint32_t const binIndex) { histogram.setDeltaWeight(binIndex, 0._X); });
         }
     };
 } // namespace picongpu::particles::atomicPhysics::kernel

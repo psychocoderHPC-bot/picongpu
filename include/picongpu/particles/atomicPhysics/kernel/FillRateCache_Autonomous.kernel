@@ -120,7 +120,7 @@ namespace picongpu::particles::atomicPhysics::kernel
                 auto& rateCache = rateCacheBox(superCellFieldIdx);
 
                 forEachAtomicState(
-                    [&worker, &rateCache, &startIndexDataBox, &numberTransitionsDataBox, &autonomousTransitionDataBox](
+                    [&rateCache, &startIndexDataBox, &numberTransitionsDataBox, &autonomousTransitionDataBox](
                         uint32_t const atomicStateCollectionIndex)
                     {
                         // check if atomic state present at all

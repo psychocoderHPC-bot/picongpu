@@ -96,8 +96,7 @@ namespace picongpu::particles::atomicPhysics::kernel
 
             auto forEachCell = pmacc::lockstep::makeForEach<FieldEnergyCache::numberCells, T_Worker>(worker);
             forEachCell(
-                [&worker,
-                 &superCellCellOffset,
+                [&superCellCellOffset,
                  &eFieldBox,
                  &eFieldEnergyUseCache,
                  &rejectionProbabilityCache,

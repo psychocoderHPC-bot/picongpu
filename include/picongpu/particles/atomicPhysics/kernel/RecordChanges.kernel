@@ -121,7 +121,9 @@ namespace picongpu::particles::atomicPhysics::kernel
 
             auto onlyMaster = lockstep::makeMaster(worker);
             onlyMaster(
-                [&superCellConstantIPDInput, &superCellFieldIdx, &chargeStateBoxAndIPDInput...]()
+                // default capture: the IPD inputs are only used for ionizing collisional
+                // process classes, explicit captures would be unused otherwise
+                [&]()
                 {
                     if constexpr(isIonizing && isCollisional)
                     {
@@ -133,11 +135,9 @@ namespace picongpu::particles::atomicPhysics::kernel
             worker.sync();
 
             forEachLocalIonBoxEntry(
-                [&electronHistogram,
-                 &atomicStateBox,
-                 &transitionBox,
-                 &superCellConstantIPDInput,
-                 &chargeStateBoxAndIPDInput...](T_Worker const& worker, auto& ion)
+                // default capture: the histogram and IPD inputs are only used for
+                // collisional process classes, explicit captures would be unused otherwise
+                [&](T_Worker const& worker, auto& ion)
                 {
                     if constexpr(picongpu::atomicPhysics::debug::kernel::recordChanges::CHECK_FOR_ACCEPTANCE)
                         if(!ion[accepted_])

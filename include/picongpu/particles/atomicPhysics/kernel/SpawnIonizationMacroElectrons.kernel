@@ -155,15 +155,10 @@ namespace picongpu::particles::atomicPhysics::kernel
 
             // init shared memory
             onlyMaster(
-                [&superCellIdx,
-                 &superCellFieldIdx,
-                 &ionizationElectronBox,
-                 &offsetLowFrame,
-                 &spawnCounter,
-                 &totalNumberMacroElectronsToSpawn,
-                 &electronFrameArray,
-                 &superCellConstantIPDInput,
-                 &rngFactoryAndChargeStateBoxAndIPDInput...]()
+                // default capture: the IPD inputs are used only by the autonomousBased
+                // instantiation, so explicit captures would be unused (and rejected as
+                // -Werror) in the boundFreeBased instantiation
+                [&]()
                 {
                     offsetLowFrame
                         = static_cast<int32_t>(ionizationElectronBox.getSuperCell(superCellIdx).getSizeLastFrame());
@@ -272,7 +267,6 @@ namespace picongpu::particles::atomicPhysics::kernel
                     /* might create frame not used in current iteration but never one not used at all */
                     forEachFrameMaster(
                         [&worker,
-                         &frameSize,
                          &superCellIdx,
                          &offsetLowFrame,
                          &totalNumberMacroElectronsToSpawn,
@@ -302,19 +296,10 @@ namespace picongpu::particles::atomicPhysics::kernel
 
                     // try to init one electron for each logical worker
                     forEachFrameSlot(
-                        [&worker,
-                         &superCellConstantIPDInput,
-                         &ionFrame,
-                         &electronFrameArray,
-                         &idGen,
-                         &frameSize,
-                         &spawnCounter,
-                         &offsetLowFrame,
-                         &areaMapping,
-                         &superCellIdx,
-                         &atomicStateBox,
-                         &transitionBox,
-                         &rngFactoryAndChargeStateBoxAndIPDInput...](
+                        // default capture: the IPD and atomic state inputs are used only by
+                        // the autonomousBased instantiation, explicit captures would be
+                        // unused in the boundFreeBased instantiation
+                        [&](
                             uint32_t const frameSlotIdx,
                             uint8_t& numberIonizationElectrons)
                         {
@@ -401,7 +386,6 @@ namespace picongpu::particles::atomicPhysics::kernel
                          &ionizationElectronBox,
                          &superCellIdx,
                          &offsetLowFrame,
-                         &frameSize,
                          &electronFrameArray]()
                         {
                             totalNumberMacroElectronsToSpawn -= spawnCounter;
