@@ -373,7 +373,7 @@ namespace picongpu
             /* Create an empty allocator. This one is resized after all exchanges
              * for particles are created */
             deviceHeap = std::make_shared<DeviceHeap>(alpakaDevice, alpakaQueue, 0u);
-            alpaka::wait(alpakaQueue);
+            alpaka::onHost::wait(alpakaQueue);
 #endif
 
             static_assert(
@@ -409,7 +409,7 @@ namespace picongpu
 
             // initializing the heap for particles
             deviceHeap->destructiveResize(alpakaDevice, alpakaQueue, heapSize);
-            alpaka::wait(alpakaQueue);
+            alpaka::onHost::wait(alpakaQueue);
 
             auto mallocMCBuffer = std::make_unique<MallocMCBuffer<DeviceHeap>>(*deviceHeap);
             dc.consume(std::move(mallocMCBuffer));
@@ -657,16 +657,16 @@ namespace picongpu
             size_t allocatableMemory = freeDeviceMemory;
             bool memAlloced = false;
             // tmpBuffer avoids that the memory is freed before all other MPI ranks created there test buffer
-            std::optional<::alpaka::Buf<ComputeDevice, std::byte, AlpakaDim<1>, size_t>> tmpBuffer{};
+            std::optional<::pmacc::ComputeBuffer<std::byte, DIM1>> tmpBuffer{};
 
             // Check how much memory can be allocated with a single allocation call.
             do
             {
                 try
                 {
-                    auto testBuffer = alpaka::allocBuf<std::byte, size_t>(
+                    auto testBuffer = alpaka::onHost::alloc<std::byte>(
                         pmacc::manager::Device<ComputeDevice>::get().current(),
-                        allocatableMemory);
+                        MemSpace<DIM1>(allocatableMemory).toAlpakaMemVec());
                     tmpBuffer = testBuffer;
                     memAlloced = true;
                 }

@@ -162,7 +162,7 @@ namespace picongpu
                     if(numParsPerCell > 0)
                     {
                         // notify that at least one worker is creating a particle
-                        kernel::atomicAllExch(worker, &finished, 0, ::alpaka::hierarchy::Threads{});
+                        kernel::atomicAllExch(worker, &finished, 0, ::alpaka::onAcc::scope::Block{});
                     }
 
                     return posFunctor;
@@ -213,7 +213,7 @@ namespace picongpu
                         if(numParsPerCell > 0u)
                         {
                             destParticleIdx
-                                = alpaka::atomicAdd(worker.getAcc(), &destCounter, 1, ::alpaka::hierarchy::Threads{});
+                                = ::alpaka::onAcc::atomicAdd(worker.getAcc(), &destCounter, 1, ::alpaka::onAcc::scope::Block{});
                             numParsPerCell--;
                         }
                         return destParticleIdx;
