@@ -24,7 +24,15 @@
 #ifndef PMACC_UNROLL
 #    define PMACC_PRAGMA(x) _Pragma(#x)
 
-#    if defined(__clang__) || defined(__INTEL_LLVM_COMPILER) || defined(__NVCC__)
+#    if defined(__NVCC__)
+// nvcc also processes host code with the host compiler, which does not know the
+// unroll pragma and warns about it. Emit the pragma for the device pass only.
+#        if defined(__CUDA_ARCH__)
+#            define PMACC_UNROLL(var) PMACC_PRAGMA(unroll var)
+#        else
+#            define PMACC_UNROLL(var)
+#        endif
+#    elif defined(__clang__) || defined(__INTEL_LLVM_COMPILER)
 #        define PMACC_UNROLL(var) PMACC_PRAGMA(unroll var)
 #    elif defined(__INTEL_COMPILER) // check Intel before g++, because Intel defines __GNUG__
 #        define PMACC_UNROLL(var) PMACC_PRAGMA(unroll(var))
