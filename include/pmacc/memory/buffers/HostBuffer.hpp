@@ -57,11 +57,16 @@ namespace pmacc
     {
         //! flat owning mapped allocation, the N-dimensional view below adds tight pitches
         using BufferType = ComputeMappedBuffer<T_Type, DIM1>;
+        //! plain (non-pinned) host allocation used by code which must not allocate mapped memory
+        using PlainBufferType = decltype(::alpaka::onHost::alloc<T_Type>(
+            std::declval<HostDevice const&>(),
+            std::declval<::alpaka::Vec<MemIdxType, DIM1>>()));
         using ViewType = ::alpaka::View<HostApi, T_Type, ::alpaka::Vec<MemIdxType, T_dim>>;
 
     public:
         using DataBoxType = typename Buffer<T_Type, T_dim>::DataBoxType;
         std::optional<BufferType> hostBuffer;
+        std::optional<PlainBufferType> hostPlainBuffer;
         std::optional<ViewType> view;
 
         using BufferType1D = ::alpaka::View<HostApi, T_Type, ::alpaka::Vec<MemIdxType, DIM1>>;
@@ -83,16 +88,36 @@ namespace pmacc
          *
          * @param size extent for each dimension (in elements)
          */
-        HostBuffer(MemSpace<T_dim> size)
-            : Buffer<T_Type, T_dim>(size)
-            , hostBuffer(::alpaka::onHost::allocMapped<T_Type>(
-                  manager::Device<ComputeDevice>::get().current(),
-                  MemSpace<DIM1>(size.productOfComponents()).toAlpakaMemVec()))
+        HostBuffer(MemSpace<T_dim> size) : HostBuffer(size, true)
         {
+        }
+
+        /** allocate data accessible from the host
+         *
+         * @param size extent for each dimension (in elements)
+         * @param mapped allocate host-mapped (pinned) memory if true, else plain host memory
+         */
+        HostBuffer(MemSpace<T_dim> size, bool mapped) : Buffer<T_Type, T_dim>(size)
+        {
+            T_Type* ptr = nullptr;
+            if(mapped)
+            {
+                hostBuffer.emplace(::alpaka::onHost::allocMapped<T_Type>(
+                    manager::Device<ComputeDevice>::get().current(),
+                    MemSpace<DIM1>(size.productOfComponents()).toAlpakaMemVec()));
+                ptr = ::alpaka::onHost::data(*hostBuffer);
+            }
+            else
+            {
+                hostPlainBuffer.emplace(::alpaka::onHost::alloc<T_Type>(
+                    manager::Device<HostDevice>::get().current(),
+                    MemSpace<DIM1>(size.productOfComponents()).toAlpakaMemVec()));
+                ptr = ::alpaka::onHost::data(*hostPlainBuffer);
+            }
             auto const extents = size.toAlpakaMemVec();
             view.emplace(::alpaka::makeView(
                 ::alpaka::onHost::DeviceSpec<HostApi, HostDeviceKind>{HostApi{}, HostDeviceKind{}},
-                ::alpaka::onHost::data(*hostBuffer),
+                ptr,
                 extents,
                 ::alpaka::calculatePitchesFromExtents<T_Type>(extents)));
             reset(false);
@@ -109,6 +134,7 @@ namespace pmacc
         HostBuffer(HostBuffer& source, MemSpace<T_dim> size, MemSpace<T_dim> offset = MemSpace<T_dim>())
             : Buffer<T_Type, T_dim>(size)
             , hostBuffer(source.hostBuffer)
+            , hostPlainBuffer(source.hostPlainBuffer)
         {
             auto* shiftedPtr = &(*source.view)[offset.toAlpakaMemVec()];
             view.emplace(::alpaka::makeView(

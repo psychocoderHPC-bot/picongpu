@@ -21,6 +21,9 @@
 
 #pragma once
 
+#include "pmacc/traits/IsCpuAcc.hpp"
+#include "pmacc/traits/IsMappedMemorySupported.hpp"
+
 #include <alpaka/alpaka.hpp>
 
 #include <cstdint>

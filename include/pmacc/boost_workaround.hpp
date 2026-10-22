@@ -43,7 +43,9 @@
 #include <boost/optional/optional.hpp>
 
 // disable warnings created from inside boost mp11 with CUDA13+
-#if defined(__CUDACC__)
+// The pragma is only understood by the nvcc device frontend; emitting it in the
+// host pass makes the host compiler warn about an unknown pragma (-Werror).
+#if defined(__CUDACC__) && !defined(__clang__) && defined(__CUDA_ARCH__)
 #    pragma nv_diag_push
 #    pragma nv_diag_suppress 186
 // warning #186-D: pointless comparison of unsigned integer with zero
@@ -51,7 +53,7 @@
 
 #include <boost/mp11/detail/mp_count.hpp>
 
-#if defined(__CUDACC__)
+#if defined(__CUDACC__) && !defined(__clang__) && defined(__CUDA_ARCH__)
 #    pragma nv_diag_pop
 #endif
 
