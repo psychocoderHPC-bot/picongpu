@@ -43,7 +43,7 @@ namespace pmacc
                 template<typename Dst, typename Src, typename T_Worker>
                 HDINLINE constexpr void operator()(T_Worker const& worker, Dst& dst, Src const& src) const
                 {
-                    dst = alpaka::math::max(dst, src);
+                    dst = pmacc::math::max(dst, src);
                 }
             };
 
