@@ -49,8 +49,28 @@ namespace pmacc
 #else
     using ComputeApi = ::alpaka::api::Host;
     using ComputeDeviceKind = ::alpaka::deviceKind::Cpu;
+
+    /* Host executor selection follows the ALPAKA_DISABLE_EXEC_<ExecutorName>
+     * defines which alpaka's CMake emits from the alpaka_EXEC_<ExecutorName>
+     * options. PMacc additionally maps the requested host backend (OpenMP, TBB
+     * or serial) to these defines in PMaccConfig.cmake so that a build without
+     * OpenMP does not silently use the OpenMP blocks executor. The order
+     * follows alpaka::exec::allExecutors: highest available parallelism first.
+     * A configuration without any enabled host executor is an error and must
+     * not silently fall back to a different executor.
+     */
+#    if !defined(ALPAKA_DISABLE_EXEC_CpuOmpBlocks)
     using ComputeExecutorType = ::alpaka::exec::CpuOmpBlocks;
     inline constexpr ComputeExecutorType ComputeExecutor = ::alpaka::exec::cpuOmpBlocks;
+#    elif !defined(ALPAKA_DISABLE_EXEC_CpuTbbBlocks)
+    using ComputeExecutorType = ::alpaka::exec::CpuTbbBlocks;
+    inline constexpr ComputeExecutorType ComputeExecutor = ::alpaka::exec::cpuTbbBlocks;
+#    elif !defined(ALPAKA_DISABLE_EXEC_CpuSerial)
+    using ComputeExecutorType = ::alpaka::exec::CpuSerial;
+    inline constexpr ComputeExecutorType ComputeExecutor = ::alpaka::exec::cpuSerial;
+#    else
+#        error "No host executor enabled; enable an alpaka_EXEC_* executor."
+#    endif
 #endif
 
     using HostApi = ::alpaka::api::Host;

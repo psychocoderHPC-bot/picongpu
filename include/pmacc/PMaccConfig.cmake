@@ -154,6 +154,29 @@ add_library(pmacc::pmacc ALIAS pmacc)
 target_link_libraries(pmacc PUBLIC alpaka::alpaka)
 alpaka_finalize(pmacc)
 
+################################################################################
+# Host executor selection
+################################################################################
+
+# alpaka enables every host executor by default and only disables one when the
+# matching alpaka_EXEC_* option is OFF. Disabling the OpenMP dependency
+# (alpaka_DEP_OMP=OFF) does not disable the CpuOmpBlocks executor, therefore a
+# serial build would silently keep using the OpenMP blocks executor. Translate
+# the requested host backend into explicit ALPAKA_DISABLE_EXEC_* definitions.
+#
+# The definitions are added to the directory scope because not every target
+# which compiles PMacc headers links pmacc or alpaka (for example PIConGPU's
+# host-only library). All translation units must see the same executor type.
+if(alpaka_DEP_OMP)
+    # OpenMP requested: keep CpuOmpBlocks as the host executor.
+elseif(alpaka_DEP_TBB)
+    # TBB requested: CpuOmpBlocks must not take precedence over CpuTbbBlocks.
+    add_compile_definitions(ALPAKA_DISABLE_EXEC_CpuOmpBlocks)
+else()
+    # Serial host backend: no block-parallel host executor is available.
+    add_compile_definitions(ALPAKA_DISABLE_EXEC_CpuOmpBlocks ALPAKA_DISABLE_EXEC_CpuTbbBlocks)
+endif()
+
 ###############################################################################
 # Build Flags
 ###############################################################################
