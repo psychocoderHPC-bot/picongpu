@@ -371,6 +371,49 @@ if(alpaka_DEP_CUDA OR alpaka_DEP_HIP)
 endif()
 
 ################################################################################
+# Find hiprand
+################################################################################
+
+# ROCm ships the hiprand device headers inside an extra ``hiprand`` folder
+# (``<rocm>/include/hiprand/hiprand_kernel.h``) while the source uses the
+# unqualified ``<hiprand_kernel.h>`` include. Derive the ROCm include root from
+# the HIP toolchain and expose both the root and its ``hiprand`` subfolder.
+if(alpaka_DEP_HIP)
+    set(_pmacc_hip_include_candidates "")
+    if(TARGET hip::host)
+        get_target_property(_pmacc_hip_imported_dirs hip::host INTERFACE_INCLUDE_DIRECTORIES)
+        if(_pmacc_hip_imported_dirs)
+            list(APPEND _pmacc_hip_include_candidates ${_pmacc_hip_imported_dirs})
+        endif()
+    endif()
+    if(DEFINED ENV{ROCM_PATH})
+        list(APPEND _pmacc_hip_include_candidates "$ENV{ROCM_PATH}/include")
+    elseif(DEFINED ENV{HIP_PATH})
+        list(APPEND _pmacc_hip_include_candidates "$ENV{HIP_PATH}/include")
+    endif()
+    if(CMAKE_HIP_COMPILER)
+        # <rocm>/llvm/bin/clang++ -> <rocm>/include
+        get_filename_component(_pmacc_hip_compiler_dir "${CMAKE_HIP_COMPILER}" DIRECTORY)
+        get_filename_component(_pmacc_hip_compiler_dir "${_pmacc_hip_compiler_dir}" DIRECTORY)
+        get_filename_component(_pmacc_hip_compiler_dir "${_pmacc_hip_compiler_dir}" DIRECTORY)
+        list(APPEND _pmacc_hip_include_candidates "${_pmacc_hip_compiler_dir}/include")
+    endif()
+    find_path(
+        PMACC_HIPRAND_INCLUDE_DIR
+        NAMES hiprand/hiprand_kernel.h
+        HINTS ${_pmacc_hip_include_candidates}
+    )
+    if(PMACC_HIPRAND_INCLUDE_DIR)
+        target_include_directories(
+            pmacc
+            PUBLIC "${PMACC_HIPRAND_INCLUDE_DIR}" "${PMACC_HIPRAND_INCLUDE_DIR}/hiprand"
+        )
+    else()
+        message(WARNING "hiprand device headers (hiprand/hiprand_kernel.h) were not found")
+    endif()
+endif()
+
+################################################################################
 # PMacc options
 ################################################################################
 
