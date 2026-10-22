@@ -113,6 +113,10 @@ target_link_libraries(${_TARGET_NAME} PRIVATE nlohmann_json::nlohmann_json)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(${_TARGET_NAME} PRIVATE -Wno-unused-parameter -Wno-unknown-pragmas)
 endif()
+if(CMAKE_CUDA_COMPILER)
+    set(CMAKE_CUDA_FLAGS
+        "${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-unused-parameter -Xcompiler -Wno-unknown-pragmas")
+endif()
 alpaka_finalize(${_TARGET_NAME})
 
 set_target_properties(${_TARGET_NAME} PROPERTIES FOLDER "picongpu-headerCheck")
