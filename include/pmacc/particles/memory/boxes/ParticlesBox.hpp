@@ -69,7 +69,7 @@ namespace pmacc
          * \warning after this call the object is in a invalid state and must be
          * initialized with an assignment of a valid ParticleBox
          */
-        HDINLINE ParticlesBox() = default;
+        ParticlesBox() = default;
 
         HDINLINE ParticlesBox(
             DataBox<PitchedBox<SuperCellType, DIM>> const& superCells,

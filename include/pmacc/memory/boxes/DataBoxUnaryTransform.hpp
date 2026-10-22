@@ -44,13 +44,13 @@ namespace pmacc
 
         static constexpr std::uint32_t Dim = Base::Dim;
 
-        HDINLINE DataBoxUnaryTransform() = default;
+        DataBoxUnaryTransform() = default;
 
         HDINLINE DataBoxUnaryTransform(Base base) : Base(std::move(base))
         {
         }
 
-        HDINLINE DataBoxUnaryTransform(DataBoxUnaryTransform const&) = default;
+        DataBoxUnaryTransform(DataBoxUnaryTransform const&) = default;
 
         template<typename T_Index>
         HDINLINE ValueType operator()(T_Index const& idx) const

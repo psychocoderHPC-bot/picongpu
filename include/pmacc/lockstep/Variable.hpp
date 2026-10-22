@@ -81,9 +81,9 @@ namespace pmacc
              */
             HDINLINE Variable(Variable const&) = delete;
 
-            HDINLINE Variable(Variable&&) = default;
+            Variable(Variable&&) = default;
 
-            HDINLINE Variable& operator=(Variable&&) = default;
+            Variable& operator=(Variable&&) = default;
 
             /** get element for the worker
              *

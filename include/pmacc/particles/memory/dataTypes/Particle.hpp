@@ -123,7 +123,7 @@ namespace pmacc
             return frame != nullptr;
         }
 
-        HDINLINE Particle() = default;
+        Particle() = default;
 
         /** create particle
          *

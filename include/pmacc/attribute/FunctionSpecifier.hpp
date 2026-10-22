@@ -38,14 +38,6 @@
 #define HINLINE ALPAKA_FN_HOST ALPAKA_FN_INLINE
 /** @} */
 
-// nvcc warns that __host__/__device__ are ignored on explicitly defaulted functions.
-// The annotation is redundant there because defaulted special members inherit the
-// implicit host/device annotations, so suppress the diagnostic instead of removing the
-// qualifier at every declaration site.
-#if defined(__CUDACC__) && !defined(__clang__) && defined(__CUDA_ARCH__)
-#    pragma nv_diag_suppress 20012
-#endif
-
 /**
  * CUDA architecture version (aka PTX ISA level)
  * 0 for host compilation
