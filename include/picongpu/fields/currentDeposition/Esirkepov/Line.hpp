@@ -38,7 +38,7 @@ namespace picongpu
             type m_pos0;
             type m_pos1;
 
-            DINLINE Line() = default;
+            Line() = default;
 
             DINLINE Line(type const& pos0, type const& pos1) : m_pos0(pos0), m_pos1(pos1)
             {

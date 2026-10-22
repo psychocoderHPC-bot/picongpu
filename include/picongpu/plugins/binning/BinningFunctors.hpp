@@ -39,7 +39,7 @@ namespace picongpu
         {
             using result_type = void;
 
-            DINLINE FunctorParticle() = default;
+            FunctorParticle() = default;
 
             template<typename T_HistBox, typename T_DepositionFunctor, uint32_t T_nAxes>
             DINLINE void operator()(
@@ -99,7 +99,7 @@ namespace picongpu
         {
             using result_type = void;
 
-            HINLINE ParticleBinningKernel() = default;
+            ParticleBinningKernel() = default;
 
             template<typename T_HistBox, typename T_DepositionFunctor, typename T_Mapping, uint32_t T_nAxes>
             DINLINE void operator()(
@@ -179,7 +179,7 @@ namespace picongpu
         {
             using result_type = void;
 
-            HINLINE LeavingParticleBinningKernel() = default;
+            LeavingParticleBinningKernel() = default;
 
             template<
                 typename T_Worker,
@@ -252,7 +252,7 @@ namespace picongpu
         {
             using result_type = void;
 
-            DINLINE FunctorCell() = default;
+            FunctorCell() = default;
 
             template<typename T_HistBox, typename T_DepositionFunctor, uint32_t T_nAxes>
             DINLINE void operator()(
@@ -308,7 +308,7 @@ namespace picongpu
         {
             using result_type = void;
 
-            HDINLINE FieldBinningKernel() = default;
+            FieldBinningKernel() = default;
 
             template<typename T_HistBox, typename T_DepositionFunctor, typename T_Mapping, uint32_t T_nAxes>
             DINLINE void operator()(

@@ -49,7 +49,7 @@ namespace picongpu
                 }
 
                 //! Default constructor - needed for allocating shared memory on GPU (Radiation.kernel)
-                HDINLINE NyquistLowPass() = default;
+                NyquistLowPass() = default;
 
                 //! Checks if frequency omega is below the threshold
                 HDINLINE bool check(float_X const omega) const

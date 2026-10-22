@@ -51,7 +51,7 @@ namespace picongpu
              */
             using VectorVector2D3V = ::pmacc::math::Vector<float2_X, DIM3> const;
 
-            HDINLINE FieldPosition() = default;
+            FieldPosition() = default;
 
             HDINLINE VectorVector2D3V operator()() const
             {
@@ -73,7 +73,7 @@ namespace picongpu
              */
             using VectorVector3D3V = ::pmacc::math::Vector<float3_X, DIM3> const;
 
-            HDINLINE FieldPosition() = default;
+            FieldPosition() = default;
 
             HDINLINE VectorVector3D3V operator()() const
             {
@@ -95,7 +95,7 @@ namespace picongpu
              */
             using VectorVector2D3V = ::pmacc::math::Vector<float2_X, DIM3> const;
 
-            HDINLINE FieldPosition() = default;
+            FieldPosition() = default;
 
             HDINLINE VectorVector2D3V operator()() const
             {
@@ -117,7 +117,7 @@ namespace picongpu
              */
             using VectorVector3D3V = ::pmacc::math::Vector<float3_X, DIM3> const;
 
-            HDINLINE FieldPosition() = default;
+            FieldPosition() = default;
 
             HDINLINE VectorVector3D3V operator()() const
             {
@@ -136,7 +136,7 @@ namespace picongpu
         struct FieldPosition<fields::YeeCell, FieldJ, T_simDim>
             : public FieldPosition<fields::YeeCell, FieldE, T_simDim>
         {
-            HDINLINE FieldPosition() = default;
+            FieldPosition() = default;
         };
 
         /** position (floatD_X in case of T_simDim == simDim) in cell, wrapped in
@@ -149,7 +149,7 @@ namespace picongpu
             using FieldPos = pmacc::math::Vector<float_X, T_simDim>;
             using ReturnType = pmacc::math::Vector<FieldPos, DIM1>;
 
-            HDINLINE FieldPosition() = default;
+            FieldPosition() = default;
 
             HDINLINE ReturnType operator()() const
             {

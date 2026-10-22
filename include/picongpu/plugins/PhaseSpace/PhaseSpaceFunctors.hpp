@@ -151,9 +151,9 @@ namespace picongpu
         {
         }
 
-        HDINLINE FunctorBlock(FunctorBlock const&) = default;
+        FunctorBlock(FunctorBlock const&) = default;
 
-        HDINLINE FunctorBlock& operator=(FunctorBlock const&) = default;
+        FunctorBlock& operator=(FunctorBlock const&) = default;
 
         /** Called for the first cell of each block #-of-cells-in-block times
          */

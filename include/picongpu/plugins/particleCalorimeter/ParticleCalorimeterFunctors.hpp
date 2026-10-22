@@ -80,7 +80,7 @@ namespace picongpu
         {
         }
 
-        HDINLINE CalorimeterFunctor(CalorimeterFunctor const&) = default;
+        CalorimeterFunctor(CalorimeterFunctor const&) = default;
 
         HINLINE void setCalorimeterData(T_CalorimeterDataBox const& calorimeterBox)
         {
