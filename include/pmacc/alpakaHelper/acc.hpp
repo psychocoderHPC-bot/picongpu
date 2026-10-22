@@ -39,15 +39,18 @@ namespace pmacc
 #if defined(ALPAKA_LANG_CUDA) && ALPAKA_LANG_CUDA
     using ComputeApi = ::alpaka::api::Cuda;
     using ComputeDeviceKind = ::alpaka::deviceKind::NvidiaGpu;
-    inline constexpr auto ComputeExecutor = ::alpaka::exec::gpuCuda;
+    using ComputeExecutorType = ::alpaka::exec::GpuCuda;
+    inline constexpr ComputeExecutorType ComputeExecutor = ::alpaka::exec::gpuCuda;
 #elif defined(ALPAKA_LANG_HIP) && ALPAKA_LANG_HIP
     using ComputeApi = ::alpaka::api::Hip;
     using ComputeDeviceKind = ::alpaka::deviceKind::AmdGpu;
-    inline constexpr auto ComputeExecutor = ::alpaka::exec::gpuHip;
+    using ComputeExecutorType = ::alpaka::exec::GpuHip;
+    inline constexpr ComputeExecutorType ComputeExecutor = ::alpaka::exec::gpuHip;
 #else
     using ComputeApi = ::alpaka::api::Host;
     using ComputeDeviceKind = ::alpaka::deviceKind::Cpu;
-    inline constexpr auto ComputeExecutor = ::alpaka::exec::cpuOmpBlocks;
+    using ComputeExecutorType = ::alpaka::exec::CpuOmpBlocks;
+    inline constexpr ComputeExecutorType ComputeExecutor = ::alpaka::exec::cpuOmpBlocks;
 #endif
 
     using HostApi = ::alpaka::api::Host;
@@ -55,9 +58,6 @@ namespace pmacc
 
     using HostDevice = ::alpaka::onHost::Device<HostApi, HostDeviceKind>;
     using ComputeDevice = ::alpaka::onHost::Device<ComputeApi, ComputeDeviceKind>;
-
-    //! plain executor type, safe to use in function signatures (unlike ALPAKA_TYPEOF)
-    using ComputeExecutorType = ALPAKA_TYPEOF(ComputeExecutor);
 
     /** Lockstep accelerator tag.
      *
