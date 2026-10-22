@@ -197,11 +197,11 @@ namespace picongpu::particles::collision
                                 if(particle[multiMask_] != 0 && filter(worker, particle))
                                 {
                                     auto parLocalIndex = particle[localCellIdx_];
-                                    uint32_t parOffset = alpaka::atomicAdd(
+                                    uint32_t parOffset = ::alpaka::onAcc::atomicAdd(
                                         worker.getAcc(),
                                         &size(parLocalIndex),
                                         1u,
-                                        ::alpaka::hierarchy::Threads{});
+                                        ::alpaka::onAcc::scope::Block{});
                                     uint32_t const parInSuperCellIdx = frameIdx * numFrameSlots + linearIdx;
                                     particleIds(parLocalIndex)[parOffset] = parInSuperCellIdx;
                                 }
@@ -317,7 +317,7 @@ namespace picongpu::particles::collision
                     if(filter(worker, particle))
                     {
                         auto parLocalIndex = particle[localCellIdx_];
-                        alpaka::atomicAdd(worker.getAcc(), &nppc[parLocalIndex], 1u, ::alpaka::hierarchy::Threads{});
+                        ::alpaka::onAcc::atomicAdd(worker.getAcc(), &nppc[parLocalIndex], 1u, ::alpaka::onAcc::scope::Block{});
                     }
                 });
         }

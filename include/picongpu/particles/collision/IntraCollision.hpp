@@ -216,21 +216,21 @@ namespace picongpu::particles::collision
                         auto timesUsed = static_cast<uint64_t>(collisionFunctor.timesUsed);
                         if(timesUsed > 0u)
                         {
-                            alpaka::atomicAdd(
+                            ::alpaka::onAcc::atomicAdd(
                                 worker.getAcc(),
                                 &sumCoulombLogBlock,
                                 static_cast<float_X>(collisionFunctor.sumCoulombLog),
-                                ::alpaka::hierarchy::Threads{});
-                            alpaka::atomicAdd(
+                                ::alpaka::onAcc::scope::Block{});
+                            ::alpaka::onAcc::atomicAdd(
                                 worker.getAcc(),
                                 &sumSParamBlock,
                                 static_cast<float_X>(collisionFunctor.sumSParam),
-                                ::alpaka::hierarchy::Threads{});
-                            alpaka::atomicAdd(
+                                ::alpaka::onAcc::scope::Block{});
+                            ::alpaka::onAcc::atomicAdd(
                                 worker.getAcc(),
                                 &timesCollidedBlock,
                                 timesUsed,
-                                ::alpaka::hierarchy::Threads{});
+                                ::alpaka::onAcc::scope::Block{});
                         }
                     },
                     collisionFunctorCtx);
@@ -240,21 +240,21 @@ namespace picongpu::particles::collision
                 onlyMaster(
                     [&]()
                     {
-                        alpaka::atomicAdd(
+                        ::alpaka::onAcc::atomicAdd(
                             worker.getAcc(),
                             &(sumCoulombLogBox[0]),
                             sumCoulombLogBlock,
-                            ::alpaka::hierarchy::Blocks{});
-                        alpaka::atomicAdd(
+                            ::alpaka::onAcc::scope::Device{});
+                        ::alpaka::onAcc::atomicAdd(
                             worker.getAcc(),
                             &(sumSParamBox[0]),
                             sumSParamBlock,
-                            ::alpaka::hierarchy::Blocks{});
-                        alpaka::atomicAdd(
+                            ::alpaka::onAcc::scope::Device{});
+                        ::alpaka::onAcc::atomicAdd(
                             worker.getAcc(),
                             &(timesCollidedBox[0]),
                             timesCollidedBlock,
-                            ::alpaka::hierarchy::Blocks{});
+                            ::alpaka::onAcc::scope::Device{});
                     });
             }
         }

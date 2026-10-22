@@ -220,11 +220,11 @@ namespace picongpu::particles::creation
 
                         uint32_t const temp = static_cast<uint32_t>(numberProductParticles);
                         // update global counter
-                        alpaka::atomicAdd(
+                        ::alpaka::onAcc::atomicAdd(
                             worker.getAcc(),
                             &totalNumberProductSpeciesParticlesToSpawn,
                             temp,
-                            ::alpaka::hierarchy::Threads{});
+                            ::alpaka::onAcc::scope::Block{});
                     },
                     numberProductParticlesCtxArr);
                 worker.sync();
@@ -264,11 +264,11 @@ namespace picongpu::particles::creation
                             if(numberProductParticles == static_cast<TypeNumber>(0u))
                                 return;
 
-                            uint32_t const globalSlotIndex = alpaka::atomicAdd(
+                            uint32_t const globalSlotIndex = ::alpaka::onAcc::atomicAdd(
                                 worker.getAcc(),
                                 &spawnCounter,
                                 static_cast<uint32_t>(1u),
-                                ::alpaka::hierarchy::Threads{});
+                                ::alpaka::onAcc::scope::Block{});
 
                             uint32_t const productSpeciesFrameIndex = (globalSlotIndex + offsetLowFrame) / frameSize;
                             uint32_t const localSlotIndex = (globalSlotIndex + offsetLowFrame) % frameSize;
