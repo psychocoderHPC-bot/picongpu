@@ -210,7 +210,7 @@ option(
     ON
 )
 
-if(NOT (alpaka_ACC_GPU_CUDA_ENABLE OR alpaka_ACC_GPU_HIP_ENABLE) OR alpaka_CUDA_COMPILER MATCHES "clang")
+if(NOT (alpaka_DEP_CUDA OR alpaka_DEP_HIP) OR CMAKE_CUDA_COMPILER_ID MATCHES "Clang")
     # cuda_memtest is not compiling with host accelerator of alpaka or clang
     set(CUDAMEMTEST_ENABLE
         OFF
@@ -223,7 +223,7 @@ if(NOT (alpaka_ACC_GPU_CUDA_ENABLE OR alpaka_ACC_GPU_HIP_ENABLE) OR alpaka_CUDA_
 endif()
 
 if(CUDAMEMTEST_ENABLE)
-    if(alpaka_ACC_GPU_CUDA_ENABLE)
+    if(alpaka_DEP_CUDA)
         # Enabling CUDA solves a bug in mpiInfo
         # Error message: No known features for CUDA compiler "" version .
         enable_language(CUDA)
@@ -235,7 +235,7 @@ if(CUDAMEMTEST_ENABLE)
         PATHS "${PIConGPUapp_SOURCE_DIR}/../../thirdParty/cuda_memtest"
         DOC "path to cuda_memtest"
     )
-    if(alpaka_ACC_GPU_HIP_ENABLE)
+    if(alpaka_DEP_HIP)
         set(CUDA_MEMTEST_BACKEND hip CACHE STRING "Select the backend API used for the test." FORCE)
     endif()
     add_subdirectory(${CUDA_MEMTEST_DIR} "${CMAKE_CURRENT_BINARY_DIR}/build_cuda_memtest")
@@ -552,12 +552,13 @@ list(REMOVE_ITEM SRCFILES ${ACCSRCFILES})
 add_library(picongpu-hostonly STATIC ${SRCFILES})
 target_link_libraries(picongpu-hostonly PUBLIC ${HOST_LIBS})
 
-alpaka_add_executable(picongpu
+add_executable(picongpu
      ${ACCSRCFILES}
 )
 
 target_link_libraries(picongpu PUBLIC ${LIBS} ${HOST_LIBS} picongpu-hostonly)
 target_link_libraries(picongpu PRIVATE pmacc::pmacc)
+alpaka_finalize(picongpu)
 
 #PIC_dependency(FFTW3 "FFT library for shadowgraphy plugin" AUTO)
 if(PIC_HAVE_FFTW3)

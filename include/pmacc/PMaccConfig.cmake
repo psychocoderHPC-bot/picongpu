@@ -45,7 +45,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PMacc_DIR}/../../thirdParty/cmake-m
 # CMake is not forwarding CMAKE_CUDA_ARCHITECTURES to the CMake CUDA compiler check
 # error: clang: error: cannot find libdevice for sm_20. Provide path to different CUDA installation via --cuda-path, or pass -nocudalib to build without linking with libdevice.
 # The workaround is parsing CMAKE_CUDA_ARCHITECTURES and forward command line parameter directly to clang++.
-if(alpaka_ACC_GPU_CUDA_ENABLE AND CMAKE_CUDA_COMPILER)
+if(alpaka_DEP_CUDA AND CMAKE_CUDA_COMPILER)
     string(REGEX MATCH "(.*clang.*)" IS_CLANGCUDA_COMPILER ${CMAKE_CUDA_COMPILER})
     if(IS_CLANGCUDA_COMPILER)
         foreach(_CUDA_ARCH_ELEM ${CMAKE_CUDA_ARCHITECTURES})
@@ -56,7 +56,7 @@ endif()
 
 # workaround for a CMake bug which is not handled in alpaka 0.7.0
 # https://github.com/alpaka-group/alpaka/pull/1423
-if(alpaka_ACC_GPU_CUDA_ENABLE)
+if(alpaka_DEP_CUDA)
     include(CheckLanguage)
     check_language(CUDA)
     # Use user selected CMake CXX compiler as cuda host compiler to avoid fallback to the default system CXX host compiler.
@@ -89,8 +89,8 @@ endif()
 ################################################################################
 
 # the min and max. supported alpaka version
-set(_PMACC_MIN_ALPAKA_VERSION 1.2.0)
-set(_PMACC_MAX_ALPAKA_VERSION 1.2.0)
+set(_PMACC_MIN_ALPAKA_VERSION 3.0.0)
+set(_PMACC_MAX_ALPAKA_VERSION 3.0.0)
 
 # do not search for alpaka if it already exists
 # for example, a project that includes alpaka via add_subdirectory before including pmacc via add_subdirectory
@@ -104,7 +104,8 @@ if(NOT TARGET alpaka::alpaka)
     mark_as_advanced(PMACC_ALPAKA_PROVIDER)
 
     if(${PMACC_ALPAKA_PROVIDER} STREQUAL "internal")
-        set(alpaka_BUILD_EXAMPLES OFF)
+        set(alpaka_EXAMPLES OFF)
+        set(alpaka_TESTS OFF)
         set(BUILD_TESTING OFF)
         add_subdirectory(${PMacc_DIR}/../../thirdParty/alpaka ${CMAKE_BINARY_DIR}/alpaka EXCLUDE_FROM_ALL)
     else()
@@ -138,7 +139,7 @@ file(GLOB_RECURSE PMACC_SRC_FILES "${PMacc_DIR}/*.cpp")
 # remove files located in the directory 'test'
 string(REGEX REPLACE "${PMacc_DIR}/test/.*" "" PMACC_SRC_FILES "${PMACC_SRC_FILES}")
 
-alpaka_add_library(
+add_library(
         pmacc
         STATIC
         ${PMACC_SRC_FILES}
@@ -151,6 +152,7 @@ set_target_properties(pmacc PROPERTIES LINKER_LANGUAGE CXX)
 
 add_library(pmacc::pmacc ALIAS pmacc)
 target_link_libraries(pmacc PUBLIC alpaka::alpaka)
+alpaka_finalize(pmacc)
 
 ###############################################################################
 # Build Flags
@@ -334,7 +336,7 @@ endif()
 
 if(
     "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang"
-    AND (alpaka_ACC_GPU_HIP_ENABLE OR (alpaka_ACC_GPU_CUDA_ENABLE AND alpaka_CUDA_COMPILER MATCHES "clang"))
+    AND (alpaka_DEP_HIP OR (alpaka_DEP_CUDA AND CMAKE_CUDA_COMPILER_ID MATCHES "Clang"))
 )
     # For HIP the problem is that in alpaka '::isnan(), ::sinh(), ::isfinite(), ::isinf()' is not found.
     # The reason could be that if OpenMP is activated clang is using math C headers where all of these functions are macros.
@@ -353,14 +355,7 @@ endif()
 # Find mallocMC
 ################################################################################
 
-if(alpaka_ACC_GPU_CUDA_ENABLE OR alpaka_ACC_GPU_HIP_ENABLE)
-    if(PMACC_alpaka_PROVIDER STREQUAL "intern")
-        set(mallocMC_USE_alpaka
-            "${PMacc_DIR}/../../thirdParty/alpaka"
-            CACHE STRING
-            "Select which alpaka is used for mallocMC"
-        )
-    endif()
+if(alpaka_DEP_CUDA OR alpaka_DEP_HIP)
     include(FetchContent)
 
     FetchContent_Declare(

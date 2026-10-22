@@ -122,11 +122,12 @@ include_directories(include)
 
 file(GLOB SRCFILES "*.cpp")
 
-alpaka_add_executable(heatEq
+add_executable(heatEq
     ${SRCFILES}
 )
 
 target_link_libraries(heatEq PRIVATE pmacc::pmacc)
+alpaka_finalize(heatEq)
 if(PNGwriter_FOUND)
     target_link_libraries(heatEq PRIVATE PNGwriter::PNGwriter)
 endif()

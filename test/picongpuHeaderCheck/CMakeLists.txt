@@ -91,7 +91,7 @@ append_recursive_files_add_to_src_group("${_GENERATED_SOURCE_DIR}" "${_GENERATED
 list(APPEND _FILES_SOURCE "src/main.cpp")
 
 # Always add all files to the target executable build call to add them to the build project.
-alpaka_add_executable(
+add_executable(
         ${_TARGET_NAME}
         ${_FILES_SOURCE}
 )
@@ -108,6 +108,7 @@ target_include_directories(
     PRIVATE $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
 )
 target_link_libraries(${_TARGET_NAME} PRIVATE nlohmann_json::nlohmann_json)
+alpaka_finalize(${_TARGET_NAME})
 
 set_target_properties(${_TARGET_NAME} PROPERTIES FOLDER "picongpu-headerCheck")
 
