@@ -588,14 +588,15 @@ list(REMOVE_ITEM SRCFILES ${ACCSRCFILES})
 # alpaka3 compiles copies of the accelerator sources placed in the build tree. Quoted
 # includes relative to the original source directory (for example
 # "common/txtFileHandling.hpp") no longer resolve there, so add every source directory
-# to the include path.
+# to the include path of the accelerator target only. The host-only sources are compiled
+# in place, so their quoted includes resolve and adding their directories would shadow
+# third-party headers (plugins/openPMD/toml.hpp hides toml11's <toml.hpp>).
 set(PIC_SOURCE_DIRS "")
 foreach(picSource ${ACCSRCFILES} ${SRCFILES})
     get_filename_component(picSourceDir "${picSource}" DIRECTORY)
     list(APPEND PIC_SOURCE_DIRS "${picSourceDir}")
 endforeach()
 list(REMOVE_DUPLICATES PIC_SOURCE_DIRS)
-include_directories(${PIC_SOURCE_DIRS})
 
 add_library(picongpu-hostonly STATIC ${SRCFILES})
 target_link_libraries(picongpu-hostonly PUBLIC ${HOST_LIBS})
@@ -611,6 +612,7 @@ target_include_directories(
 add_executable(picongpu
      ${ACCSRCFILES}
 )
+target_include_directories(picongpu PRIVATE ${PIC_SOURCE_DIRS})
 
 target_link_libraries(picongpu PUBLIC ${LIBS} ${HOST_LIBS} picongpu-hostonly)
 target_link_libraries(picongpu PRIVATE pmacc::pmacc picongpu_warning_policy)
