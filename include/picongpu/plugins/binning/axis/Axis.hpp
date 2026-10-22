@@ -157,7 +157,7 @@ namespace picongpu
 
                 BoolAxisKernel bAK;
 
-                BoolAxis(T_AttrFunctor attrFunctor, std::string label = "Bool_Axis") : bAK{attrFunctor}, label{label}
+                BoolAxis(T_AttrFunctor attrFunctor, std::string label = "Bool_Axis") : label{label}, bAK{attrFunctor}
                 {
                 }
 

@@ -84,7 +84,7 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
                 u32(T_ChooseTransitionGroup) < u32(atomicPhysics::enums::ChooseTransitionGroup::FINAL_NUMBER_ENTRIES));
 
             return true;
-        };
+        }
 
     public:
         /** add to cache entry, using atomics

@@ -679,7 +679,6 @@ namespace picongpu
         void notify(uint32_t currentStep) override
         {
             PMACC_ASSERT(cellDescription != nullptr);
-            DataSpace<simDim> const localSize(cellDescription->getGridLayout().sizeWithoutGuardND());
             Window window(MovingWindow::getInstance().getWindow(currentStep));
 
             /*sliceOffset is only used in 3D*/
@@ -839,7 +838,6 @@ namespace picongpu
             if(!m_notifyPeriod.empty())
             {
                 PMACC_ASSERT(cellDescription != nullptr);
-                DataSpace<simDim> const localSize(cellDescription->getGridLayout().sizeWithoutGuardND());
 
                 Window window(MovingWindow::getInstance().getWindow(0));
                 sliceOffset = (int) ((float_32) (window.globalDimensions.size[sliceDim]) * m_slicePoint)

@@ -254,7 +254,7 @@ namespace picongpu::simulation::stage
             HINLINE static void resetFoundUnboundIon(T_FoundUnboundIonField& foundUnboundIonField)
             {
                 foundUnboundIonField.getDeviceBuffer().setValue(static_cast<uint32_t>(false));
-            };
+            }
 
             //! reset SharedResourcesOverSubscribedField on device side
             HINLINE static void resetSharedResourceOverSubscribed(picongpu::MappingDesc const& mappingDesc)

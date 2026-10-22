@@ -107,5 +107,5 @@ struct StencilFourPoint
 
                 boxWrite(pos) = stencil_sum + cache(cellIdx);
             });
-    };
+    }
 };
