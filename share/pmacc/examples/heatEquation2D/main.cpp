@@ -18,9 +18,9 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "include/PngCreator.hpp"
-#include "include/SetBoundaryConditions.hpp"
-#include "include/StencilFourPoint.hpp"
+#include "PngCreator.hpp"
+#include "SetBoundaryConditions.hpp"
+#include "StencilFourPoint.hpp"
 
 #include <pmacc/Environment.hpp>
 #include <pmacc/algorithms/GlobalReduce.hpp>

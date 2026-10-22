@@ -99,11 +99,11 @@ struct StencilFourPoint
                 }
                 stencil_sum = alpha * dt * 0.25 * (stencil_sum - 4 * cache(cellIdx)) / (dx * dx);
 
-                alpaka::atomicAdd(
+                ::alpaka::onAcc::atomicAdd(
                     worker.getAcc(),
                     &(boxResidual[0]),
                     pmacc::math::cPow<float>(stencil_sum, 2u),
-                    ::alpaka::hierarchy::Blocks{});
+                    ::alpaka::onAcc::scope::Block{});
 
                 boxWrite(pos) = stencil_sum + cache(cellIdx);
             });
