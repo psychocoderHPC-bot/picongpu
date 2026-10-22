@@ -108,6 +108,11 @@ target_include_directories(
     PRIVATE $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
 )
 target_link_libraries(${_TARGET_NAME} PRIVATE nlohmann_json::nlohmann_json)
+# Mirror the warning policy used by the PIConGPU build for the strict alpaka target:
+# unused parameters are intentional in many headers and `#pragma unroll` is CUDA-only.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(${_TARGET_NAME} PRIVATE -Wno-unused-parameter -Wno-unknown-pragmas)
+endif()
 alpaka_finalize(${_TARGET_NAME})
 
 set_target_properties(${_TARGET_NAME} PROPERTIES FOLDER "picongpu-headerCheck")
