@@ -204,7 +204,7 @@ TEST_CASE("unit::MovingWindow_origin", "[movingWindow test]")
         auto const wayToFirstMove = static_cast<float_64>(-virtualParticleInitialStartCell) * cellSizeInMoveDirection;
         auto const firstMoveStep = static_cast<int32_t>(std::ceil(wayToFirstMove / lightDistancePerStep)) - 1;
 
-        for(int step = 1; step < endStep; ++step)
+        for(int32_t step = 1; step < static_cast<int32_t>(endStep); ++step)
         {
             auto const origin = movingWindow.getMovingWindowOriginPositionCells(step);
 

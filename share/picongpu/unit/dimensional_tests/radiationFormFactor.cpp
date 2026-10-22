@@ -72,6 +72,52 @@ static bool isApproxEqual(T const& a, T const& b)
 template<typename T_FormFactorFunctions = boost::mpl::_1>
 struct TestFormFactor
 {
+    /** Functor evaluating the form factor on the device.
+     *
+     * A plain struct with a templated call operator is used instead of a generic
+     * lambda because nvcc does not accept ``__host__ __device__`` generic lambdas.
+     */
+    struct FormFactorTestKernel
+    {
+        template<
+            typename T_Worker,
+            typename T_Omega,
+            typename T_Phi,
+            typename T_Theta,
+            typename T_Weighting,
+            typename T_Result>
+        DEVICEONLY void operator()(
+            T_Worker const& worker,
+            T_Omega const& omega,
+            T_Phi const& phi,
+            T_Theta const& theta,
+            T_Weighting const& weighting,
+            T_Result result) const
+        {
+            auto blockIdx = worker.blockDomIdxND().x();
+
+            auto forEach = lockstep::makeForEach<elemPerBlock>(worker);
+
+            forEach(
+                [&](uint32_t const idx)
+                {
+                    auto valueIdx = blockIdx * elemPerBlock + idx;
+
+                    if(valueIdx < numValues)
+                    {
+                        float_X const omg = omega[valueIdx];
+                        auto const formFactorFunc = T_FormFactorFunctions{
+                            omg,
+                            {math::cos(phi[valueIdx]) * math::sin(theta[valueIdx]),
+                             math::sin(phi[valueIdx]) * math::sin(theta[valueIdx]),
+                             math::cos(theta[valueIdx])}};
+
+                        result[valueIdx] = formFactorFunc(weighting[valueIdx]);
+                    }
+                });
+        }
+    };
+
     /** Validates the shape
      *
      * @param inOmegaBuffer Buffer with omega [0.0;Inf)
@@ -100,36 +146,7 @@ struct TestFormFactor
 
         resultDevice.setValue(0.0_X);
 
-        auto shapeTestKernel = [this] DEVICEONLY(
-                                   auto const& worker,
-                                   auto const& omega,
-                                   auto const& phi,
-                                   auto const& theta,
-                                   auto const& weighting,
-                                   auto result)
-        {
-            auto blockIdx = worker.blockDomIdxND().x();
-
-            auto forEach = lockstep::makeForEach<elemPerBlock>(worker);
-
-            forEach(
-                [&](uint32_t const idx)
-                {
-                    auto valueIdx = blockIdx * elemPerBlock + idx;
-
-                    if(valueIdx < numValues)
-                    {
-                        float_X const omg = omega[valueIdx];
-                        auto const formFactorFunc = T_FormFactorFunctions{
-                            omg,
-                            {math::cos(phi[valueIdx]) * math::sin(theta[valueIdx]),
-                             math::sin(phi[valueIdx]) * math::sin(theta[valueIdx]),
-                             math::cos(theta[valueIdx])}};
-
-                        result[valueIdx] = formFactorFunc(weighting[valueIdx]);
-                    }
-                });
-        };
+        FormFactorTestKernel shapeTestKernel;
 
         auto numBlocks = (numValues + elemPerBlock - 1) / elemPerBlock;
         PMACC_LOCKSTEP_KERNEL(shapeTestKernel)

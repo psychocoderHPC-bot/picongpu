@@ -86,7 +86,7 @@ struct GenerateEvals
     HDINLINE void operator()(
         T_Worker const& worker,
         uint32_t const numValues,
-        uint32_t const numValuesPerThread,
+        uint32_t const,
         float3_64 const pos,
         float_64 const time,
         T_Box result) const

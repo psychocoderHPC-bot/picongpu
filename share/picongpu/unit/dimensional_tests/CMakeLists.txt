@@ -10,7 +10,7 @@ foreach(dim 2 3)
         target_include_directories(${testExe} BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
         target_compile_definitions(${testExe} PRIVATE TEST_DIM=${dim})
         target_link_libraries(${testExe} PUBLIC Catch2 Catch2WithMain)
-        target_link_libraries(${testExe} PRIVATE pmacc::pmacc)
+        target_link_libraries(${testExe} PRIVATE pmacc::pmacc pmacc_unit_warning_policy)
         alpaka_finalize(${testExe})
         add_test(
             NAME "${testCase}-${dim}D"

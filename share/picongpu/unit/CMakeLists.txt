@@ -46,6 +46,49 @@ cmake_policy(VERSION 3.28.0)
 find_package(PMacc REQUIRED CONFIG PATHS "${CMAKE_CURRENT_SOURCE_DIR}/../../../include/pmacc")
 
 ###############################################################################
+# Compile definitions
+###############################################################################
+
+# The unit tests do not link against openPMD; make the feature flag explicit so
+# `#if ENABLE_OPENPMD == 1` in shared headers does not trip -Wundef.
+add_definitions(-DENABLE_OPENPMD=0)
+
+###############################################################################
+# Warnings
+###############################################################################
+
+# Apply the same warning policy as the PIConGPU application build so the tests
+# can be compiled with alpaka_COMPILE_PEDANTIC=ON (-Wall -Wextra -Werror).
+# clang applies warning options in order, so these suppressions must be appended
+# after alpaka's -Wall/-Wextra; linking an INTERFACE target last does that.
+add_library(pmacc_unit_warning_policy INTERFACE)
+if(PIC_CI_COMPILE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(
+        pmacc_unit_warning_policy
+        INTERFACE
+        -Wno-unknown-pragmas
+        -Wno-unused-parameter
+        -Wno-unused-local-typedefs
+    )
+endif()
+if(CMAKE_HIP_COMPILER AND NOT CMAKE_CUDA_COMPILER)
+    # clang-only diagnostics for pre-existing upstream code that GCC does not emit
+    target_compile_options(
+        pmacc_unit_warning_policy
+        INTERFACE
+        -Wno-deprecated-copy
+        -Wno-delete-non-abstract-non-virtual-dtor
+    )
+endif()
+# nvcc needs the host-pass suppressions forwarded with -Xcompiler.
+if(CMAKE_CUDA_COMPILER)
+    add_compile_options(
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-unused-parameter>
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-unknown-pragmas>
+    )
+endif()
+
+###############################################################################
 # Catch2
 ###############################################################################
 

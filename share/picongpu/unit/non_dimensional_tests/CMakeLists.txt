@@ -7,7 +7,7 @@ foreach(testCaseFilepath ${NON_DIMENSIONAL_TESTS})
     add_executable(${testExe} ${testCaseFilepath})
     target_include_directories(${testExe} PRIVATE BEFORE "${CMAKE_CURRENT_SOURCE_DIR}/../../../../include")
     target_link_libraries(${testExe} PUBLIC Catch2 Catch2WithMain)
-    target_link_libraries(${testExe} PRIVATE pmacc::pmacc)
+    target_link_libraries(${testExe} PRIVATE pmacc::pmacc pmacc_unit_warning_policy)
     alpaka_finalize(${testExe})
     add_test(
         NAME "${testCase}"
