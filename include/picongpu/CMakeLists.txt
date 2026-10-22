@@ -328,6 +328,25 @@ if(CMAKE_CUDA_COMPILER)
         "${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-unused-parameter -Xcompiler -Wno-unknown-pragmas")
 endif()
 
+# The HIP device pass is compiled by clang with its own warning set. alpaka's
+# pedantic mode adds -Werror there too, so mirror the host policy above for the
+# same pre-existing unused-parameter/typedef and pragma warnings. clang applies
+# warning options in order, therefore this interface target is linked after
+# alpaka so its suppressions win over -Wall/-Wextra.
+add_library(picongpu_warning_policy INTERFACE)
+if(CMAKE_HIP_COMPILER AND NOT CMAKE_CUDA_COMPILER)
+    target_compile_options(
+        picongpu_warning_policy
+        INTERFACE
+        -Wno-unused-parameter
+        -Wno-unknown-pragmas
+        -Wno-unused-local-typedefs
+        # clang-only diagnostics for pre-existing upstream code that GCC does not emit
+        -Wno-deprecated-copy
+        -Wno-delete-non-abstract-non-virtual-dtor
+    )
+endif()
+
 ################################################################################
 # openPMD
 ################################################################################
@@ -344,6 +363,7 @@ if(PIC_SEARCH_openPMD)
 
         if(openPMD_HAVE_ADIOS2 OR openPMD_HAVE_HDF5)
             message(STATUS "Found openPMD: ${openPMD_DIR}")
+            set(PIC_ENABLE_OPENPMD 1)
             add_definitions(-DENABLE_OPENPMD=1)
             # TOML
             set(PIC_toml11_PROVIDER "intern" CACHE STRING "Use internally shipped or external toml11 library.")
@@ -383,6 +403,10 @@ if(PIC_SEARCH_openPMD)
     else(openPMD_FOUND)
         message(STATUS "Could NOT find openPMD - set openPMD_DIR or check your CMAKE_PREFIX_PATH")
     endif(openPMD_FOUND)
+endif()
+
+if(NOT PIC_ENABLE_OPENPMD)
+    add_definitions(-DENABLE_OPENPMD=0)
 endif()
 
 pic_dependency_set_status(openPMD ${openPMD_FOUND})
@@ -475,6 +499,10 @@ if(PIC_SEARCH_ISAAC)
         endif()
         pic_dependency_set_status(ISAAC FALSE)
     endif(ISAAC_FOUND)
+endif()
+
+if(NOT ISAAC_FOUND)
+    add_definitions(-DENABLE_ISAAC=0)
 endif()
 
 pic_dependency_set_status(ISAAC ${ISAAC_FOUND})
@@ -571,13 +599,21 @@ include_directories(${PIC_SOURCE_DIRS})
 
 add_library(picongpu-hostonly STATIC ${SRCFILES})
 target_link_libraries(picongpu-hostonly PUBLIC ${HOST_LIBS})
+# The host-only library includes PMacc headers that pull in alpaka headers, so it
+# needs the alpaka include path. Add the directories directly instead of linking
+# the alpaka targets, which would require alpaka_finalize() and enable language
+# separation for this host-only target.
+target_include_directories(
+    picongpu-hostonly
+    PRIVATE $<TARGET_PROPERTY:alpaka::alpaka,INTERFACE_INCLUDE_DIRECTORIES>
+)
 
 add_executable(picongpu
      ${ACCSRCFILES}
 )
 
 target_link_libraries(picongpu PUBLIC ${LIBS} ${HOST_LIBS} picongpu-hostonly)
-target_link_libraries(picongpu PRIVATE pmacc::pmacc)
+target_link_libraries(picongpu PRIVATE pmacc::pmacc picongpu_warning_policy)
 alpaka_finalize(picongpu)
 
 #PIC_dependency(FFTW3 "FFT library for shadowgraphy plugin" AUTO)
