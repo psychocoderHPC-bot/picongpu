@@ -78,7 +78,7 @@ namespace picongpu
             {
                 static constexpr bool useBlockCache = true;
                 static constexpr bool stridedMapping = true;
-                using BlockReductionOp = kernel::operation::Atomic<::alpaka::AtomicAdd, ::alpaka::hierarchy::Threads>;
+                using BlockReductionOp = kernel::operation::Atomic<::alpaka::operation::Add, ::alpaka::onAcc::scope::Block>;
                 using GridReductionOp = pmacc::math::operation::Add;
                 static constexpr int workerMultiplier = 1;
             };
@@ -91,7 +91,7 @@ namespace picongpu
             {
                 static constexpr bool useBlockCache = true;
                 static constexpr bool stridedMapping = true;
-                using BlockReductionOp = kernel::operation::Atomic<::alpaka::AtomicAdd, ::alpaka::hierarchy::Threads>;
+                using BlockReductionOp = kernel::operation::Atomic<::alpaka::operation::Add, ::alpaka::onAcc::scope::Block>;
                 using GridReductionOp = pmacc::math::operation::Add;
                 static constexpr int workerMultiplier = detail::validateAndAdjustWorkerMultiplier(T_workerMultiplier);
             };
@@ -111,8 +111,8 @@ namespace picongpu
             {
                 static constexpr bool useBlockCache = true;
                 static constexpr bool stridedMapping = false;
-                using BlockReductionOp = kernel::operation::Atomic<::alpaka::AtomicAdd, ::alpaka::hierarchy::Threads>;
-                using GridReductionOp = kernel::operation::Atomic<::alpaka::AtomicAdd, ::alpaka::hierarchy::Blocks>;
+                using BlockReductionOp = kernel::operation::Atomic<::alpaka::operation::Add, ::alpaka::onAcc::scope::Block>;
+                using GridReductionOp = kernel::operation::Atomic<::alpaka::operation::Add, ::alpaka::onAcc::scope::Device>;
                 static constexpr int workerMultiplier = 1;
             };
 
@@ -124,8 +124,8 @@ namespace picongpu
             {
                 static constexpr bool useBlockCache = true;
                 static constexpr bool stridedMapping = false;
-                using BlockReductionOp = kernel::operation::Atomic<::alpaka::AtomicAdd, ::alpaka::hierarchy::Threads>;
-                using GridReductionOp = kernel::operation::Atomic<::alpaka::AtomicAdd, ::alpaka::hierarchy::Blocks>;
+                using BlockReductionOp = kernel::operation::Atomic<::alpaka::operation::Add, ::alpaka::onAcc::scope::Block>;
+                using GridReductionOp = kernel::operation::Atomic<::alpaka::operation::Add, ::alpaka::onAcc::scope::Device>;
                 static constexpr int workerMultiplier = detail::validateAndAdjustWorkerMultiplier(T_workerMultiplier);
             };
 
@@ -145,7 +145,7 @@ namespace picongpu
             {
                 static constexpr bool useBlockCache = false;
                 static constexpr bool stridedMapping = false;
-                using BlockReductionOp = kernel::operation::Atomic<::alpaka::AtomicAdd, ::alpaka::hierarchy::Blocks>;
+                using BlockReductionOp = kernel::operation::Atomic<::alpaka::operation::Add, ::alpaka::onAcc::scope::Device>;
                 // dummy which produces a compile time error if used
                 using GridReductionOp = void;
                 static constexpr int workerMultiplier = 1;
@@ -159,7 +159,7 @@ namespace picongpu
             {
                 static constexpr bool useBlockCache = false;
                 static constexpr bool stridedMapping = false;
-                using BlockReductionOp = kernel::operation::Atomic<::alpaka::AtomicAdd, ::alpaka::hierarchy::Blocks>;
+                using BlockReductionOp = kernel::operation::Atomic<::alpaka::operation::Add, ::alpaka::onAcc::scope::Device>;
                 // dummy which produces a compile time error if used
                 using GridReductionOp = void;
                 static constexpr int workerMultiplier = detail::validateAndAdjustWorkerMultiplier(T_workerMultiplier);
@@ -192,7 +192,7 @@ namespace picongpu
              *
              * @tparam T_Acc the accelerator type
              */
-            template<typename T_Acc = pmacc::Acc<simDim>>
+            template<typename T_Acc = ALPAKA_TYPEOF(pmacc::ComputeExecutor)>
             struct GetDefaultStrategy
             {
                 using type = strategy::StridedCachedSupercells;
@@ -202,21 +202,21 @@ namespace picongpu
              *
              * @see GetDefaultStrategy
              */
-            template<typename T_Acc = pmacc::Acc<simDim>>
+            template<typename T_Acc = ALPAKA_TYPEOF(pmacc::ComputeExecutor)>
             using GetDefaultStrategy_t = typename GetDefaultStrategy<T_Acc>::type;
 
-#if (ALPAKA_ACC_GPU_CUDA_ENABLED)
-            template<typename... T_Args>
-            struct GetDefaultStrategy<alpaka::AccGpuUniformCudaHipRt<alpaka::ApiCudaRt, T_Args...>>
+#if (ALPAKA_LANG_CUDA)
+            template<>
+            struct GetDefaultStrategy<::alpaka::exec::GpuCuda>
             {
                 // GPU Utilization is higher compared to `StridedCachedSupercells`
                 using type = strategy::CachedSupercells;
             };
 #endif
 
-#if (ALPAKA_ACC_GPU_HIP_ENABLED)
-            template<typename... T_Args>
-            struct GetDefaultStrategy<alpaka::AccGpuUniformCudaHipRt<alpaka::ApiHipRt, T_Args...>>
+#if (ALPAKA_LANG_HIP)
+            template<>
+            struct GetDefaultStrategy<::alpaka::exec::GpuHip>
             {
                 // GPU Utilization is higher compared to `StridedCachedSupercells`
                 using type = strategy::CachedSupercellsScaled<2>;

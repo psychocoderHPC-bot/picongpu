@@ -42,11 +42,11 @@ namespace picongpu
         = mallocMC::CreationPolicies::FlatterScatterAlloc::DefaultHeapConfig<blockSize, pageSize, wastefactor>;
 
     using DeviceHeap = mallocMC::Allocator<
-        alpaka::AccToTag<pmacc::Acc<DIM1>>,
+        pmacc::ComputeExecutor,
         mallocMC::CreationPolicies::FlatterScatter<DeviceHeapConfig>,
         mallocMC::DistributionPolicies::Noop,
         mallocMC::OOMPolicies::ReturnNull,
-        mallocMC::ReservePoolPolicies::AlpakaBuf<pmacc::Acc<DIM1>>,
+        mallocMC::ReservePoolPolicies::AlpakaBuf,
         mallocMC::AlignmentPolicies::Shrink<>>;
 
 } // namespace picongpu
