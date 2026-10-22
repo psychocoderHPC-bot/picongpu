@@ -99,6 +99,19 @@ enable_testing()
 # Test cases
 # Each *UT.cpp file is an independent executable with one or more test cases
 file(GLOB_RECURSE TESTS test/*UT.cpp)
+
+# alpaka3 compiles copies of the sources placed in the build tree. Quoted
+# includes relative to the original test source directory (for example
+# "IdProvider.hpp" or "HostBuffer/copyFrom.hpp") no longer resolve there, so add
+# every test source directory to the include path.
+set(PMACC_TEST_SOURCE_DIRS "")
+foreach(testCaseFilepath ${TESTS})
+    get_filename_component(testCaseDir "${testCaseFilepath}" DIRECTORY)
+    list(APPEND PMACC_TEST_SOURCE_DIRS "${testCaseDir}")
+endforeach()
+list(REMOVE_DUPLICATES PMACC_TEST_SOURCE_DIRS)
+include_directories(${PMACC_TEST_SOURCE_DIRS})
+
 foreach(dim 2 3)
     foreach(testCaseFilepath ${TESTS})
         get_filename_component(testCaseFilename ${testCaseFilepath} NAME)
