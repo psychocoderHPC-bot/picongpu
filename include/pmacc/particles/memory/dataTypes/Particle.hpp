@@ -163,7 +163,7 @@ namespace pmacc
             return frame->getIdentifier(key)[idx];
         }
 
-        HDINLINE
+
         Particle& operator=(Particle const& other) = default;
 
         /** Derive attributes

@@ -199,7 +199,9 @@ namespace pmacc
             auto current_size = static_cast<int>(this->size());
             using D1Box = DataBoxDim1Access<DataBoxType>;
             D1Box d1Box(memBox, this->capacityND());
-#pragma omp parallel for
+#if defined(_OPENMP)
+#    pragma omp parallel for
+#endif
             for(int i = 0; i < current_size; i++)
             {
                 d1Box[i] = value;
