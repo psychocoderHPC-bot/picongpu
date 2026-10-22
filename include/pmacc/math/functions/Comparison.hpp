@@ -32,7 +32,7 @@
 namespace pmacc::math
 {
     template<typename T_Type, uint32_t T_dim, typename T_Storage>
-    class Vector;
+    struct Vector;
 
     namespace detail
     {

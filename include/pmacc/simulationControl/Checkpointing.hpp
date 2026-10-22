@@ -64,7 +64,7 @@ namespace pmacc::simulationControl
     inline void validate(
         boost::any& v,
         std::vector<std::string> const& values,
-        pmacc::simulationControl::RestartState* target_type,
+        pmacc::simulationControl::RestartState*,
         int)
     {
         using namespace boost::program_options;
@@ -229,7 +229,7 @@ namespace pmacc::simulationControl
         }
 
         /* Returns whether a restart needs to be performed */
-        bool checkRestart(uint32_t& step)
+        bool checkRestart(uint32_t&)
         {
             if(restartState != RestartState::TRY && restartState != RestartState::FORCE)
             {
@@ -404,13 +404,13 @@ namespace pmacc::simulationControl
                 "Note: does not yet work with all plugins, see issue #1305");
         }
 
-        void addCheckpoint(uint32_t signalMaxTimestep)
+        void addCheckpoint(uint32_t)
         {
             std::cout << "Checkpointing is disabled, no checkpoint will be created." << std::endl;
         }
 
         template<unsigned DIM>
-        void dump(uint32_t currentStep)
+        void dump(uint32_t)
         {
         }
 
@@ -434,7 +434,7 @@ namespace pmacc::simulationControl
         }
 
         /* Returns whether a restart needs to be performed */
-        bool checkRestart(uint32_t& step)
+        bool checkRestart(uint32_t&)
         {
             return false;
         }

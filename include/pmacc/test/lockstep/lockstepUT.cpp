@@ -55,7 +55,7 @@ struct IotaGenericKernel
         auto numDataBlocks = (size + blockDomSize - 1u) / blockDomSize;
 
         // grid-strided loop over the chunked data
-        for(int dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
+        for(uint32_t dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
         {
             auto dataBlockOffset = dataBlock * blockDomSize;
             auto forEach = pmacc::lockstep::makeForEach(worker);
@@ -119,7 +119,7 @@ struct IotaFixedChunkSizeKernel
         auto numDataBlocks = (size + blockDomSize - 1u) / blockDomSize;
 
         // grid-strided loop over the chunked data
-        for(int dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
+        for(uint32_t dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
         {
             auto dataBlockOffset = dataBlock * blockDomSize;
             auto forEach = pmacc::lockstep::makeForEach(worker);
@@ -163,7 +163,7 @@ struct IotaFixedChunkSizeKernelND
         // grid-strided loop over the chunked data
         auto numDataBlocks = (size + blockDomSize - 1u) / blockDomSize;
 
-        for(int dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
+        for(uint32_t dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
         {
             auto dataBlockOffset = dataBlock * blockDomSize;
             auto forEach = pmacc::lockstep::makeForEach(worker);
@@ -204,7 +204,7 @@ struct IotaGenericKernelWithDynSharedMem
         uint32_t* s_mem = ::alpaka::onAcc::getDynSharedMem<uint32_t>(worker.getAcc());
 
         // grid-strided loop over the chunked data
-        for(int dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
+        for(uint32_t dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
         {
             auto dataBlockOffset = dataBlock * blockDomSize;
             auto forEach = pmacc::lockstep::makeForEach(worker);

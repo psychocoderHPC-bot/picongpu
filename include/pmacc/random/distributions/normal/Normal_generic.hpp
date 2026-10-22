@@ -40,7 +40,7 @@ namespace pmacc
             {
                 //! Returns a normally distributed floating point with value with mean 0.0 and standard deviation 1.0
                 template<typename T_Type, typename T_RNGMethod>
-                class Normal<T_Type, T_RNGMethod, void>
+                struct Normal<T_Type, T_RNGMethod, void>
                 {
                     using RNGMethod = T_RNGMethod;
                     using StateType = typename RNGMethod::StateType;

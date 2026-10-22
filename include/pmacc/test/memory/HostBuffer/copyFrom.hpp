@@ -44,7 +44,6 @@ namespace pmacc
                     void exec(T_Dim)
                     {
                         using Data = uint8_t;
-                        using Extents = size_t;
 
                         using ::pmacc::test::memory::getElementsPerDim;
 

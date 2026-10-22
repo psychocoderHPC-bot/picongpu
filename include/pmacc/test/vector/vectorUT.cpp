@@ -82,7 +82,6 @@ TEST_CASE("vector constructor generator", "[vector]")
     using VecType = Vector<uint32_t, TEST_DIM>;
 
     auto hostDeviceBuffer = HostDeviceBuffer<VecType, DIM1>(DataSpace<DIM1>{numElements});
-    using DeviceBuf = DeviceBuffer<uint32_t, DIM1>;
 
     hostDeviceBuffer.getDeviceBuffer().setValue(VecType::create(42));
     PMACC_KERNEL(VectorConstructorGeneratorKernel<TEST_DIM>{})(1, 1)(
@@ -566,7 +565,6 @@ TEST_CASE("vector generic", "[vector]")
     auto hostDeviceBuffer = HostDeviceBuffer<bool, DIM1>(DataSpace<DIM1>{numElements});
     auto numTestsBuffer = HostDeviceBuffer<size_t, DIM1>(DataSpace<DIM1>{1});
     numTestsBuffer.getDeviceBuffer().setValue(0u);
-    using DeviceBuf = DeviceBuffer<uint32_t, DIM1>;
 
     hostDeviceBuffer.getDeviceBuffer().setValue(false);
 

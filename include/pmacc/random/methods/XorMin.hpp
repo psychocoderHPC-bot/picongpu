@@ -88,6 +88,7 @@ namespace pmacc
                      * pass. The host version is never called (CPU builds use the AlpakaRand fallback).
                      */
 #if defined(__CUDA_ARCH__) || (defined(__HIP_DEVICE_COMPILE__) && __HIP_DEVICE_COMPILE__ == 1)
+                    ::alpaka::unused(worker);
                     NativeStateType tmpState;
 
 #    if (ALPAKA_LANG_HIP)
@@ -113,6 +114,7 @@ namespace pmacc
                      * www.jstatsoft.org/v08/i14/paper page 5
                      * Has period 2^192 - 2^32.
                      */
+                    ::alpaka::unused(worker);
                     uint32_t t;
                     t = (state.v[0] ^ (state.v[0] >> 2));
                     state.v[0] = state.v[1];

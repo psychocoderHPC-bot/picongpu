@@ -140,7 +140,7 @@ namespace pmacc
         /**
          * Constructor
          */
-        SubGrid(SubGrid const& gc)
+        SubGrid(SubGrid const&)
         {
         }
     };

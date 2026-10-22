@@ -42,10 +42,6 @@ namespace
     //! Minimal worker stand-in: AlpakaRand and its distributions only need the worker for device/GPU methods.
     struct DummyWorker
     {
-        int getAcc() const
-        {
-            return 0;
-        }
     };
 
     using Engine = ::alpaka::rand::engine::Philox4x32x10;

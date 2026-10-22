@@ -486,7 +486,7 @@ namespace pmacc
              *
              * Returns always true
              */
-            constexpr bool operator==(Vector const& rhs) const
+            constexpr bool operator==(Vector const&) const
             {
                 return true;
             }
@@ -496,7 +496,7 @@ namespace pmacc
              *
              * Returns always false
              */
-            constexpr bool operator!=(Vector const& rhs) const
+            constexpr bool operator!=(Vector const&) const
             {
                 return false;
             }
@@ -673,7 +673,7 @@ namespace pmacc
             typename T_IntegralType,
             typename T_Storage,
             typename = std::enable_if_t<std::is_integral_v<T_IntegralType>>>
-        HDINLINE auto mapToND(Vector<T_IntegralType, DIM1, T_Storage> const& size, T_IntegralType linearIdx)
+        HDINLINE auto mapToND(Vector<T_IntegralType, DIM1, T_Storage> const&, T_IntegralType linearIdx)
         {
             return linearIdx;
         }
