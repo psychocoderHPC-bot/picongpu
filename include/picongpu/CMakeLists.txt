@@ -320,6 +320,14 @@ if(PIC_CI_COMPILE)
     endif()
 endif()
 
+# The nvcc host pass compiles the same headers with a different warning set. Mirror
+# the project policy above so that unused parameters and the CUDA-only `#pragma
+# unroll` directives do not fail the build when alpaka enables -Werror.
+if(CMAKE_CUDA_COMPILER)
+    set(CMAKE_CUDA_FLAGS
+        "${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-unused-parameter -Xcompiler -Wno-unknown-pragmas")
+endif()
+
 ################################################################################
 # openPMD
 ################################################################################
