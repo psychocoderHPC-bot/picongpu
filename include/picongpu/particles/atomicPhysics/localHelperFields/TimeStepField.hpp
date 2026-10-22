@@ -39,7 +39,7 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
         // cpu version
         template<typename T_Acc>
         HDINLINE auto operator()(T_Acc const&, float_X const timeStep, pmacc::DataSpace<picongpu::simDim> superCellIdx)
-            const -> std::enable_if_t<std::is_same_v<alpaka::Dev<T_Acc>, alpaka::DevCpu>>
+            const -> std::enable_if_t<pmacc::traits::isCpuAcc_v<T_Acc>>
         {
             printf("timeStep %s: %.8e\n", superCellIdx.toString(",", "[]").c_str(), timeStep);
         }
@@ -47,7 +47,7 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
         // gpu version, does nothing
         template<typename T_Acc>
         HDINLINE auto operator()(T_Acc const&, float_X const timeStep, pmacc::DataSpace<picongpu::simDim> superCellIdx)
-            const -> std::enable_if_t<!std::is_same_v<alpaka::Dev<T_Acc>, alpaka::DevCpu>>
+            const -> std::enable_if_t<!pmacc::traits::isCpuAcc_v<T_Acc>>
         {
         }
     };

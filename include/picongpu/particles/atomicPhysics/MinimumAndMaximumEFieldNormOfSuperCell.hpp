@@ -67,13 +67,13 @@ namespace picongpu::particles::atomicPhysics
 
                     auto const eFieldNorm = pmacc::math::l2norm(eFieldBox(cellIndex));
 
-                    alpaka::atomicMin(
+                    ::alpaka::onAcc::atomicMin(
                         worker.getAcc(),
                         // unit: unit_eField
                         &minEFieldNormSuperCell,
                         eFieldNorm);
 
-                    alpaka::atomicMax(
+                    ::alpaka::onAcc::atomicMax(
                         worker.getAcc(),
                         // unit: unit_eField
                         &maxEFieldNormSuperCell,

@@ -256,11 +256,11 @@ namespace picongpu::particles::atomicPhysics::kernel
 
                         uint32_t const temp = numberIonizationElectrons;
                         // update global counter
-                        alpaka::atomicAdd(
+                        ::alpaka::onAcc::atomicAdd(
                             worker.getAcc(),
                             &totalNumberMacroElectronsToSpawn,
                             temp,
-                            ::alpaka::hierarchy::Threads{});
+                            ::alpaka::onAcc::scope::Block{});
                     },
                     numberIonizationElectronsCtxArr);
                 worker.sync();
@@ -324,11 +324,11 @@ namespace picongpu::particles::atomicPhysics::kernel
                             if(numberIonizationElectrons == u32(0u))
                                 return;
 
-                            uint32_t const globalSlotIndex = alpaka::atomicAdd(
+                            uint32_t const globalSlotIndex = ::alpaka::onAcc::atomicAdd(
                                 worker.getAcc(),
                                 &spawnCounter,
                                 u32(1u),
-                                ::alpaka::hierarchy::Threads{});
+                                ::alpaka::onAcc::scope::Block{});
 
                             uint32_t const electronFrameIndex = (globalSlotIndex + offsetLowFrame) / frameSize;
                             uint32_t const localSlotIndex = (globalSlotIndex + offsetLowFrame) % frameSize;

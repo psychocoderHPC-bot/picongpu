@@ -36,7 +36,7 @@ namespace picongpu::particles::atomicPhysics::debug
     {
         template<typename T_Acc, typename T_Ion>
         HDINLINE auto operator()(T_Acc const&, T_Ion const& ion) const
-            -> std::enable_if_t<std::is_same_v<alpaka::Dev<T_Acc>, alpaka::DevCpu>>
+            -> std::enable_if_t<pmacc::traits::isCpuAcc_v<T_Acc>>
         {
             std::cout << "ID: " << ion[particleId_] << std::endl;
             std::cout << "\t - weighting: " << ion[weighting_] << std::endl;
@@ -55,7 +55,7 @@ namespace picongpu::particles::atomicPhysics::debug
 
         template<typename T_Acc, typename T_Ion>
         HDINLINE auto operator()(T_Acc const&, T_Ion const& ion) const
-            -> std::enable_if_t<!std::is_same_v<alpaka::Dev<T_Acc>, alpaka::DevCpu>>
+            -> std::enable_if_t<!pmacc::traits::isCpuAcc_v<T_Acc>>
         {
         }
     };

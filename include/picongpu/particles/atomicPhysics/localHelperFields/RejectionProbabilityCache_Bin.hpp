@@ -43,7 +43,7 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
             T_Acc const&,
             T_RejectionProbabilityCache const& rejectionProbabilityCache,
             pmacc::DataSpace<picongpu::simDim> superCellIdx) const
-            -> std::enable_if_t<std::is_same_v<alpaka::Dev<T_Acc>, alpaka::DevCpu>>
+            -> std::enable_if_t<pmacc::traits::isCpuAcc_v<T_Acc>>
         {
             constexpr uint32_t numBins = T_RejectionProbabilityCache::numberBins;
 
@@ -78,7 +78,7 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
             T_Acc const&,
             T_RejectionProbabilityCache const& rejectionProbabilityCache,
             pmacc::DataSpace<picongpu::simDim> superCellIdx) const
-            -> std::enable_if_t<!std::is_same_v<alpaka::Dev<T_Acc>, alpaka::DevCpu>>
+            -> std::enable_if_t<!pmacc::traits::isCpuAcc_v<T_Acc>>
         {
         }
     };

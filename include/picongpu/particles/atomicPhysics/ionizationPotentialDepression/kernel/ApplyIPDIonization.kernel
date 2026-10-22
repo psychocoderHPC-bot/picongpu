@@ -240,11 +240,11 @@ namespace picongpu::particles::atomicPhysics::ionizationPotentialDepression::ker
                 numberIonizationElectrons = ipdIonizationStateChargeState - currentChargeState;
 
                 // set flag that at least one ions was in unbound state
-                alpaka::atomicExch(
+                ::alpaka::onAcc::atomicExch(
                     worker.getAcc(),
                     &kernelState.foundUnbound,
                     u32(true),
-                    ::alpaka::hierarchy::Threads{});
+                    ::alpaka::onAcc::scope::Block{});
             }
 
             return numberIonizationElectrons;

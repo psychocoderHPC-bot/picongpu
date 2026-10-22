@@ -273,14 +273,14 @@ namespace picongpu::particles::atomicPhysics::electronDistribution
             // overflow bin
             if(!inRange(energy))
             {
-                alpaka::atomicAdd(worker.getAcc(), &(this->overFlowBinWeight), weight, ::alpaka::hierarchy::Threads{});
+                ::alpaka::onAcc::atomicAdd(worker.getAcc(), &(this->overFlowBinWeight), weight, ::alpaka::onAcc::scope::Block{});
                 return;
             }
 
             // regular bin
             uint32_t binIndex = getBinIndex(energy);
 
-            alpaka::atomicAdd(worker.getAcc(), &(this->binWeights0[binIndex]), weight, ::alpaka::hierarchy::Threads{});
+            ::alpaka::onAcc::atomicAdd(worker.getAcc(), &(this->binWeights0[binIndex]), weight, ::alpaka::onAcc::scope::Block{});
             return;
         }
 
@@ -301,11 +301,11 @@ namespace picongpu::particles::atomicPhysics::electronDistribution
                 if(!debugCheckBinIndexInRange(binIndex))
                     return;
 
-            alpaka::atomicAdd(
+            ::alpaka::onAcc::atomicAdd(
                 worker.getAcc(),
                 &(this->binDeltaWeights[binIndex]),
                 weight,
-                ::alpaka::hierarchy::Threads{});
+                ::alpaka::onAcc::scope::Block{});
             return;
         }
 
@@ -344,11 +344,11 @@ namespace picongpu::particles::atomicPhysics::electronDistribution
                 if(!debugCheckBinIndexInRange(binIndex))
                     return;
 
-            alpaka::atomicAdd(
+            ::alpaka::onAcc::atomicAdd(
                 worker.getAcc(),
                 &(this->binDeltaEnergy[binIndex]),
                 deltaEnergy,
-                ::alpaka::hierarchy::Threads{});
+                ::alpaka::onAcc::scope::Block{});
             return;
         }
 
