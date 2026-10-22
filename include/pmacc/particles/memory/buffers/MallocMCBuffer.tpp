@@ -21,7 +21,7 @@
 
 #pragma once
 
-#if (ALPAKA_ACC_GPU_CUDA_ENABLED || ALPAKA_ACC_GPU_HIP_ENABLED)
+#if (ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP)
 
 #    include "pmacc/alpakaHelper/Device.hpp"
 #    include "pmacc/eventSystem/eventSystem.hpp"
@@ -53,25 +53,28 @@ namespace pmacc
 
         if(!hostBuffer)
         {
-            hostBuffer = alpaka::allocMappedBufIfSupported<uint8_t, MemIdxType>(
-                manager::Device<HostDevice>::get().current(),
-                manager::Device<ComputeDevice>::get().getPlatform(),
+            hostBuffer = ::alpaka::onHost::allocMapped<uint8_t>(
+                manager::Device<ComputeDevice>::get().current(),
                 alpakaBufferSize);
 
             hostBufferOffset = static_cast<int64_t>(
-                reinterpret_cast<uint8_t*>(deviceHeapInfo.p) - alpaka::getPtrNative(*hostBuffer));
+                reinterpret_cast<uint8_t*>(deviceHeapInfo.p) - ::alpaka::onHost::data(*hostBuffer));
         }
         /* add event system hints */
         eventSystem::startOperation(ITask::TASK_DEVICE);
         eventSystem::startOperation(ITask::TASK_HOST);
 
-        auto devView = ::alpaka::ViewPlainPtr<ComputeDevice, uint8_t, AlpakaDim<DIM1>, pmacc::MemIdxType>(
-            (uint8_t*) deviceHeapInfo.p,
+        auto devView = ::alpaka::makeView(
             manager::Device<ComputeDevice>::get().current(),
+            (uint8_t*) deviceHeapInfo.p,
+            alpakaBufferSize);
+        auto hostView = ::alpaka::makeView(
+            ::alpaka::onHost::DeviceSpec<HostApi, HostDeviceKind>{HostApi{}, HostDeviceKind{}},
+            ::alpaka::onHost::data(*hostBuffer),
             alpakaBufferSize);
         auto alpakaStream = pmacc::eventSystem::getComputeDeviceQueue(ITask::TASK_DEVICE)->getAlpakaQueue();
-        alpaka::memcpy(alpakaStream, *hostBuffer, devView, alpakaBufferSize);
-        alpaka::wait(alpakaStream);
+        ::alpaka::onHost::memcpy(alpakaStream, hostView, devView, alpakaBufferSize);
+        ::alpaka::onHost::wait(alpakaStream);
     }
 
 } // namespace pmacc

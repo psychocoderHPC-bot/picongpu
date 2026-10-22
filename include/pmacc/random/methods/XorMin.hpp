@@ -39,7 +39,7 @@ namespace pmacc
     {
         namespace methods
         {
-#if (ALPAKA_ACC_GPU_CUDA_ENABLED || ALPAKA_ACC_GPU_HIP_ENABLED)
+#if (ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP)
             //! Uses the CUDA XORWOW RNG but does not store state members required for normal distribution
             template<typename T_Acc = pmacc::Acc<DIM1>>
             class XorMin
@@ -84,11 +84,15 @@ namespace pmacc
                 DINLINE void init(T_Worker const& worker, StateType& state, uint32_t seed, uint32_t subsequence = 0)
                     const
                 {
+                    /* curand/hiprand device functions are only available in the device compilation
+                     * pass. The host version is never called (CPU builds use the AlpakaRand fallback).
+                     */
+#if defined(__CUDA_ARCH__) || (defined(__HIP_DEVICE_COMPILE__) && __HIP_DEVICE_COMPILE__ == 1)
                     NativeStateType tmpState;
 
-#    if (ALPAKA_ACC_GPU_HIP_ENABLED)
+#    if (ALPAKA_LANG_HIP)
 #        define PMACC_RNG_INIT_FN hiprand_init
-#    elif (ALPAKA_ACC_GPU_CUDA_ENABLED)
+#    elif (ALPAKA_LANG_CUDA)
 #        define PMACC_RNG_INIT_FN curand_init
 #    endif
 
@@ -97,6 +101,9 @@ namespace pmacc
 #    undef PMACC_RNG_INIT_FN
 
                     state = tmpState;
+#else
+                    ::alpaka::unused(worker, state, seed, subsequence);
+#endif
                 }
 
                 template<typename T_Worker>

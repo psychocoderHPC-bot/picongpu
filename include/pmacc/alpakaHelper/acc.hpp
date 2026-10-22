@@ -24,64 +24,71 @@
 #include <alpaka/alpaka.hpp>
 
 #include <cstdint>
+#include <type_traits>
+#include <utility>
 
 namespace pmacc
 {
     using IdxType = uint32_t;
     using MemIdxType = size_t;
 
-    template<uint32_t T_dim>
-    using AlpakaDim = ::alpaka::DimInt<T_dim>;
-    using HostDevice = ::alpaka::DevCpu;
-
-#if (ALPAKA_ACC_GPU_CUDA_ENABLED)
-    using ComputeDevice = ::alpaka::DevCudaRt;
-    template<uint32_t T_dim>
-    using Acc = ::alpaka::AccGpuCudaRt<AlpakaDim<T_dim>, IdxType>;
-#elif (ALPAKA_ACC_GPU_HIP_ENABLED)
-    using ComputeDevice = ::alpaka::DevHipRt;
-    template<uint32_t T_dim>
-    using Acc = ::alpaka::AccGpuHipRt<AlpakaDim<T_dim>, IdxType>;
-#elif (                                                                                                               \
-    ALPAKA_ACC_CPU_B_SEQ_T_OMP2_ENABLED || ALPAKA_ACC_CPU_B_SEQ_T_THREADS_ENABLED                                     \
-    || ALPAKA_ACC_CPU_B_OMP2_T_SEQ_ENABLED || ALPAKA_ACC_CPU_B_SEQ_T_SEQ_ENABLED                                      \
-    || ALPAKA_ACC_CPU_B_TBB_T_SEQ_ENABLED)
-
-    using ComputeDevice = ::alpaka::DevCpu;
-
-#    if (ALPAKA_ACC_CPU_B_SEQ_T_OMP2_ENABLED)
-    template<uint32_t T_dim>
-    using Acc = ::alpaka::AccCpuOmp2Threads<AlpakaDim<T_dim>, IdxType>;
-#    endif
-
-#    if (ALPAKA_ACC_CPU_B_OMP2_T_SEQ_ENABLED)
-    template<uint32_t T_dim>
-    using Acc = ::alpaka::AccCpuOmp2Blocks<AlpakaDim<T_dim>, IdxType>;
-#    endif
-
-#    if (ALPAKA_ACC_CPU_B_SEQ_T_THREADS_ENABLED)
-    template<uint32_t T_dim>
-    using Acc = ::alpaka::AccCpuThreads<AlpakaDim<T_dim>, IdxType>;
-#    endif
-
-#    if (ALPAKA_ACC_CPU_B_SEQ_T_SEQ_ENABLED)
-    template<uint32_t T_dim>
-    using Acc = ::alpaka::AccCpuSerial<AlpakaDim<T_dim>, IdxType>;
-#    endif
-
-#    if (ALPAKA_ACC_CPU_B_TBB_T_SEQ_ENABLED)
-    template<uint32_t T_dim>
-    using Acc = ::alpaka::AccCpuTbbBlocks<AlpakaDim<T_dim>, IdxType>;
-#    endif
-#endif
-
-#if (PMACC_USE_ASYNC_QUEUES == 1)
-    using ComputeDeviceQueue = ::alpaka::Queue<ComputeDevice, ::alpaka::NonBlocking>;
+    //! alpaka API/device kind/executor used for the compute device selected at build time
+#if defined(ALPAKA_LANG_CUDA) && ALPAKA_LANG_CUDA
+    using ComputeApi = ::alpaka::api::Cuda;
+    using ComputeDeviceKind = ::alpaka::deviceKind::NvidiaGpu;
+    inline constexpr auto ComputeExecutor = ::alpaka::exec::gpuCuda;
+#elif defined(ALPAKA_LANG_HIP) && ALPAKA_LANG_HIP
+    using ComputeApi = ::alpaka::api::Hip;
+    using ComputeDeviceKind = ::alpaka::deviceKind::AmdGpu;
+    inline constexpr auto ComputeExecutor = ::alpaka::exec::gpuHip;
 #else
-    using ComputeDeviceQueue = ::alpaka::Queue<ComputeDevice, ::alpaka::Blocking>;
+    using ComputeApi = ::alpaka::api::Host;
+    using ComputeDeviceKind = ::alpaka::deviceKind::Cpu;
+    inline constexpr auto ComputeExecutor = ::alpaka::exec::cpuOmpBlocks;
 #endif
 
-    using ComputeDeviceEvent = alpaka::Event<ComputeDeviceQueue>;
+    using HostApi = ::alpaka::api::Host;
+    using HostDeviceKind = ::alpaka::deviceKind::Cpu;
+
+    using HostDevice = ::alpaka::onHost::Device<HostApi, HostDeviceKind>;
+    using ComputeDevice = ::alpaka::onHost::Device<ComputeApi, ComputeDeviceKind>;
+
+    /** Lockstep accelerator tag.
+     *
+     * alpaka3 no longer has per-dimensionality accelerator types. This tag carries the
+     * executor which is used whenever a compile time accelerator property is required.
+     */
+    template<uint32_t T_dim>
+    struct Acc
+    {
+        static constexpr auto executor = ComputeExecutor;
+
+        //! true if kernels are executed on a GPU backend
+        static constexpr bool isGpu = !std::is_same_v<ComputeApi, ::alpaka::api::Host>;
+    };
+
+#if defined(PMACC_USE_ASYNC_QUEUES) && PMACC_USE_ASYNC_QUEUES == 1
+    inline constexpr auto ComputeQueuePolicies = ::alpaka::onHost::QueuePolicyList{::alpaka::queueKind::nonBlocking};
+#else
+    inline constexpr auto ComputeQueuePolicies = ::alpaka::onHost::QueuePolicyList{::alpaka::queueKind::blocking};
+#endif
+
+    using ComputeDeviceQueue = decltype(
+        std::declval<ComputeDevice&>().makeQueue(std::declval<decltype(ComputeQueuePolicies) const&>()));
+
+    using ComputeDeviceEvent = decltype(std::declval<ComputeDevice&>().makeEvent());
+
+    /** Concrete owning buffer type returned by an alpaka3 device allocation. */
+    template<typename T_Type, uint32_t T_dim>
+    using ComputeBuffer = decltype(::alpaka::onHost::alloc<T_Type>(
+        std::declval<ComputeDevice const&>(),
+        std::declval<::alpaka::Vec<MemIdxType, T_dim>>()));
+
+    /** Concrete owning host-mapped buffer type returned by an alpaka3 device allocation. */
+    template<typename T_Type, uint32_t T_dim>
+    using ComputeMappedBuffer = decltype(::alpaka::onHost::allocMapped<T_Type>(
+        std::declval<ComputeDevice const&>(),
+        std::declval<::alpaka::Vec<MemIdxType, T_dim>>()));
 
     /*! device compile flag
      *

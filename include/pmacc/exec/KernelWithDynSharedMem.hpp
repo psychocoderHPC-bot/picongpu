@@ -22,6 +22,7 @@
 #pragma once
 
 
+#include <cstdint>
 #include <string>
 
 namespace pmacc::exec::detail
@@ -29,17 +30,18 @@ namespace pmacc::exec::detail
     /** Kernel with dynamic shared memory
      *
      * This implements the possibility to define dynamic shared memory without
-     * specializing the needed alpaka trait BlockSharedMemDynSizeBytes for each kernel with shared memory.
-     * The trait BlockSharedMemDynSizeBytes is defined by PMacc for all types of KernelWithDynSharedMem.
+     * defining the member `dynSharedMemBytes` for each kernel with shared memory.
+     * alpaka3 reads the public member `dynSharedMemBytes` of the kernel functor.
      */
     template<typename T_Kernel>
     struct KernelWithDynSharedMem : public T_Kernel
     {
-        size_t const m_dynSharedMemBytes;
+        //! alpaka3 discovers the dynamic shared memory size from this public member
+        uint32_t const dynSharedMemBytes;
 
         KernelWithDynSharedMem(T_Kernel const& kernel, size_t const& dynSharedMemBytes)
             : T_Kernel(kernel)
-            , m_dynSharedMemBytes(dynSharedMemBytes)
+            , dynSharedMemBytes(static_cast<uint32_t>(dynSharedMemBytes))
         {
         }
     };

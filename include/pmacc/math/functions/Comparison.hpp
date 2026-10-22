@@ -26,11 +26,42 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include <cstdint>
+#include <type_traits>
+
 namespace pmacc::math
 {
+    template<typename T_Type, uint32_t T_dim, typename T_Storage>
+    class Vector;
+
+    namespace detail
+    {
+        template<typename T>
+        struct IsVector : std::false_type
+        {
+        };
+
+        template<typename T_Type, uint32_t T_dim, typename T_Storage>
+        struct IsVector<Vector<T_Type, T_dim, T_Storage>> : std::true_type
+        {
+        };
+    } // namespace detail
+
     //! Calculates the smaller value of two arguments.
-    ALPAKA_BINARY_MATH_FN(min, alpaka::math::ConceptMathMin, Min)
+    template<typename T_Type1, typename T_Type2>
+        requires(!detail::IsVector<std::decay_t<T_Type1>>::value && !detail::IsVector<std::decay_t<T_Type2>>::value)
+    ALPAKA_FN_HOST_ACC ALPAKA_FN_INLINE auto min(T_Type1 const& arg1, T_Type2 const& arg2)
+        ->decltype(::alpaka::math::min(arg1, arg2))
+    {
+        return ::alpaka::math::min(arg1, arg2);
+    }
 
     //! Calculates the larger value of two arguments.
-    ALPAKA_BINARY_MATH_FN(max, alpaka::math::ConceptMathMax, Max)
+    template<typename T_Type1, typename T_Type2>
+        requires(!detail::IsVector<std::decay_t<T_Type1>>::value && !detail::IsVector<std::decay_t<T_Type2>>::value)
+    ALPAKA_FN_HOST_ACC ALPAKA_FN_INLINE auto max(T_Type1 const& arg1, T_Type2 const& arg2)
+        ->decltype(::alpaka::math::max(arg1, arg2))
+    {
+        return ::alpaka::math::max(arg1, arg2);
+    }
 } // namespace pmacc::math

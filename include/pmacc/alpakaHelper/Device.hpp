@@ -25,19 +25,39 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include <cassert>
 #include <map>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 namespace pmacc
 {
+    namespace detail
+    {
+        /** Extract the alpaka API and device kind from an onHost::Device type. */
+        template<typename T_Device>
+        struct DeviceSpecOf;
+
+        template<typename T_Api, typename T_DeviceKind>
+        struct DeviceSpecOf<::alpaka::onHost::Device<T_Api, T_DeviceKind>>
+        {
+            using Api = T_Api;
+            using DeviceKind = T_DeviceKind;
+        };
+    } // namespace detail
+
     namespace manager
     {
         template<typename T_DeviceType>
         struct Device
         {
             using DeviceType = T_DeviceType;
+            using Api = typename detail::DeviceSpecOf<DeviceType>::Api;
+            using DeviceKind = typename detail::DeviceSpecOf<DeviceType>::DeviceKind;
+
             std::optional<DeviceType> m_device;
 
             int m_devIdx = -1;
@@ -48,9 +68,9 @@ namespace pmacc
                 return instance;
             }
 
-            auto getPlatform() const
+            static auto makeSelector()
             {
-                return alpaka::Platform<DeviceType>{};
+                return ::alpaka::onHost::makeDeviceSelector(Api{}, DeviceKind{});
             }
 
             auto device(int idx = 0) -> DeviceType&
@@ -76,10 +96,10 @@ namespace pmacc
 
                     std::optional<DeviceType> dev;
 
-                    auto const platform = getPlatform();
+                    auto selector = makeSelector();
                     try
                     {
-                        dev = std::make_optional<DeviceType>(alpaka::getDevByIdx(platform, idx));
+                        dev = std::make_optional<DeviceType>(selector.makeDevice(static_cast<uint32_t>(idx)));
                     }
                     catch(std::runtime_error const& e)
                     {
@@ -124,8 +144,8 @@ namespace pmacc
 
             auto count() -> int
             {
-                auto const platform = alpaka::Platform<DeviceType>{};
-                return static_cast<int>(::alpaka::getDevCount(platform));
+                auto selector = makeSelector();
+                return static_cast<int>(selector.getDeviceCount());
             }
 
         protected:

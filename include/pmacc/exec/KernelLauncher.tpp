@@ -93,30 +93,25 @@ namespace pmacc::exec::detail
                                            + std::to_string(m_line) + std::string(" ]");
 
             PMACC_CHECK_KERNEL_MSG(
-                alpaka::wait(manager::Device<ComputeDevice>::get().current());
+                ::alpaka::onHost::wait(manager::Device<ComputeDevice>::get().current());
                 , std::string("Crash before kernel call ") + kernelInfo);
 
             pmacc::TaskKernel* taskKernel = pmacc::Environment<>::get().Factory().createTaskKernel(kernelName);
 
             auto gridExtent = m_gridExtent.toAlpakaKernelVec();
             auto blockExtent = m_blockExtent.toAlpakaKernelVec();
-            auto elemExtent = math::Vector<IdxType, T_dim>::create(1).toAlpakaKernelVec();
-            auto workDiv
-                = ::alpaka::WorkDivMembers<::alpaka::DimInt<T_dim>, IdxType>(gridExtent, blockExtent, elemExtent);
-
-            auto const kernelTask
-                = ::alpaka::createTaskKernel<Acc<T_dim>>(workDiv, m_kernel, std::forward<T_Args>(args)...);
+            auto const threadSpec = ::alpaka::onHost::ThreadSpec{gridExtent, blockExtent, ComputeExecutor};
 
             auto queue = taskKernel->getAlpakaQueue();
 
-            ::alpaka::enqueue(queue, kernelTask);
+            queue.enqueue(threadSpec, ::alpaka::KernelBundle{m_kernel, std::forward<T_Args>(args)...});
 
             PMACC_CHECK_KERNEL_MSG(
-                alpaka::wait(manager::Device<ComputeDevice>::get().current());
+                ::alpaka::onHost::wait(manager::Device<ComputeDevice>::get().current());
                 , std::string("Crash after kernel launch ") + kernelInfo);
             taskKernel->activateChecks();
             PMACC_CHECK_KERNEL_MSG(
-                alpaka::wait(manager::Device<ComputeDevice>::get().current());
+                ::alpaka::onHost::wait(manager::Device<ComputeDevice>::get().current());
                 , std::string("Crash after kernel activation") + kernelInfo);
         }
     };
