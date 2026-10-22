@@ -37,7 +37,7 @@
 /*if this flag is defined all kernel calls would be checked and synchronize
  * this flag must set by the compiler or inside of the Makefile
  */
-#if (PMACC_SYNC_KERNEL == 1)
+#if defined(PMACC_SYNC_KERNEL) && PMACC_SYNC_KERNEL == 1
 #    define PMACC_CHECK_KERNEL_MSG(...) PMACC_CHECK_ALPAKA_CALL_MSG(__VA_ARGS__)
 #else
 /*no synchronize and check of kernel calls*/
