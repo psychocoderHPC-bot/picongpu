@@ -62,8 +62,11 @@ namespace pmacc
                         {
                             if constexpr(std::is_same_v<T_Type, double>)
                             {
-                                std::uint64_t const b = static_cast<std::uint64_t>(state())
-                                                        | (static_cast<std::uint64_t>(state()) << 32u);
+                                // Sequence the two engine draws explicitly: the first draw is the low
+                                // word and the second the high word (matching alpaka2's NormalReal).
+                                std::uint64_t const low = static_cast<std::uint64_t>(state());
+                                std::uint64_t const high = static_cast<std::uint64_t>(state());
+                                std::uint64_t const b = low | (high << 32u);
                                 constexpr std::uint64_t limit = std::uint64_t{1} << 53u;
                                 return static_cast<T_Type>(b & (limit - 1u)) / static_cast<T_Type>(limit);
                             }
