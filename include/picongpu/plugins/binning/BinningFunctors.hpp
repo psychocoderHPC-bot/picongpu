@@ -26,8 +26,6 @@
 #include <pmacc/lockstep/ForEach.hpp>
 #include <pmacc/particles/algorithm/ForEach.hpp>
 
-#include <alpaka/atomic/Traits.hpp>
-
 #include <cstdint>
 
 namespace picongpu
