@@ -42,7 +42,7 @@ namespace picongpu
         = mallocMC::CreationPolicies::FlatterScatterAlloc::DefaultHeapConfig<blockSize, pageSize, wastefactor>;
 
     using DeviceHeap = mallocMC::Allocator<
-        pmacc::ComputeExecutor,
+        ALPAKA_TYPEOF(pmacc::ComputeExecutor),
         mallocMC::CreationPolicies::FlatterScatter<DeviceHeapConfig>,
         mallocMC::DistributionPolicies::Noop,
         mallocMC::OOMPolicies::ReturnNull,

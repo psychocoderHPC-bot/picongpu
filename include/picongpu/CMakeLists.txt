@@ -549,6 +549,18 @@ file(GLOB_RECURSE ACCSRCFILES "*.x.cpp")
 file(GLOB_RECURSE SRCFILES "*.cpp")
 list(REMOVE_ITEM SRCFILES ${ACCSRCFILES})
 
+# alpaka3 compiles copies of the accelerator sources placed in the build tree. Quoted
+# includes relative to the original source directory (for example
+# "common/txtFileHandling.hpp") no longer resolve there, so add every source directory
+# to the include path.
+set(PIC_SOURCE_DIRS "")
+foreach(picSource ${ACCSRCFILES} ${SRCFILES})
+    get_filename_component(picSourceDir "${picSource}" DIRECTORY)
+    list(APPEND PIC_SOURCE_DIRS "${picSourceDir}")
+endforeach()
+list(REMOVE_DUPLICATES PIC_SOURCE_DIRS)
+include_directories(${PIC_SOURCE_DIRS})
+
 add_library(picongpu-hostonly STATIC ${SRCFILES})
 target_link_libraries(picongpu-hostonly PUBLIC ${HOST_LIBS})
 
