@@ -179,6 +179,41 @@ namespace picongpu
     using SpeciesEligibleForChargeConservation =
         typename particles::traits::SpeciesEligibleForSolver<T, ChargeConservation>::type;
 
+namespace detail
+{
+    struct ChargeDeviationKernel
+    {
+        template<typename T_Worker, typename T_Mapper, typename T_RohBox, typename T_FieldEBox>
+        ALPAKA_FN_ACC void operator()(
+            T_Worker const& worker,
+            T_Mapper mapper,
+            T_RohBox rohBox,
+            T_FieldEBox fieldEBox) const
+        {
+        DataSpace<simDim> const superCellIdx(mapper.getSuperCellIndex(worker.blockDomIdxND()));
+        DataSpace<simDim> const supercellCellIdx = superCellIdx * SuperCellSize::toRT();
+        constexpr uint32_t cellsPerSupercell = pmacc::math::CT::volume<SuperCellSize>::type::value;
+
+        lockstep::makeForEach<cellsPerSupercell>(worker)(
+            [&](int32_t const linearIdx)
+            {
+                // cell index within the superCell
+                DataSpace<simDim> const inSupercellCellIdx
+                    = pmacc::math::mapToND(SuperCellSize::toRT(), linearIdx);
+
+                auto globalCellIdx = supercellCellIdx + inSupercellCellIdx;
+
+                auto div = picongpu::detail::Div<simDim, typename FieldTmp::ValueType>{};
+
+                /* rho := | div E * eps_0 - rho | */
+                rohBox(globalCellIdx).x() = pmacc::math::l2norm(
+                    div(fieldEBox.shift(globalCellIdx)) * sim.pic.getEps0() - rohBox(globalCellIdx).x());
+            });
+        }
+    };
+
+}
+
     void ChargeConservation::notify(uint32_t currentStep)
     {
         typedef SuperCellSize BlockDim;
@@ -209,28 +244,7 @@ namespace picongpu
 
         auto fieldE = dc.get<FieldE>(FieldE::getName());
 
-        auto const chargeDeviation = [] ALPAKA_FN_ACC(auto const& worker, auto mapper, auto rohBox, auto fieldEBox)
-        {
-            DataSpace<simDim> const superCellIdx(mapper.getSuperCellIndex(worker.blockDomIdxND()));
-            DataSpace<simDim> const supercellCellIdx = superCellIdx * SuperCellSize::toRT();
-            constexpr uint32_t cellsPerSupercell = pmacc::math::CT::volume<SuperCellSize>::type::value;
-
-            lockstep::makeForEach<cellsPerSupercell>(worker)(
-                [&](int32_t const linearIdx)
-                {
-                    // cell index within the superCell
-                    DataSpace<simDim> const inSupercellCellIdx
-                        = pmacc::math::mapToND(SuperCellSize::toRT(), linearIdx);
-
-                    auto globalCellIdx = supercellCellIdx + inSupercellCellIdx;
-
-                    auto div = picongpu::detail::Div<simDim, typename FieldTmp::ValueType>{};
-
-                    /* rho := | div E * eps_0 - rho | */
-                    rohBox(globalCellIdx).x() = pmacc::math::l2norm(
-                        div(fieldEBox.shift(globalCellIdx)) * sim.pic.getEps0() - rohBox(globalCellIdx).x());
-                });
-        };
+        auto const chargeDeviation = detail::ChargeDeviationKernel{};
 
         auto const mapper = makeAreaMapper<CORE + BORDER>(*this->cellDescription);
 
