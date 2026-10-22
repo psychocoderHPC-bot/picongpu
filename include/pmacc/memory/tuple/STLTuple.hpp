@@ -36,8 +36,8 @@
 
 #include "pmacc/attribute/FunctionSpecifier.hpp"
 
-#include <alpaka/core/Common.hpp>
-#include <alpaka/core/Config.hpp>
+#include <alpaka/core/common.hpp>
+#include <alpaka/core/config.hpp>
 
 #include <concepts>
 #include <type_traits>
