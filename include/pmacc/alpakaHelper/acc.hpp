@@ -56,6 +56,9 @@ namespace pmacc
     using HostDevice = ::alpaka::onHost::Device<HostApi, HostDeviceKind>;
     using ComputeDevice = ::alpaka::onHost::Device<ComputeApi, ComputeDeviceKind>;
 
+    //! plain executor type, safe to use in function signatures (unlike ALPAKA_TYPEOF)
+    using ComputeExecutorType = ALPAKA_TYPEOF(ComputeExecutor);
+
     /** Lockstep accelerator tag.
      *
      * alpaka3 no longer has per-dimensionality accelerator types. This tag carries the

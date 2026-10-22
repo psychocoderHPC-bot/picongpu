@@ -192,7 +192,7 @@ namespace picongpu
              *
              * @tparam T_Acc the accelerator type
              */
-            template<typename T_Acc = ALPAKA_TYPEOF(pmacc::ComputeExecutor)>
+            template<typename T_Acc = pmacc::ComputeExecutorType>
             struct GetDefaultStrategy
             {
                 using type = strategy::StridedCachedSupercells;
@@ -202,7 +202,7 @@ namespace picongpu
              *
              * @see GetDefaultStrategy
              */
-            template<typename T_Acc = ALPAKA_TYPEOF(pmacc::ComputeExecutor)>
+            template<typename T_Acc = pmacc::ComputeExecutorType>
             using GetDefaultStrategy_t = typename GetDefaultStrategy<T_Acc>::type;
 
 #if (ALPAKA_LANG_CUDA)
