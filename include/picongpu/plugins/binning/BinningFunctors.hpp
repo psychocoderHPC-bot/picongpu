@@ -83,11 +83,11 @@ namespace picongpu
                         [&](auto const&... extraUserData)
                         { return quantityFunctor(worker, domainInfo, particle, extraUserData...); },
                         userFunctorData);
-                    alpaka::atomicOp<T_AtomicOp>(
+                    ::alpaka::onAcc::atomicOp<T_AtomicOp>(
                         worker.getAcc(),
                         &(histBox[idxOneD]),
                         depositVal,
-                        ::alpaka::hierarchy::Blocks{});
+                        ::alpaka::onAcc::scope::Device{});
                 }
             }
         };
@@ -294,11 +294,11 @@ namespace picongpu
                         [&](auto const&... userFunctorData)
                         { return quantityFunctor(worker, domainInfo, userFunctorData...); },
                         userFunctorData);
-                    alpaka::atomicOp<T_AtomicOp>(
+                    ::alpaka::onAcc::atomicOp<T_AtomicOp>(
                         worker.getAcc(),
                         &(histBox[idxOneD]),
                         depositVal,
-                        ::alpaka::hierarchy::Blocks{});
+                        ::alpaka::onAcc::scope::Device{});
                 }
             }
         };

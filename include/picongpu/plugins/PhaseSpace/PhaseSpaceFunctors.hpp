@@ -94,11 +94,11 @@ namespace picongpu
                 p_bin = num_pbins - 1;
 
             /** @todo take particle shape into account */
-            alpaka::atomicAdd(
+            ::alpaka::onAcc::atomicAdd(
                 worker.getAcc(),
                 &(sharedMemHist(DataSpace<2>(p_bin, r_bin))),
                 particleChargeDensity,
-                ::alpaka::hierarchy::Threads{});
+                ::alpaka::onAcc::scope::Block{});
         }
     };
 
@@ -193,7 +193,7 @@ namespace picongpu
 
             // flush shared memory data to global stored histogram
             auto supercellCellOffset = (superCellIdx - mapper.getGuardingSuperCells()) * SuperCellSize::toRT();
-            auto const atomicOp = kernel::operation::Atomic<::alpaka::AtomicAdd, ::alpaka::hierarchy::Blocks>{};
+            auto const atomicOp = kernel::operation::Atomic<::alpaka::operation::Add, ::alpaka::onAcc::scope::Device>{};
             collectiveOnSharedHistogram(
                 worker,
                 atomicOp,

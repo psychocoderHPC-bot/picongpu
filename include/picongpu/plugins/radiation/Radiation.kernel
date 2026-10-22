@@ -229,7 +229,7 @@ namespace picongpu
                                                 saveParticleAt = kernel::atomicAllInc(
                                                     worker,
                                                     &counter_s,
-                                                    ::alpaka::hierarchy::Threads{});
+                                                    ::alpaka::onAcc::scope::Block{});
 
                                             /* for information:
                                              *   atomicAdd returns an int with the previous

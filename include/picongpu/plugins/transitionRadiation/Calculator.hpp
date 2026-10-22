@@ -21,14 +21,16 @@
 
 #include "Particle.hpp"
 
+#include <pmacc/math/Complex.hpp>
+
 namespace picongpu
 {
     namespace plugins
     {
         namespace transitionRadiation
         {
-            using complex_X = alpaka::Complex<float_X>;
-            using complex_64 = alpaka::Complex<float_64>;
+            using complex_X = pmacc::math::Complex<float_X>;
+            using complex_64 = pmacc::math::Complex<float_64>;
 
             /* Arbitrary margin which is necessary to prevent division by 0 error
              * created by particles moving in the plane of the foil.

@@ -22,6 +22,8 @@
 // required for SIMDIM definition
 #include "picongpu/defines.hpp"
 
+#include <pmacc/math/Complex.hpp>
+
 #if (SIMDIM == DIM3 && PIC_ENABLE_FFTW3 == 1 && ENABLE_OPENPMD == 1)
 
 #    include "picongpu/simulation/control/Window.hpp"
@@ -51,7 +53,7 @@ namespace picongpu
             class Helper
             {
             private:
-                using complex_64 = alpaka::Complex<float_64>;
+                using complex_64 = pmacc::math::Complex<float_64>;
 
                 using vec3c = std::vector<std::vector<std::vector<complex_64>>>;
                 using vec2c = std::vector<std::vector<complex_64>>;
