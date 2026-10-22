@@ -123,7 +123,7 @@ namespace picongpu
                         if(parSrc[multiMask_] == 1 && filter(parSrc))
                             if(accParFilter(worker, parSrc))
                                 storageOffset
-                                    = kernel::atomicAllInc(worker, &localCounter, ::alpaka::hierarchy::Threads{});
+                                    = kernel::atomicAllInc(worker, &localCounter, ::alpaka::onAcc::scope::Block{});
                     },
                     storageOffsetCtx);
                 worker.sync();
@@ -133,7 +133,7 @@ namespace picongpu
                     {
                         // reserve host memory for particle
                         globalOffset
-                            = alpaka::atomicAdd(worker.getAcc(), counter, localCounter, ::alpaka::hierarchy::Blocks{});
+                            = ::alpaka::onAcc::atomicAdd(worker.getAcc(), counter, localCounter, ::alpaka::onAcc::scope::Device{});
                     });
 
                 worker.sync();

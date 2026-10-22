@@ -38,18 +38,16 @@ namespace picongpu
         {
             using type = typename pmacc::traits::Resolve<T_Attribute>::type::type;
 
-            bool isMappedMemorySupported = alpaka::hasMappedBufSupport<::alpaka::Platform<pmacc::ComputeDevice>>;
+            constexpr bool isMappedMemorySupported
+                = pmacc::traits::isMappedMemorySupported_v<pmacc::ComputeDevice>;
 
             PMACC_VERIFY_MSG(isMappedMemorySupported, "Device must support mapped memory!");
 
             frame.getIdentifier(T_Attribute()) = nullptr;
             if(size != 0)
             {
-                buffers.getIdentifier(T_Attribute()) = alpaka::allocMappedBufIfSupported<type, MemIdxType>(
-                    manager::Device<HostDevice>::get().current(),
-                    manager::Device<ComputeDevice>::get().getPlatform(),
-                    MemSpace<DIM1>(size).toAlpakaMemVec());
-                frame.getIdentifier(T_Attribute()) = alpaka::getPtrNative(*buffers.getIdentifier(T_Attribute()));
+                buffers.getIdentifier(T_Attribute()).emplace(MemSpace<DIM1>(size));
+                frame.getIdentifier(T_Attribute()) = buffers.getIdentifier(T_Attribute())->data();
             }
         }
     };
@@ -70,10 +68,8 @@ namespace picongpu
             frame.getIdentifier(T_Attribute()) = nullptr;
             if(size != 0)
             {
-                buffers.getIdentifier(T_Attribute()) = alpaka::allocBuf<type, MemIdxType>(
-                    manager::Device<HostDevice>::get().current(),
-                    MemSpace<DIM1>(size).toAlpakaMemVec());
-                frame.getIdentifier(T_Attribute()) = alpaka::getPtrNative(*buffers.getIdentifier(T_Attribute()));
+                buffers.getIdentifier(T_Attribute()).emplace(MemSpace<DIM1>(size), false);
+                frame.getIdentifier(T_Attribute()) = buffers.getIdentifier(T_Attribute())->data();
             }
         }
     };
@@ -113,7 +109,7 @@ namespace picongpu
         struct apply
         {
             using ValueType = typename pmacc::traits::Resolve<InType>::type::type;
-            using BufferType = ::alpaka::Buf<HostDevice, ValueType, AlpakaDim<DIM1>, MemIdxType>;
+            using BufferType = pmacc::HostBuffer<ValueType, DIM1>;
             using type = pmacc::meta::Pair<InType, std::optional<BufferType>>;
         };
     };

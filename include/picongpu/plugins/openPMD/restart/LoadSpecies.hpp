@@ -207,7 +207,7 @@ namespace picongpu
 
 
                         uint32_t const numLoadIterations
-                            = maxChunkSize == 0u ? 0u : alpaka::core::divCeil(numParticles, maxChunkSize);
+                            = maxChunkSize == 0u ? 0u : alpaka::divCeil(numParticles, maxChunkSize);
 
                         for(uint64_t loadRound = 0u; loadRound < numLoadIterations; ++loadRound)
                         {
@@ -291,11 +291,10 @@ namespace picongpu
                     DataSpace<simDim> const patchUpperCorner = patchTotalOffset + patchExtent;
 
                     constexpr bool isMappedMemorySupported
-                        = alpaka::hasMappedBufSupport<::alpaka::Platform<pmacc::ComputeDevice>>;
+                        = pmacc::traits::isMappedMemorySupported_v<pmacc::ComputeDevice>;
                     PMACC_VERIFY_MSG(isMappedMemorySupported, "Device must support mapped memory!");
-                    auto filter = alpaka::allocMappedBuf<char, MemIdxType>(
-                        manager::Device<HostDevice>::get().current(),
-                        manager::Device<ComputeDevice>::get().getPlatform(),
+                    auto filter = alpaka::onHost::allocMapped<char>(
+                        manager::Device<ComputeDevice>::get().current(),
                         MemSpace<DIM1>(maxChunkSize).toAlpakaMemVec());
 
                     loadMatchesGeneric(
@@ -329,7 +328,7 @@ namespace picongpu
                                     patchUpperCorner,
                                     filterKeep,
                                     filterRemove,
-                                    alpaka::getPtrNative(filter));
+                                    alpaka::onHost::data(filter));
                             eventSystem::getTransactionEvent().waitForFinished();
 
                             MemIdxType numParticlesAfterFiltering = 0;

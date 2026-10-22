@@ -83,7 +83,7 @@ namespace picongpu
                         });
 
                     worker.sync();
-                    alpaka::atomicAdd(worker.getAcc(), &numParticlesInBlock, parCount, alpaka::hierarchy::Threads{});
+                    ::alpaka::onAcc::atomicAdd(worker.getAcc(), &numParticlesInBlock, parCount, ::alpaka::onAcc::scope::Block{});
                 }
 
                 worker.sync();
@@ -146,11 +146,10 @@ namespace picongpu
             auto rangeMapper = makeRangeMapper(areaMapper);
 
             // buffer accessible from device and host to store the number of particles within each supercell.
-            auto superCellHistogram = alpaka::allocMappedBufIfSupported<uint32_t, MemIdxType>(
-                manager::Device<HostDevice>::get().current(),
-                manager::Device<ComputeDevice>::get().getPlatform(),
+            auto superCellHistogram = alpaka::onHost::allocMapped<uint32_t>(
+                manager::Device<ComputeDevice>::get().current(),
                 MemSpace<DIM1>(rangeMapper.size()).toAlpakaMemVec());
-            uint32_t* histData = alpaka::getPtrNative(superCellHistogram);
+            uint32_t* histData = alpaka::onHost::data(superCellHistogram);
 
             using UsedPositionFilters = mp_list<typename GetPositionFilter<simDim>::type>;
             using MyParticleFilter = typename FilterFactory<UsedPositionFilters>::FilterType;
