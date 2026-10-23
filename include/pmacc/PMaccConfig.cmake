@@ -48,6 +48,15 @@ if(alpaka_DEP_ONEAPI)
     include(CheckCXXCompilerFlag)
     include(CheckCXXSourceCompiles)
 
+    # Standalone DPC++ distributions may not ship clang-scan-deps. CMake then
+    # adds a dependency scanner command to every compile once '-fsycl' is in
+    # the flags, so even the following compiler probes fail with
+    # "CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS-NOTFOUND: not found". C++20 modules
+    # are not used by PMacc, therefore disable scanning for such toolchains.
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS)
+        set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+    endif()
+
     # Probe only compilation. Linking -fsycl requires the SYCL runtime in the
     # linker search path, which must not decide compiler support.
     set(_pmacc_saved_try_compile_target_type "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
