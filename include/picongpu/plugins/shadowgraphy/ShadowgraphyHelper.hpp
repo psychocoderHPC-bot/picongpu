@@ -104,8 +104,6 @@ namespace picongpu
 
                 float_X propagationDistance;
 
-                bool fourierOutputEnabled;
-
                 bool initializedDataBox = false;
 
             public:
@@ -127,7 +125,6 @@ namespace picongpu
                  */
                 Helper(int currentStep, float_X slicePoint, float_X focusPos, int duration, bool fourierOutputEnabled)
                     : duration(duration)
-                    , fourierOutputEnabled(fourierOutputEnabled)
                 {
                     dt = params::tRes * sim.si.getDt();
                     pluginNumT = duration / params::tRes;

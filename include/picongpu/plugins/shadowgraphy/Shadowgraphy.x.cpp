@@ -178,8 +178,6 @@ namespace picongpu
                 };
 
             private:
-                MappingDesc* m_cellDescription = nullptr;
-
                 // do not change the plane, code is only supporting a plane in z direction
                 int plane = 2;
 
@@ -201,8 +199,7 @@ namespace picongpu
                     std::shared_ptr<plugins::multi::IHelp>& help,
                     size_t const id,
                     MappingDesc* cellDescription)
-                    : m_cellDescription(cellDescription)
-                    , m_help(std::static_pointer_cast<Help>(help))
+                    : m_help(std::static_pointer_cast<Help>(help))
                     , m_id(id)
                 {
                     static_assert(simDim == DIM3, "Shadowgraphy-plugin requires 3D simulations.");

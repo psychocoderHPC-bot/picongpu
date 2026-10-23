@@ -46,7 +46,6 @@ namespace picongpu
             {
             private:
                 transitionRadiation::Particle const& particle;
-                float3_X const& lookDirection;
 
                 float_X parMomSinTheta;
                 float_X parMomCosTheta;
@@ -63,7 +62,6 @@ namespace picongpu
                 HDINLINE
                 Calculator(transitionRadiation::Particle const& particleSet, float3_X const& lookDirection)
                     : particle(particleSet)
-                    , lookDirection(lookDirection)
                     , parMomPhi(particle.getMomPhi())
                     ,
                     // one has to add pi to the polar angle, because phi is in the range of 0 to 2 \pi

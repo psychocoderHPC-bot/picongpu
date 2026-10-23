@@ -74,7 +74,7 @@ namespace picongpu
                     posFilter.setSuperCellPosition(
                         (superCellIdxND - mapper.getGuardingSuperCells()) * mapper.getSuperCellSize());
                     forEachParticle(
-                        [&accFilter, &posFilter, &worker, &parCount](auto const& lockstepWorker, auto& particle)
+                        [&accFilter, &posFilter, &parCount](auto const& lockstepWorker, auto& particle)
                         {
                             if(accFilter(lockstepWorker, particle) && posFilter(particle))
                             {

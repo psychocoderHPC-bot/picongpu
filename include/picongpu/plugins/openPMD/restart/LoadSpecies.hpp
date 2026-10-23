@@ -302,7 +302,7 @@ namespace picongpu
                         threadParams,
                         totalNumParticles,
                         maxChunkSize, /* forEachPatch = */
-                        [this, threadParams, &filter, &patchTotalOffset, &patchExtent, &patchUpperCorner](
+                        [this, threadParams, &filter, &patchTotalOffset, &patchUpperCorner](
                             uint64_t loadRound,
                             uint64_t numParticlesCurrentBatch,
                             FrameType& mappedFrame,
