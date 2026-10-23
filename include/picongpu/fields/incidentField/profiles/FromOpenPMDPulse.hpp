@@ -551,9 +551,12 @@ namespace picongpu
 
                             // check whether the (openPMD) system is right handed, i.e. direction x polarisation > 0
                             bool rh = true; // > 0
-                            if(Unitless::propagationAxisOpenPMD == "x" and Unitless::polarisationAxisOpenPMD == "z"
-                               or Unitless::propagationAxisOpenPMD == "y" and Unitless::polarisationAxisOpenPMD == "x"
-                               or Unitless::propagationAxisOpenPMD == "z" and Unitless::polarisationAxisOpenPMD == "y")
+                            if((Unitless::propagationAxisOpenPMD == "x"
+                                and Unitless::polarisationAxisOpenPMD == "z")
+                               or (Unitless::propagationAxisOpenPMD == "y"
+                                   and Unitless::polarisationAxisOpenPMD == "x")
+                               or (Unitless::propagationAxisOpenPMD == "z"
+                                   and Unitless::polarisationAxisOpenPMD == "y"))
                                 rh = false; // < 0
 
                             // transversal axis directions (internal)
@@ -574,9 +577,10 @@ namespace picongpu
                                  */
                                 if(d != internalAxisIndex[0])
                                 {
-                                    if(d == internalAxisIndex[1] and polAxisDirection < 0
-                                       or d == internalAxisIndex[2]
-                                              and (transvAxisDirection < 0 and rh or transvAxisDirection > 0 and !rh))
+                                    if((d == internalAxisIndex[1] and polAxisDirection < 0)
+                                       or (d == internalAxisIndex[2]
+                                           and ((transvAxisDirection < 0 and rh)
+                                                or (transvAxisDirection > 0 and !rh))))
                                     {
                                         // we have to invert
                                         idxClosestRaw[d]
