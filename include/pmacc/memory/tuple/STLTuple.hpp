@@ -36,8 +36,8 @@
 
 #include "pmacc/attribute/FunctionSpecifier.hpp"
 
-#include <alpaka/core/Common.hpp>
-#include <alpaka/core/Config.hpp>
+#include <alpaka/core/common.hpp>
+#include <alpaka/core/config.hpp>
 
 #include <concepts>
 #include <type_traits>
@@ -83,10 +83,10 @@ namespace pmacc
                 {
                 }
 
-                HDINLINE constexpr Tuple(Tuple const&) noexcept = default;
-                HDINLINE constexpr Tuple(Tuple&&) noexcept = default;
-                HDINLINE constexpr Tuple& operator=(Tuple const&) noexcept = default;
-                HDINLINE constexpr Tuple& operator=(Tuple&&) noexcept = default;
+                constexpr Tuple(Tuple const&) noexcept = default;
+                constexpr Tuple(Tuple&&) noexcept = default;
+                constexpr Tuple& operator=(Tuple const&) noexcept = default;
+                constexpr Tuple& operator=(Tuple&&) noexcept = default;
 
                 [[no_unique_address]] T head;
                 [[no_unique_address]] Tuple<Ts...> tail;

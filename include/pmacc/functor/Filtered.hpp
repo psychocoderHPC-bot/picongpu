@@ -28,6 +28,7 @@
 #include <boost/mpl/apply.hpp>
 
 #include <string>
+#include <utility>
 
 namespace pmacc
 {
@@ -144,13 +145,13 @@ namespace pmacc
             template<typename T_OffsetType, typename T_Worker>
             HDINLINE auto operator()(T_Worker const& worker, T_OffsetType const& domainOffset) const -> acc::Filtered<
                 T_FilterOperator,
-                decltype(alpaka::core::declval<Filter>()(worker, domainOffset)),
-                decltype(alpaka::core::declval<Functor>()(worker, domainOffset))>
+                decltype(std::declval<Filter>()(worker, domainOffset)),
+                decltype(std::declval<Functor>()(worker, domainOffset))>
             {
                 return acc::Filtered<
                     T_FilterOperator,
-                    decltype(alpaka::core::declval<Filter>()(worker, domainOffset)),
-                    decltype(alpaka::core::declval<Functor>()(worker, domainOffset))>(
+                    decltype(std::declval<Filter>()(worker, domainOffset)),
+                    decltype(std::declval<Functor>()(worker, domainOffset))>(
                     (*static_cast<Filter const*>(this))(worker, domainOffset),
                     (*static_cast<Functor const*>(this))(worker, domainOffset));
             }

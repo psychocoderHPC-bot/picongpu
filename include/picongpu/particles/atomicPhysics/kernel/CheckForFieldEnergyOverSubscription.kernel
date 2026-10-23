@@ -96,8 +96,7 @@ namespace picongpu::particles::atomicPhysics::kernel
 
             auto forEachCell = pmacc::lockstep::makeForEach<FieldEnergyCache::numberCells, T_Worker>(worker);
             forEachCell(
-                [&worker,
-                 &superCellCellOffset,
+                [&superCellCellOffset,
                  &eFieldBox,
                  &eFieldEnergyUseCache,
                  &rejectionProbabilityCache,
@@ -114,11 +113,11 @@ namespace picongpu::particles::atomicPhysics::kernel
 
             uint32_t& flagField = sharedResourcesOverSubscribedBox(superCellFieldIdx);
             // write out flag setting to device memory
-            alpaka::atomicOr(
+            ::alpaka::onAcc::atomicOr(
                 worker.getAcc(),
                 &flagField,
                 u32(sharedResourcesOverSubscribed),
-                ::alpaka::hierarchy::Threads{});
+                ::alpaka::onAcc::scope::Block{});
         }
     };
 } // namespace picongpu::particles::atomicPhysics::kernel

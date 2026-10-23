@@ -44,7 +44,7 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
             T_Acc const&,
             uint32_t const foundUnbound,
             pmacc::DataSpace<picongpu::simDim> superCellIdx) const
-            -> std::enable_if_t<std::is_same_v<alpaka::Dev<T_Acc>, alpaka::DevCpu>>
+            -> std::enable_if_t<pmacc::traits::isCpuAcc_v<T_Acc>>
         {
             if(foundUnbound)
                 printf("foundUnbound %s: True\n", superCellIdx.toString(",", "[]").c_str());
@@ -58,7 +58,7 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
             T_Acc const&,
             uint32_t const foundUnbound,
             pmacc::DataSpace<picongpu::simDim> superCellIdx) const
-            -> std::enable_if_t<!std::is_same_v<alpaka::Dev<T_Acc>, alpaka::DevCpu>>
+            -> std::enable_if_t<!pmacc::traits::isCpuAcc_v<T_Acc>>
         {
         }
     };

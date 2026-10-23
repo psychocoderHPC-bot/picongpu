@@ -19,6 +19,11 @@
 
 #pragma once
 
+/** Select the TWTSTight implementation (1) or the legacy TWTS implementation (0). */
+#ifndef PARAM_TWTSTIGHT
+#    define PARAM_TWTSTIGHT 0
+#endif
+
 /** Load pre-defined templates */
 #if PARAM_TWTSTIGHT == 1
 #    include "picongpu/fields/background/templates/twtstight/TWTSTight.hpp"
@@ -85,7 +90,7 @@ namespace picongpu
         {
         }
 
-        HDINLINE FieldBackgroundE(FieldBackgroundE const&) = default;
+        FieldBackgroundE(FieldBackgroundE const&) = default;
 
         /** Specify your background field E(r,t) here
          *
@@ -176,7 +181,7 @@ namespace picongpu
         {
         }
 
-        HDINLINE FieldBackgroundB(FieldBackgroundB const&) = default;
+        FieldBackgroundB(FieldBackgroundB const&) = default;
 
         /** Specify your background field B(r,t) here
          *
@@ -227,7 +232,7 @@ namespace picongpu
         {
         }
 
-        HDINLINE FieldBackgroundJ(FieldBackgroundJ const&) = default;
+        FieldBackgroundJ(FieldBackgroundJ const&) = default;
 
         /** Specify your background field J(r,t) here
          *

@@ -78,7 +78,7 @@ namespace picongpu
         {
         }
 
-        HDINLINE FieldBackgroundE(FieldBackgroundE const&) = default;
+        FieldBackgroundE(FieldBackgroundE const&) = default;
 
         /** Specify your background field E(r,t) here
          *
@@ -140,7 +140,7 @@ namespace picongpu
         {
         }
 
-        HDINLINE FieldBackgroundB(FieldBackgroundB const&) = default;
+        FieldBackgroundB(FieldBackgroundB const&) = default;
 
         /** Specify your background field B(r,t) here
          *
@@ -170,7 +170,7 @@ namespace picongpu
         /* We use this to calculate your SI input back to our unit system */
         PMACC_ALIGN(m_unitField, float3_64 const);
 
-        HDINLINE FieldBackgroundJ(FieldBackgroundJ const&) = default;
+        FieldBackgroundJ(FieldBackgroundJ const&) = default;
 
         HDINLINE FieldBackgroundJ(float3_64 const unitField) : m_unitField(unitField)
         {

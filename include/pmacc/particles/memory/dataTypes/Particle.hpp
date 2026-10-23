@@ -123,7 +123,7 @@ namespace pmacc
             return frame != nullptr;
         }
 
-        HDINLINE Particle() = default;
+        Particle() = default;
 
         /** create particle
          *
@@ -163,7 +163,7 @@ namespace pmacc
             return frame->getIdentifier(key)[idx];
         }
 
-        HDINLINE
+
         Particle& operator=(Particle const& other) = default;
 
         /** Derive attributes

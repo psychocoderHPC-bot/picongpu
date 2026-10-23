@@ -111,11 +111,11 @@ namespace pmacc
                                 /* apply for work for the full block, counter[0] contains the
                                  * offset in srcFrame to load N particles
                                  */
-                                sharedSrcParticleOffset = alpaka::atomicAdd(
+                                sharedSrcParticleOffset = ::alpaka::onAcc::atomicAdd(
                                     worker.getAcc(),
                                     &(counter[0]),
                                     particlesPerFrame,
-                                    ::alpaka::hierarchy::Blocks{});
+                                    ::alpaka::onAcc::scope::Device{});
                             });
 
                         worker.sync();
@@ -198,7 +198,7 @@ namespace pmacc
                                     if(vThreadMasterIdx == static_cast<int32_t>(idx))
                                     {
                                         /* counter[2] -> number of used frames */
-                                        kernel::atomicAllInc(worker, &(counter[2]), ::alpaka::hierarchy::Blocks{});
+                                        kernel::atomicAllInc(worker, &(counter[2]), ::alpaka::onAcc::scope::Device{});
                                         DestFramePtr tmpFrame = destBox.getEmptyFrame(worker);
                                         destFramePtr[idx] = tmpFrame;
                                         destBox.setAsFirstFrame(
@@ -235,7 +235,7 @@ namespace pmacc
                                      * this counter is evaluated on host side
                                      * (check that loaded particles by this kernel == loaded particles from HDF5
                                      * file)*/
-                                    kernel::atomicAllInc(worker, &(counter[1]), ::alpaka::hierarchy::Blocks{});
+                                    kernel::atomicAllInc(worker, &(counter[1]), ::alpaka::onAcc::scope::Device{});
                                 }
                             },
                             hasValidParticleCtx,
@@ -301,7 +301,7 @@ namespace pmacc
                 constexpr uint32_t frameSize = T_SrcFrame::frameSize;
 
                 PMACC_LOCKSTEP_KERNEL(detail::KernelSplitIntoListOfFrames{})
-                    .template config<frameSize>(alpaka::core::divCeil(currentChunkSize, frameSize))(
+                    .template config<frameSize>((currentChunkSize + frameSize - 1u) / frameSize)(
                         counterBuffer.getDeviceBuffer().getDataBox(),
                         destSpecies.getDeviceParticlesBox(),
                         srcFrame,

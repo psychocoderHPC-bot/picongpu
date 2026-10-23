@@ -147,7 +147,7 @@ namespace picongpu
                  *         and initialize possible prerequisites for ionization, like e.g. random number generator.
                  *
                  * This function will be called inline on the device which must happen BEFORE threads diverge
-                 * during loop execution. The reason for this is the `alpaka::syncBlockThreads( acc )` call which is
+                 * during loop execution. The reason for this is the `alpaka::onAcc::syncBlockThreads( acc )` call which is
                  * necessary after initializing the E-/B-field shared boxes in shared memory.
                  *
                  * @param localSuperCellOffset offset (in superCells, without any guards) relative

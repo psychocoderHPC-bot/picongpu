@@ -34,7 +34,7 @@ namespace pmacc
             {
                 /** Only this must be specialized for different types */
                 template<typename T_Type, class T_RNGMethod, class T_SFINAE = void>
-                class Normal;
+                struct Normal;
             } // namespace detail
 
             /**

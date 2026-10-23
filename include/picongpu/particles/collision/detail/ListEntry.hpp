@@ -27,7 +27,7 @@
 #include <pmacc/random/distributions/Uniform.hpp>
 #include <pmacc/verify.hpp>
 
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_LANG_SYCL)
 #    include <mallocMC/mallocMC.hpp>
 #endif
 
@@ -197,11 +197,11 @@ namespace picongpu::particles::collision
                                 if(particle[multiMask_] != 0 && filter(worker, particle))
                                 {
                                     auto parLocalIndex = particle[localCellIdx_];
-                                    uint32_t parOffset = alpaka::atomicAdd(
+                                    uint32_t parOffset = ::alpaka::onAcc::atomicAdd(
                                         worker.getAcc(),
                                         &size(parLocalIndex),
                                         1u,
-                                        ::alpaka::hierarchy::Threads{});
+                                        ::alpaka::onAcc::scope::Block{});
                                     uint32_t const parInSuperCellIdx = frameIdx * numFrameSlots + linearIdx;
                                     particleIds(parLocalIndex)[parOffset] = parInSuperCellIdx;
                                 }
@@ -226,7 +226,7 @@ namespace picongpu::particles::collision
                     {
                         if(framePtr != nullptr)
                         {
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_LANG_SYCL)
                             deviceHeapHandle.free(worker.getAcc(), (void*) framePtr);
 #else
                             delete(framePtr);
@@ -241,7 +241,7 @@ namespace picongpu::particles::collision
                     {
                         if(particleList[cellIdx] != nullptr)
                         {
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_LANG_SYCL)
                             deviceHeapHandle.free(worker.getAcc(), (void*) particleList[cellIdx]);
 #else
                             delete(particleList[cellIdx]);
@@ -282,7 +282,7 @@ namespace picongpu::particles::collision
                     int const maxTries = 13; // magic number is not performance critical
                     for(int numTries = 0; numTries < maxTries; ++numTries)
                     {
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_LANG_SYCL)
                         ptr = deviceHeapHandle.malloc(worker.getAcc(), allocBytes);
 #else // No cuda or hip means the device heap is the host heap.
                         return (void**) new uint8_t[allocBytes];
@@ -317,7 +317,7 @@ namespace picongpu::particles::collision
                     if(filter(worker, particle))
                     {
                         auto parLocalIndex = particle[localCellIdx_];
-                        alpaka::atomicAdd(worker.getAcc(), &nppc[parLocalIndex], 1u, ::alpaka::hierarchy::Threads{});
+                        ::alpaka::onAcc::atomicAdd(worker.getAcc(), &nppc[parLocalIndex], 1u, ::alpaka::onAcc::scope::Block{});
                     }
                 });
         }

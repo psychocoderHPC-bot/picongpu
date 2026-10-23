@@ -30,158 +30,6 @@ namespace picongpu
 {
     struct Sim
     {
-        struct PicUnits
-        {
-            /** cell size width, high, depth */
-            template<typename T_Type = float_X>
-            constexpr math::Vector<T_Type, 3u> getCellSize() const
-            {
-                return precisionCast<T_Type>(si.getCellSize() / unit.length());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getDt() const
-            {
-                return static_cast<T_Type>(si.getDt() / unit.time());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getSpeedOfLight() const
-            {
-                return static_cast<T_Type>(si.getSpeedOfLight() / unit.speed());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getBaseMass() const
-            {
-                return static_cast<T_Type>(si.getBaseMass() / unit.mass());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getBaseCharge() const
-            {
-                return static_cast<T_Type>(si.getBaseCharge() / unit.charge());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getBaseDensity() const
-            {
-                return static_cast<T_Type>(si.getBaseDensity() * unit.length() * unit.length() * unit.length());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getElectronMass() const
-            {
-                return static_cast<T_Type>(si.getElectronMass() / unit.mass());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getElectronCharge() const
-            {
-                return static_cast<T_Type>(si.getElectronCharge() / unit.charge());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getMue0() const
-            {
-                return static_cast<T_Type>(si.getMue0() / unit.length() / unit.mass() * unit.charge() * unit.charge());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getEps0() const
-            {
-                return static_cast<T_Type>(
-                    1. / pic.getMue0<T_Type>() / pic.getSpeedOfLight<T_Type>() / pic.getSpeedOfLight<T_Type>());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getMue0Eps0() const
-            {
-                return static_cast<T_Type>(1. / pic.getSpeedOfLight<T_Type>() / pic.getSpeedOfLight<T_Type>());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getZ0() const
-            {
-                return static_cast<T_Type>(pic.getMue0<T_Type>() * pic.getSpeedOfLight<T_Type>());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getHbar() const
-            {
-                return static_cast<T_Type>(si.getHbar() / unit.energy() / unit.time());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getRydbergEnergy() const
-            {
-                return static_cast<T_Type>(si.getRydbergEnergy() / unit.energy());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type get_eV() const
-            {
-                return static_cast<T_Type>(si.get_eV() / unit.energy());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getBohrRadius() const
-            {
-                return static_cast<T_Type>(si.getBohrRadius() / unit.length());
-            }
-
-            template<typename T_Type = float_X>
-            constexpr T_Type getClassicalElectronRadius() const
-            {
-                return static_cast<T_Type>(si.getClassicalElectronRadius() / unit.length());
-            }
-
-            struct Convert
-            {
-                /** convert int the pic unit system
-                 *
-                 * @{
-                 */
-                template<typename T_Type = float_X>
-                constexpr T_Type eV2Joule(T_Type eV = 1.0) const
-                {
-                    return eV * static_cast<T_Type>(pic.get_eV());
-                }
-
-                template<typename T_Type = float_X>
-                constexpr T_Type auEnergy2Joule(T_Type auEnergy = 1.0) const
-                {
-                    return static_cast<T_Type>(si.conv().auEnergy2Joule(auEnergy) / unit.energy());
-                }
-
-                template<typename T_Type = float_X>
-                constexpr T_Type auTime2Time(T_Type auTime = 1.0) const
-                {
-                    return static_cast<T_Type>(si.conv().auTime2Time(auTime) / unit.time());
-                }
-
-                /** @} */
-
-                template<typename T_Type = float_X>
-                constexpr T_Type eField2auEField(T_Type eField = 1.0) const
-                {
-                    return static_cast<T_Type>(si.conv().eField2auEField(eField * unit.eField()));
-                }
-
-                template<typename T_Type = float_X>
-                constexpr T_Type time2auTime(T_Type time = 1.0) const
-                {
-                    return static_cast<T_Type>(si.conv().time2auTime(time * unit.time()));
-                }
-            };
-
-            /** get conversion functions */
-            static constexpr Convert conv()
-            {
-                return Convert{};
-            }
-        };
-
         struct SiUnits
         {
             /** unit: meter */
@@ -428,65 +276,248 @@ namespace picongpu
             }
         };
 
-        /** units of the PIConGPU's in SI unit system */
-        struct Units
-        {
-            constexpr float_64 length() const
-            {
-                return time() * speed();
-            }
+        /** units of the PIConGPU's in SI unit system
+         *
+         * The unit getters are templated on the value type. Host code uses the
+         * default float_64; device code requesting float_X must not evaluate the
+         * chain in double because devices without fp64 support cannot run such
+         * kernels.
+         */
 
-            constexpr float_64 time() const
-            {
-                return si.getDt();
-            }
-
-            constexpr float_64 speed() const
-            {
-                return si.getSpeedOfLight();
-            }
-
-            constexpr float_64 mass() const
-            {
-                return si.getBaseMass() * typicalNumParticlesPerMacroParticle();
-            }
-
-            constexpr float_64 charge() const
-            {
-                return -1.0 * si.getBaseCharge() * typicalNumParticlesPerMacroParticle();
-            }
-
-            constexpr float_64 energy() const
-            {
-                return mass() * length() * length() / (time() * time());
-            }
-
-            /** Unit of EField: V/m */
-            constexpr float_64 eField() const
-            {
-                return 1.0 / (time() * time() / mass() / length() * charge());
-            }
-
-            /** Unit of BField: Tesla [T] = Vs/m^2 */
-            constexpr float_64 bField() const
-            {
-                return mass() / (time() * charge());
-            }
-
-            /** Typical number of particles per macro particle (= typical macro particle weighting)
-             *  unit: none
-             */
-            constexpr float_64 typicalNumParticlesPerMacroParticle() const
-            {
-                return (si.getBaseDensity() * si.getCellSize().productOfComponents())
-                       / static_cast<float_64>(getTypicalNumParticlesPerCell());
-            }
-        };
+        static constexpr SiUnits si{};
 
         static constexpr uint32_t getTypicalNumParticlesPerCell()
         {
             return TYPICAL_PARTICLES_PER_CELL;
         }
+
+
+        struct Units
+        {
+            template<typename T_Type = float_64>
+            constexpr T_Type length() const
+            {
+                return time<T_Type>() * speed<T_Type>();
+            }
+
+            template<typename T_Type = float_64>
+            constexpr T_Type time() const
+            {
+                return static_cast<T_Type>(si.getDt());
+            }
+
+            template<typename T_Type = float_64>
+            constexpr T_Type speed() const
+            {
+                return static_cast<T_Type>(si.getSpeedOfLight());
+            }
+
+            template<typename T_Type = float_64>
+            constexpr T_Type mass() const
+            {
+                return static_cast<T_Type>(si.getBaseMass()) * typicalNumParticlesPerMacroParticle<T_Type>();
+            }
+
+            template<typename T_Type = float_64>
+            constexpr T_Type charge() const
+            {
+                return T_Type(-1) * static_cast<T_Type>(si.getBaseCharge())
+                       * typicalNumParticlesPerMacroParticle<T_Type>();
+            }
+
+            template<typename T_Type = float_64>
+            constexpr T_Type energy() const
+            {
+                return mass<T_Type>() * length<T_Type>() * length<T_Type>() / (time<T_Type>() * time<T_Type>());
+            }
+
+            /** Unit of EField: V/m */
+            template<typename T_Type = float_64>
+            constexpr T_Type eField() const
+            {
+                return T_Type(1) / (time<T_Type>() * time<T_Type>() / mass<T_Type>() / length<T_Type>() * charge<T_Type>());
+            }
+
+            /** Unit of BField: Tesla [T] = Vs/m^2 */
+            template<typename T_Type = float_64>
+            constexpr T_Type bField() const
+            {
+                return mass<T_Type>() / (time<T_Type>() * charge<T_Type>());
+            }
+
+            /** Typical number of particles per macro particle (= typical macro particle weighting)
+             *  unit: none
+             */
+            template<typename T_Type = float_64>
+            constexpr T_Type typicalNumParticlesPerMacroParticle() const
+            {
+                return (static_cast<T_Type>(si.getBaseDensity())
+                        * precisionCast<T_Type>(si.getCellSize()).productOfComponents())
+                       / static_cast<T_Type>(getTypicalNumParticlesPerCell());
+            }
+        };
+
+
+        static constexpr Units unit{};
+
+        struct PicUnits
+        {
+            /** cell size width, high, depth */
+            template<typename T_Type = float_X>
+            constexpr math::Vector<T_Type, 3u> getCellSize() const
+            {
+                return precisionCast<T_Type>(si.getCellSize()) / unit.template length<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getDt() const
+            {
+                return static_cast<T_Type>(si.getDt()) / unit.template time<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getSpeedOfLight() const
+            {
+                return static_cast<T_Type>(si.getSpeedOfLight()) / unit.template speed<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getBaseMass() const
+            {
+                return static_cast<T_Type>(si.getBaseMass()) / unit.template mass<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getBaseCharge() const
+            {
+                return static_cast<T_Type>(si.getBaseCharge()) / unit.template charge<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getBaseDensity() const
+            {
+                return static_cast<T_Type>(si.getBaseDensity()) * unit.template length<T_Type>()
+                    * unit.template length<T_Type>() * unit.template length<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getElectronMass() const
+            {
+                return static_cast<T_Type>(si.getElectronMass()) / unit.template mass<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getElectronCharge() const
+            {
+                return static_cast<T_Type>(si.getElectronCharge()) / unit.template charge<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getMue0() const
+            {
+                return static_cast<T_Type>(si.getMue0()) / unit.template length<T_Type>()
+                    / unit.template mass<T_Type>() * unit.template charge<T_Type>()
+                    * unit.template charge<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getEps0() const
+            {
+                return T_Type(1) / pic.getMue0<T_Type>() / pic.getSpeedOfLight<T_Type>()
+                    / pic.getSpeedOfLight<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getMue0Eps0() const
+            {
+                return T_Type(1) / pic.getSpeedOfLight<T_Type>() / pic.getSpeedOfLight<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getZ0() const
+            {
+                return pic.getMue0<T_Type>() * pic.getSpeedOfLight<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getHbar() const
+            {
+                return static_cast<T_Type>(si.getHbar()) / unit.template energy<T_Type>()
+                    / unit.template time<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getRydbergEnergy() const
+            {
+                return static_cast<T_Type>(si.getRydbergEnergy()) / unit.template energy<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type get_eV() const
+            {
+                return static_cast<T_Type>(si.get_eV()) / unit.template energy<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getBohrRadius() const
+            {
+                return static_cast<T_Type>(si.getBohrRadius()) / unit.template length<T_Type>();
+            }
+
+            template<typename T_Type = float_X>
+            constexpr T_Type getClassicalElectronRadius() const
+            {
+                return static_cast<T_Type>(si.getClassicalElectronRadius()) / unit.template length<T_Type>();
+            }
+
+            struct Convert
+            {
+                /** convert int the pic unit system
+                 *
+                 * @{
+                 */
+                template<typename T_Type = float_X>
+                constexpr T_Type eV2Joule(T_Type eV = 1.0) const
+                {
+                    return eV * static_cast<T_Type>(pic.get_eV());
+                }
+
+                template<typename T_Type = float_X>
+                constexpr T_Type auEnergy2Joule(T_Type auEnergy = 1.0) const
+                {
+                    return static_cast<T_Type>(si.conv().auEnergy2Joule(auEnergy)) / unit.template energy<T_Type>();
+                }
+
+                template<typename T_Type = float_X>
+                constexpr T_Type auTime2Time(T_Type auTime = 1.0) const
+                {
+                    return static_cast<T_Type>(si.conv().auTime2Time(auTime)) / unit.template time<T_Type>();
+                }
+
+                /** @} */
+
+                template<typename T_Type = float_X>
+                constexpr T_Type eField2auEField(T_Type eField = 1.0) const
+                {
+                    return static_cast<T_Type>(si.conv().eField2auEField(eField * unit.template eField<T_Type>()));
+                }
+
+                template<typename T_Type = float_X>
+                constexpr T_Type time2auTime(T_Type time = 1.0) const
+                {
+                    return static_cast<T_Type>(si.conv().time2auTime(time * unit.template time<T_Type>()));
+                }
+            };
+
+            /** get conversion functions */
+            static constexpr Convert conv()
+            {
+                return Convert{};
+            }
+        };
+
+
+        static constexpr PicUnits pic{};
 
         static constexpr uint32_t dim()
         {
@@ -496,9 +527,6 @@ namespace picongpu
             return simDim;
         }
 
-        static constexpr PicUnits pic{};
-        static constexpr SiUnits si{};
-        static constexpr Units unit{};
         static constexpr AtomicUnits atomicUnit{};
     };
 

@@ -68,6 +68,39 @@ static bool isApproxEqual(T const& a, T const& b)
 template<typename T_WindowFunction = boost::mpl::_1>
 struct TestWindowFunction
 {
+    /** Functor evaluating the window function on the device.
+     *
+     * A plain struct with a templated call operator is used instead of a generic
+     * lambda because nvcc does not accept ``__host__ __device__`` generic lambdas.
+     */
+    struct WindowFunctionTestKernel
+    {
+        template<typename T_Worker, typename T_Positions, typename T_Length, typename T_Result>
+        DEVICEONLY void operator()(
+            T_Worker const& worker,
+            T_Positions const& positions,
+            T_Length const& lx,
+            T_Result result) const
+        {
+            auto blockIdx = worker.blockDomIdxND().x();
+
+            auto forEach = lockstep::makeForEach<elemPerBlock>(worker);
+
+            forEach(
+                [&](uint32_t const idx)
+                {
+                    auto valueIdx = blockIdx * elemPerBlock + idx;
+
+                    if(valueIdx < numValues)
+                    {
+                        auto windowFunc = T_WindowFunction{};
+
+                        result[valueIdx] = windowFunc(positions[valueIdx] * lx[valueIdx], lx[valueIdx]);
+                    }
+                });
+        }
+    };
+
     /** Validates the shape
      *
      * @param inCellPositionBuffer Buffer with positions, each value must be in rage [0.0;1.0).
@@ -87,26 +120,7 @@ struct TestWindowFunction
         deviceLxBuffer.copyFrom(inLxBuffer);
         resultDevice.setValue(0.0_X);
 
-        auto shapeTestKernel
-            = [this] DEVICEONLY(auto const& worker, auto const& positions, auto const& lx, auto result)
-        {
-            auto blockIdx = worker.blockDomIdxND().x();
-
-            auto forEach = lockstep::makeForEach<elemPerBlock>(worker);
-
-            forEach(
-                [&](uint32_t const idx)
-                {
-                    auto valueIdx = blockIdx * elemPerBlock + idx;
-
-                    if(valueIdx < numValues)
-                    {
-                        auto windowFunc = T_WindowFunction{};
-
-                        result[valueIdx] = windowFunc(positions[valueIdx] * lx[valueIdx], lx[valueIdx]);
-                    }
-                });
-        };
+        WindowFunctionTestKernel shapeTestKernel;
 
         auto numBlocks = (numValues + elemPerBlock - 1) / elemPerBlock;
         PMACC_LOCKSTEP_KERNEL(shapeTestKernel)

@@ -132,26 +132,26 @@ namespace picongpu::particles::atomicPhysics::ionizationPotentialDepression::ker
                 });
 
             // use atomic add to write worker partial sums for species back to superCell field
-            alpaka::atomicAdd(
+            ::alpaka::onAcc::atomicAdd(
                 worker.getAcc(),
                 &(localSumWeightAllBox(superCellFieldIdx)),
                 sumWeight,
-                ::alpaka::hierarchy::Threads{});
-            alpaka::atomicAdd(
+                ::alpaka::onAcc::scope::Block{});
+            ::alpaka::onAcc::atomicAdd(
                 worker.getAcc(),
                 &(localSumTemperatureFunctionalBox(superCellFieldIdx)),
                 sumTemperatureFunctional,
-                ::alpaka::hierarchy::Threads{});
-            alpaka::atomicAdd(
+                ::alpaka::onAcc::scope::Block{});
+            ::alpaka::onAcc::atomicAdd(
                 worker.getAcc(),
                 &(localSumChargeBox(superCellFieldIdx)),
                 sumChargeNumber,
-                ::alpaka::hierarchy::Threads{});
-            alpaka::atomicAdd(
+                ::alpaka::onAcc::scope::Block{});
+            ::alpaka::onAcc::atomicAdd(
                 worker.getAcc(),
                 &(localSumChargeSquaredBox(superCellFieldIdx)),
                 sumChargeNumberSquared,
-                ::alpaka::hierarchy::Threads{});
+                ::alpaka::onAcc::scope::Block{});
         }
     };
 } // namespace picongpu::particles::atomicPhysics::ionizationPotentialDepression::kernel

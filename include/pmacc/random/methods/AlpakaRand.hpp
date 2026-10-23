@@ -23,32 +23,40 @@
 
 #include "pmacc/types.hpp"
 
+#include <alpaka/alpaka.hpp>
+
+#include <cstdint>
+#include <string>
+
 namespace pmacc
 {
     namespace random
     {
         namespace methods
         {
+            /** alpaka Philox4x32x10 random number generator.
+             *
+             * alpaka3 removed the `createDefault`/`createUniformUint` trait dispatcher. The
+             * Philox engine is constructed directly. It is bit-for-bit identical to the
+             * engine selected by alpaka2's `createDefault`, therefore the CPU fallback stream
+             * is preserved.
+             */
             template<typename T_Acc = pmacc::Acc<DIM1>>
             class AlpakaRand
             {
             public:
-                using StateType = decltype(::alpaka::rand::engine::createDefault(
-                    alpaka::core::declval<T_Acc const&>(),
-                    alpaka::core::declval<uint32_t&>(),
-                    alpaka::core::declval<uint32_t&>()));
+                using StateType = ::alpaka::rand::engine::Philox4x32x10;
 
                 template<typename T_Worker>
-                DINLINE void init(T_Worker const& worker, StateType& state, uint32_t seed, uint32_t subsequence = 0)
-                    const
+                DINLINE void init(T_Worker const&, StateType& state, uint32_t seed, uint32_t subsequence = 0) const
                 {
-                    state = ::alpaka::rand::engine::createDefault(worker.getAcc(), seed, subsequence);
+                    state = StateType{static_cast<uint64_t>(seed), static_cast<uint64_t>(subsequence), 0u};
                 }
 
                 template<typename T_Worker>
-                DINLINE uint32_t get32Bits(T_Worker const& worker, StateType& state) const
+                DINLINE uint32_t get32Bits(T_Worker const&, StateType& state) const
                 {
-                    return ::alpaka::rand::distribution::createUniformUint<uint32_t>(worker.getAcc())(state);
+                    return state();
                 }
 
                 template<typename T_Worker>

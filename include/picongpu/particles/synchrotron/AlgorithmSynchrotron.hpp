@@ -204,7 +204,7 @@ namespace picongpu
                          * If requirement is not met send warning at every iteration
                          */
                         if(requirement1 > 0.1_X || requirement2 > 0.1_X)
-                            alpaka::atomicExch(worker.getAcc(), &(failedRequirementQBuff(DataSpace<1>{0})), 1);
+                            ::alpaka::onAcc::atomicExch(worker.getAcc(), &(failedRequirementQBuff(DataSpace<1>{0})), 1);
                     }
 
                     numericFactor *= math::sqrt(3._X) / (pmacc::math::Pi<float_X>::doubleValue);

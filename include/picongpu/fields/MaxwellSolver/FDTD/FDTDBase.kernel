@@ -50,11 +50,11 @@ namespace picongpu
                 class UpdateEFunctor : public StencilFunctor<T_CurlB>
                 {
                 public:
-                    HDINLINE UpdateEFunctor() = default;
+                    UpdateEFunctor() = default;
 
-                    HDINLINE UpdateEFunctor(UpdateEFunctor const&) = default;
+                    UpdateEFunctor(UpdateEFunctor const&) = default;
 
-                    HDINLINE UpdateEFunctor& operator=(UpdateEFunctor const&) = default;
+                    UpdateEFunctor& operator=(UpdateEFunctor const&) = default;
 
                     /** Update electric field at the given position
                      *
@@ -92,11 +92,11 @@ namespace picongpu
                 class UpdateBHalfFunctor : public StencilFunctor<T_CurlE>
                 {
                 public:
-                    HDINLINE UpdateBHalfFunctor() = default;
+                    UpdateBHalfFunctor() = default;
 
-                    HDINLINE UpdateBHalfFunctor(UpdateBHalfFunctor const&) = default;
+                    UpdateBHalfFunctor(UpdateBHalfFunctor const&) = default;
 
-                    HDINLINE UpdateBHalfFunctor& operator=(UpdateBHalfFunctor const&) = default;
+                    UpdateBHalfFunctor& operator=(UpdateBHalfFunctor const&) = default;
 
                     /** Update magnetic field at the given position
                      *
@@ -127,11 +127,11 @@ namespace picongpu
                 //! Kernel to update each cell
                 struct KernelUpdateField
                 {
-                    HDINLINE KernelUpdateField() = default;
+                    KernelUpdateField() = default;
 
-                    HDINLINE KernelUpdateField(KernelUpdateField const&) = default;
+                    KernelUpdateField(KernelUpdateField const&) = default;
 
-                    HDINLINE KernelUpdateField& operator=(KernelUpdateField const&) = default;
+                    KernelUpdateField& operator=(KernelUpdateField const&) = default;
 
                     /** Update the yee field using the given functor
                      *

@@ -22,7 +22,9 @@
 // required for SIMDIM definition
 #include "picongpu/defines.hpp"
 
-#if (SIMDIM == DIM3 && PIC_ENABLE_FFTW3 == 1 && ENABLE_OPENPMD == 1)
+#include <pmacc/math/Complex.hpp>
+
+#if (SIMDIM == DIM3 && defined(PIC_ENABLE_FFTW3) && PIC_ENABLE_FFTW3 == 1 && ENABLE_OPENPMD == 1)
 
 #    include "picongpu/simulation/control/Window.hpp"
 
@@ -51,7 +53,7 @@ namespace picongpu
             class Helper
             {
             private:
-                using complex_64 = alpaka::Complex<float_64>;
+                using complex_64 = pmacc::math::Complex<float_64>;
 
                 using vec3c = std::vector<std::vector<std::vector<complex_64>>>;
                 using vec2c = std::vector<std::vector<complex_64>>;
@@ -102,8 +104,6 @@ namespace picongpu
 
                 float_X propagationDistance;
 
-                bool fourierOutputEnabled;
-
                 bool initializedDataBox = false;
 
             public:
@@ -125,7 +125,6 @@ namespace picongpu
                  */
                 Helper(int currentStep, float_X slicePoint, float_X focusPos, int duration, bool fourierOutputEnabled)
                     : duration(duration)
-                    , fourierOutputEnabled(fourierOutputEnabled)
                 {
                     dt = params::tRes * sim.si.getDt();
                     pluginNumT = duration / params::tRes;

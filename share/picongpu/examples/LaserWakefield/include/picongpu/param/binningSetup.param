@@ -26,6 +26,52 @@ namespace picongpu
 {
     namespace plugins::binning
     {
+        /** Device functor returning the kinetic energy of a macro particle.
+         *
+         * A plain struct with a templated call operator is used instead of a generic
+         * lambda because nvcc does not accept ``__host__ __device__`` generic lambdas.
+         */
+        struct GetEnergy
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE float_X
+            operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle) const
+            {
+                float3_X const mom = particle[momentum_];
+                float_X const weighting = particle[weighting_];
+                float_X const mass = picongpu::traits::attribute::getMass(weighting, particle);
+
+                // calculate kinetic energy of a single electron in the macro particle
+                float_X energy = KinEnergy<>()(mom, mass) / weighting;
+
+                return energy;
+            }
+        };
+
+        /** Device functor returning the pointing angle in the x-y plane. */
+        struct GetPointingXY
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE float_X
+            operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle) const
+            {
+                auto theta = math::atan2(particle[momentum_][0], particle[momentum_][1]);
+                return theta;
+            }
+        };
+
+        /** Device functor returning the particle charge. */
+        struct GetParticleCharge
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE float_X
+            operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle) const
+            {
+                float_X const charge = picongpu::traits::attribute::getCharge(particle[weighting_], particle);
+                return charge;
+            }
+        };
+
         void eSpec(BinningCreator& binningCreator);
 
         inline void getBinning(BinningCreator& binningCreator)
@@ -41,18 +87,7 @@ namespace picongpu
              */
 
             // axis 1: energy axis
-            auto getEnergy
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> float_X
-            {
-                float3_X const mom = particle[momentum_];
-                float_X const weighting = particle[weighting_];
-                float_X const mass = picongpu::traits::attribute::getMass(weighting, particle);
-
-                // calculate kinetic energy of a single electron in the macro particle
-                float_X energy = KinEnergy<>()(mom, mass) / weighting;
-
-                return energy;
-            };
+            GetEnergy getEnergy;
 
             // Define units of axis 1
             std::array<double, numUnits> energyDimension{};
@@ -73,12 +108,7 @@ namespace picongpu
 
 
             // axis 2: pointing axis
-            auto getPointingXY
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> float_X
-            {
-                auto theta = math::atan2(particle[momentum_][0], particle[momentum_][1]);
-                return theta;
-            };
+            GetPointingXY getPointingXY;
 
             // Define units of axis 2
             std::array<double, numUnits> pointingXYDimension{};
@@ -114,12 +144,7 @@ namespace picongpu
             /**
              * Define deposited quantity here: charge per bin
              */
-            auto getParticleCharge
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> float_X
-            {
-                float_X const charge = picongpu::traits::attribute::getCharge(particle[weighting_], particle);
-                return charge;
-            };
+            GetParticleCharge getParticleCharge;
 
             std::array<double, numUnits> depositedUnits{}; // Tell user the 7 dimensional format
             depositedUnits[SIBaseUnits::length] = 0.0;

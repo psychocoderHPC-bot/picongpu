@@ -40,7 +40,7 @@ namespace pmacc
         {
         }
 
-        HDINLINE VectorDataBox() = default;
+        VectorDataBox() = default;
     };
 
     /**
@@ -71,7 +71,7 @@ namespace pmacc
         }
 
         /*object is not  initialized valid, copy a valid instance to this object to get a valid instance*/
-        HDINLINE TileDataBox() = default;
+        TileDataBox() = default;
 
 
     protected:

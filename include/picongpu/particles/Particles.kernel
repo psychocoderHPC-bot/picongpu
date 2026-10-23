@@ -252,7 +252,7 @@ namespace picongpu
             // update shared memory marker that particles leaving the supercell
             if(hasLeavingParticle == 1 && mustShiftSupercell == 0)
             {
-                kernel::atomicAllExch(worker, &mustShiftSupercell, 1, ::alpaka::hierarchy::Threads{});
+                kernel::atomicAllExch(worker, &mustShiftSupercell, 1, ::alpaka::onAcc::scope::Block{});
             }
 
             worker.sync();

@@ -198,7 +198,7 @@ namespace picongpu
                 iteration.setAttribute("reduceCounter", reduceCounter);
 
                 iteration.close();
-            };
+            }
         };
     } // namespace plugins::binning
 } // namespace picongpu

@@ -119,12 +119,12 @@ namespace picongpu::particles::atomicPhysics::kernel
                     float_X const speciesStateLimitTimeStep = 1._X / (lossRateState);
 
                     // unit: unit_time
-                    alpaka::atomicMin(
+                    ::alpaka::onAcc::atomicMin(
                         worker.getAcc(),
                         // unit: unit_time
                         &timeStep,
                         speciesStateLimitTimeStep * picongpu::atomicPhysics::RateSolverParam::timeStepAlpha,
-                        ::alpaka::hierarchy::Threads{});
+                        ::alpaka::onAcc::scope::Block{});
                 });
         }
     };

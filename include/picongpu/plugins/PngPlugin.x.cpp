@@ -66,7 +66,7 @@ namespace picongpu
 
         void pluginRegisterHelp(po::options_description& desc) override
         {
-#if (PIC_ENABLE_PNG == 1)
+#if defined(PIC_ENABLE_PNG) && PIC_ENABLE_PNG == 1
             desc.add_options()(
                 (pluginPrefix + ".period").c_str(),
                 po::value<std::vector<std::string>>(&notifyPeriod)->multitoken(),

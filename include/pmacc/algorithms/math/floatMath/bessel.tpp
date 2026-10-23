@@ -38,7 +38,7 @@ namespace pmacc
 
                 HDINLINE result operator()(result const& x)
                 {
-#if (PMACC_DEVICE_COMPILE == 1) // we are on gpu
+#if (PMACC_DEVICE_COMPILE == 1) && (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
                     return ::cyl_bessel_i0f(x);
 #else
                     return std::cyl_bessel_i(0.f, x);
@@ -53,7 +53,7 @@ namespace pmacc
 
                 HDINLINE result operator()(result const& x)
                 {
-#if (PMACC_DEVICE_COMPILE == 1) // we are on gpu
+#if (PMACC_DEVICE_COMPILE == 1) && (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
                     return ::cyl_bessel_i1f(x);
 #else
                     return std::cyl_bessel_i(1.f, x);
@@ -68,7 +68,7 @@ namespace pmacc
 
                 HDINLINE result operator()(result const& x)
                 {
-#if (PMACC_DEVICE_COMPILE == 1) // we are on gpu_
+#if (PMACC_DEVICE_COMPILE == 1) && (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
                     return ::j0f(x);
 #else
                     return std::cyl_bessel_j(0.f, x);
@@ -83,7 +83,7 @@ namespace pmacc
 
                 HDINLINE result operator()(result const& x)
                 {
-#if (PMACC_DEVICE_COMPILE == 1) // we are on gpu
+#if (PMACC_DEVICE_COMPILE == 1) && (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
                     return ::j1f(x);
 #else
                     return std::cyl_bessel_j(1.f, x);
@@ -98,7 +98,7 @@ namespace pmacc
 
                 HDINLINE result operator()(int const& n, result const& x)
                 {
-#if (PMACC_DEVICE_COMPILE == 1) // we are on gpu
+#if (PMACC_DEVICE_COMPILE == 1) && (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
                     return ::jnf(n, x);
 #else
                     return std::cyl_bessel_j(static_cast<float>(n), x);
@@ -113,7 +113,7 @@ namespace pmacc
 
                 HDINLINE result operator()(result const& x)
                 {
-#if (PMACC_DEVICE_COMPILE == 1) // we are on gpu
+#if (PMACC_DEVICE_COMPILE == 1) && (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
                     return ::y0f(x);
 #else
                     return std::cyl_neumann(0.f, x);
@@ -128,7 +128,7 @@ namespace pmacc
 
                 HDINLINE result operator()(result const& x)
                 {
-#if (PMACC_DEVICE_COMPILE == 1) // we are on gpu
+#if (PMACC_DEVICE_COMPILE == 1) && (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
                     return ::y1f(x);
 #else
                     return std::cyl_neumann(1.f, x);
@@ -143,7 +143,7 @@ namespace pmacc
 
                 HDINLINE result operator()(int const& n, result const& x)
                 {
-#if (PMACC_DEVICE_COMPILE == 1) // we are on gpu
+#if (PMACC_DEVICE_COMPILE == 1) && (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
                     return ::ynf(n, x);
 #else
                     return std::cyl_neumann(static_cast<float>(n), x);

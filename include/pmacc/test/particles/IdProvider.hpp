@@ -124,7 +124,7 @@ namespace pmacc
                     std::set<uint64_t> ids;
                     REQUIRE(idProvider.getNewIdHost() == state.nextId);
                     // Generate some IDs using the function
-                    for(int i = 0; i < numIds; i++)
+                    for(uint32_t i = 0; i < numIds; i++)
                     {
                         uint64_t const newId = idProvider.getNewIdHost();
                         REQUIRE(checkDuplicate(ids, newId, false));

@@ -98,7 +98,7 @@ namespace picongpu
              * (numBins+2)-1 is for >maxEnergy
              */
             /* size must be numBins+2 because we have <min and >max */
-            float_X* shBin = ::alpaka::getDynSharedMem<float_X>(worker.getAcc());
+            float_X* shBin = ::alpaka::onAcc::getDynSharedMem<float_X>(worker.getAcc());
 
             int const realNumBins = numBins + 2;
 
@@ -164,11 +164,11 @@ namespace picongpu
                          */
                         float_X const normedWeighting
                             = weighting / float_X(sim.unit.typicalNumParticlesPerMacroParticle());
-                        alpaka::atomicAdd(
+                        ::alpaka::onAcc::atomicAdd(
                             lockstepWorker.getAcc(),
                             &(shBin[binNumber]),
                             normedWeighting,
-                            ::alpaka::hierarchy::Threads{});
+                            ::alpaka::onAcc::scope::Block{});
                     }
                 });
 
@@ -178,11 +178,11 @@ namespace picongpu
                 [&](uint32_t const linearIdx)
                 {
                     for(int i = linearIdx; i < realNumBins; i += numWorkers)
-                        alpaka::atomicAdd(
+                        ::alpaka::onAcc::atomicAdd(
                             worker.getAcc(),
                             &(gBins[i]),
                             float_64(shBin[i]),
-                            ::alpaka::hierarchy::Blocks{});
+                            ::alpaka::onAcc::scope::Device{});
                 });
         }
     };

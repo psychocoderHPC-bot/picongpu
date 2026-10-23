@@ -22,7 +22,7 @@
 
 #pragma once
 
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_LANG_SYCL)
 #    include <mallocMC/mallocMC.hpp>
 #endif
 #include "pmacc/dimensions/DataSpace.hpp"
@@ -69,7 +69,7 @@ namespace pmacc
          * \warning after this call the object is in a invalid state and must be
          * initialized with an assignment of a valid ParticleBox
          */
-        HDINLINE ParticlesBox() = default;
+        ParticlesBox() = default;
 
         HDINLINE ParticlesBox(
             DataBox<PitchedBox<SuperCellType, DIM>> const& superCells,
@@ -102,7 +102,7 @@ namespace pmacc
             int const maxTries = 13; // magic number is not performance critical
             for(int numTries = 0; numTries < maxTries; ++numTries)
             {
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_LANG_SYCL)
                 tmp = (FrameType*) m_deviceHeapHandle.malloc(worker.getAcc(), sizeof(FrameType));
 #else
                 tmp = new(std::nothrow) FrameType;
@@ -113,7 +113,7 @@ namespace pmacc
                     for(int i = 0; i < static_cast<int>(FrameType::frameSize); ++i)
                         (*tmp)[i][multiMask_] = 0;
                     /* takes care that changed values are visible to all threads inside this block*/
-                    alpaka::mem_fence(worker.getAcc(), alpaka::memory_scope::Block{});
+                    alpaka::onAcc::memFence(worker.getAcc(), ::alpaka::onAcc::scope::Block{}, ::alpaka::onAcc::order::SeqCst{});
                     break;
                 }
             }
@@ -131,7 +131,7 @@ namespace pmacc
         template<typename T_Worker>
         DINLINE void removeFrame(T_Worker const& worker, FramePtr& frame)
         {
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_LANG_SYCL)
             m_deviceHeapHandle.free(worker.getAcc(), (void*) frame.ptr);
 #else
             delete(frame.ptr);
@@ -212,13 +212,13 @@ namespace pmacc
              * - this is needed because later on in this method we change `previous`
              *   of an other frame, this must be done in order!
              */
-            alpaka::mem_fence(worker.getAcc(), alpaka::memory_scope::Device{});
+            alpaka::onAcc::memFence(worker.getAcc(), ::alpaka::onAcc::scope::Device{}, ::alpaka::onAcc::order::SeqCst{});
 
-            FramePtr oldFirstFramePtr((FrameType*) alpaka::atomicExch(
+            FramePtr oldFirstFramePtr((FrameType*) ::alpaka::onAcc::atomicExch(
                 worker.getAcc(),
                 (unsigned long long int*) firstFrameNativPtr,
                 (unsigned long long int) frame.ptr,
-                ::alpaka::hierarchy::Grids{}));
+                ::alpaka::onAcc::scope::Device{}));
 
             frame->nextFrame = oldFirstFramePtr;
             if(oldFirstFramePtr.isValid())
@@ -250,13 +250,13 @@ namespace pmacc
              * - this is needed because later on in this method we change `next`
              *   of an other frame, this must be done in order!
              */
-            alpaka::mem_fence(worker.getAcc(), alpaka::memory_scope::Device{});
+            alpaka::onAcc::memFence(worker.getAcc(), ::alpaka::onAcc::scope::Device{}, ::alpaka::onAcc::order::SeqCst{});
 
-            FramePtr oldLastFramePtr((FrameType*) alpaka::atomicExch(
+            FramePtr oldLastFramePtr((FrameType*) ::alpaka::onAcc::atomicExch(
                 worker.getAcc(),
                 (unsigned long long int*) lastFrameNativPtr,
                 (unsigned long long int) frame.ptr,
-                ::alpaka::hierarchy::Grids{}));
+                ::alpaka::onAcc::scope::Device{}));
 
             frame->previousFrame = oldLastFramePtr;
             if(oldLastFramePtr.isValid())

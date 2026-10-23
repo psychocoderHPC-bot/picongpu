@@ -51,6 +51,29 @@
 using MyPMaccFixture = pmacc::test::PMaccFixture<TEST_DIM>;
 static MyPMaccFixture fixture;
 
+namespace
+{
+    /** Kernel writing vectors constructed from generator lambdas.
+     *
+     * Implemented as functor because nvcc does not support generic lambdas marked
+     * with ALPAKA_FN_ACC as extended lambdas.
+     */
+    template<uint32_t T_dim>
+    struct VectorConstructorGeneratorKernel
+    {
+        template<typename T_Acc>
+        ALPAKA_FN_ACC void operator()(T_Acc const&, pmacc::math::Vector<uint32_t, T_dim>* data) const
+        {
+            // constexpr lambda generator
+            constexpr auto vec = pmacc::math::Vector<uint32_t, T_dim>(
+                [](uint32_t const i) constexpr { return i; });
+            data[0] = vec;
+            // non constexpr lambda generator
+            data[1] = pmacc::math::Vector<uint32_t, T_dim>([](uint32_t const i) { return i * 2u; });
+        }
+    };
+} // namespace
+
 TEST_CASE("vector constructor generator", "[vector]")
 {
     using namespace pmacc;
@@ -59,18 +82,10 @@ TEST_CASE("vector constructor generator", "[vector]")
     using VecType = Vector<uint32_t, TEST_DIM>;
 
     auto hostDeviceBuffer = HostDeviceBuffer<VecType, DIM1>(DataSpace<DIM1>{numElements});
-    using DeviceBuf = DeviceBuffer<uint32_t, DIM1>;
 
     hostDeviceBuffer.getDeviceBuffer().setValue(VecType::create(42));
-    auto const testKernel = [] ALPAKA_FN_ACC(auto const& acc, VecType* data)
-    {
-        // constexpr lambda generator
-        constexpr auto vec = Vector<uint32_t, TEST_DIM>([](uint32_t const i) constexpr { return i; });
-        data[0] = vec;
-        // non constexpr lambda generator
-        data[1] = Vector<uint32_t, TEST_DIM>([](uint32_t const i) { return i * 2u; });
-    };
-    PMACC_KERNEL(testKernel)(1, 1)(hostDeviceBuffer.getDeviceBuffer().data());
+    PMACC_KERNEL(VectorConstructorGeneratorKernel<TEST_DIM>{})(1, 1)(
+        hostDeviceBuffer.getDeviceBuffer().data());
     hostDeviceBuffer.deviceToHost();
 
     REQUIRE(hostDeviceBuffer.getHostBuffer().data()[0] == Vector<uint32_t, 3u>(0u, 1u, 2u).shrink<TEST_DIM>());
@@ -550,7 +565,6 @@ TEST_CASE("vector generic", "[vector]")
     auto hostDeviceBuffer = HostDeviceBuffer<bool, DIM1>(DataSpace<DIM1>{numElements});
     auto numTestsBuffer = HostDeviceBuffer<size_t, DIM1>(DataSpace<DIM1>{1});
     numTestsBuffer.getDeviceBuffer().setValue(0u);
-    using DeviceBuf = DeviceBuffer<uint32_t, DIM1>;
 
     hostDeviceBuffer.getDeviceBuffer().setValue(false);
 

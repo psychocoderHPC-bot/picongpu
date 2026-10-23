@@ -41,8 +41,11 @@ namespace pmacc
     class Buffer
     {
     protected:
-        using CurrentSizeBufferHost = ::alpaka::Buf<HostDevice, size_t, AlpakaDim<DIM1>, MemIdxType>;
-        CurrentSizeBufferHost currentSizeBufferHost;
+        //! owning host-mapped buffer which stores the current element count
+        using CurrentSizeBufferOwner = ComputeMappedBuffer<size_t, DIM1>;
+        //! non owning host view to the mapped current size storage
+        using CurrentSizeBufferHost = ::alpaka::View<HostApi, size_t, ::alpaka::Vec<MemIdxType, DIM1>>;
+        CurrentSizeBufferOwner currentSizeBufferHost;
         MemSpace<T_dim> m_capacityND;
 
     private:
@@ -60,9 +63,8 @@ namespace pmacc
          */
         Buffer(MemSpace<T_dim> size)
             : currentSizeBufferHost(
-                  alpaka::allocMappedBufIfSupported<size_t, MemIdxType>(
-                      manager::Device<HostDevice>::get().current(),
-                      manager::Device<ComputeDevice>::get().getPlatform(),
+                  ::alpaka::onHost::allocMapped<size_t>(
+                      manager::Device<ComputeDevice>::get().current(),
                       MemSpace<DIM1>(1).toAlpakaMemVec()))
             , m_capacityND(size)
             , isMemoryContiguous(true)
@@ -100,7 +102,7 @@ namespace pmacc
         virtual size_t size()
         {
             eventSystem::startOperation(ITask::TASK_HOST);
-            return alpaka::getPtrNative(this->currentSizeBufferHost)[0];
+            return ::alpaka::onHost::data(this->currentSizeBufferHost)[0];
         }
 
         /** set total number of elements
@@ -111,7 +113,7 @@ namespace pmacc
         {
             eventSystem::startOperation(ITask::TASK_HOST);
             PMACC_ASSERT(static_cast<size_t>(newSize) <= static_cast<size_t>(capacityND().productOfComponents()));
-            alpaka::getPtrNative(this->currentSizeBufferHost)[0] = newSize;
+            ::alpaka::onHost::data(this->currentSizeBufferHost)[0] = newSize;
         }
 
         /** Total number of elements mapped to the N-dimensional size of the buffer */

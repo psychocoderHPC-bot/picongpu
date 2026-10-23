@@ -127,8 +127,8 @@ namespace picongpu
                 });
 
             // each virtual thread adds the energies to the shared memory
-            alpaka::atomicAdd(worker.getAcc(), &shEnergyKin, localEnergyKin, ::alpaka::hierarchy::Threads{});
-            alpaka::atomicAdd(worker.getAcc(), &shEnergy, localEnergy, ::alpaka::hierarchy::Threads{});
+            ::alpaka::onAcc::atomicAdd(worker.getAcc(), &shEnergyKin, localEnergyKin, ::alpaka::onAcc::scope::Block{});
+            ::alpaka::onAcc::atomicAdd(worker.getAcc(), &shEnergy, localEnergy, ::alpaka::onAcc::scope::Block{});
 
             // wait that all virtual threads updated the shared memory energies
             worker.sync();
@@ -139,17 +139,17 @@ namespace picongpu
                 [&]()
                 {
                     // add kinetic energy
-                    alpaka::atomicAdd(
+                    ::alpaka::onAcc::atomicAdd(
                         worker.getAcc(),
                         &(gEnergy[0]),
                         static_cast<float_64>(shEnergyKin),
-                        ::alpaka::hierarchy::Blocks{});
+                        ::alpaka::onAcc::scope::Device{});
                     // add total energy
-                    alpaka::atomicAdd(
+                    ::alpaka::onAcc::atomicAdd(
                         worker.getAcc(),
                         &(gEnergy[1]),
                         static_cast<float_64>(shEnergy),
-                        ::alpaka::hierarchy::Blocks{});
+                        ::alpaka::onAcc::scope::Device{});
                 });
         }
     };

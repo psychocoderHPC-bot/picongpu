@@ -109,24 +109,19 @@ struct PositionShift
 template<typename T_Shape = boost::mpl::_1>
 struct TestShape
 {
-    /** Validates the shape
+    /** Functor evaluating the assignment shape on the device.
      *
-     * @param inCellPositionBuffer Buffer with positions, each value must be in rage [0.0;1.0).
-     * @param posShiftFunctor Functor which shifts the position into a valid range to be passed to the shape.
+     * A plain struct with a templated call operator is used instead of a generic
+     * lambda because nvcc does not accept ``__host__ __device__`` generic lambdas.
      */
-    template<typename T_PosBuffer, typename T_ShiftFunctor>
-    void operator()(T_PosBuffer& inCellPositionBuffer, T_ShiftFunctor posShiftFunctor)
+    struct ShapeTestKernel
     {
-        std::cout << "Test Shape" << typeid(T_Shape).name() << std::endl;
-        ::pmacc::DeviceBuffer<float_X, 1u> deviceInCellPositionBuffer(numValues);
-        ::pmacc::HostBuffer<float_X, 1u> resultHost(numValues);
-        ::pmacc::DeviceBuffer<float_X, 1u> resultDevice(numValues);
-
-        deviceInCellPositionBuffer.copyFrom(inCellPositionBuffer);
-        resultDevice.setValue(0.0_X);
-
-        auto shapeTestKernel
-            = [this] DEVICEONLY(auto const& worker, auto positionShift, auto const& positions, auto result)
+        template<typename T_Worker, typename T_PositionShift, typename T_Positions, typename T_Result>
+        DEVICEONLY void operator()(
+            T_Worker const& worker,
+            T_PositionShift positionShift,
+            T_Positions const& positions,
+            T_Result result) const
         {
             auto blockIdx = worker.blockDomIdxND().x();
 
@@ -150,7 +145,26 @@ struct TestShape
                         }
                     }
                 });
-        };
+        }
+    };
+
+    /** Validates the shape
+     *
+     * @param inCellPositionBuffer Buffer with positions, each value must be in rage [0.0;1.0).
+     * @param posShiftFunctor Functor which shifts the position into a valid range to be passed to the shape.
+     */
+    template<typename T_PosBuffer, typename T_ShiftFunctor>
+    void operator()(T_PosBuffer& inCellPositionBuffer, T_ShiftFunctor posShiftFunctor)
+    {
+        std::cout << "Test Shape" << typeid(T_Shape).name() << std::endl;
+        ::pmacc::DeviceBuffer<float_X, 1u> deviceInCellPositionBuffer(numValues);
+        ::pmacc::HostBuffer<float_X, 1u> resultHost(numValues);
+        ::pmacc::DeviceBuffer<float_X, 1u> resultDevice(numValues);
+
+        deviceInCellPositionBuffer.copyFrom(inCellPositionBuffer);
+        resultDevice.setValue(0.0_X);
+
+        ShapeTestKernel shapeTestKernel;
 
         auto numBlocks = (numValues + elemPerBlock - 1) / elemPerBlock;
         PMACC_LOCKSTEP_KERNEL(shapeTestKernel)

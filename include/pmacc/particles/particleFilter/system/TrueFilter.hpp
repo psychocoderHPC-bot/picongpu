@@ -30,7 +30,7 @@ namespace pmacc
     class TrueFilter
     {
     public:
-        HDINLINE TrueFilter() = default;
+        TrueFilter() = default;
 
         template<class T_Particle>
         HDINLINE bool operator()(T_Particle const& particle)

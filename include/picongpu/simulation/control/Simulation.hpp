@@ -367,13 +367,23 @@ namespace picongpu
             rngFactory->init(gridCon.getScalarPosition() ^ seed);
             dc.consume(std::move(rngFactory));
 
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_LANG_SYCL)
             auto alpakaQueue = pmacc::eventSystem::getComputeDeviceQueue(ITask::TASK_DEVICE)->getAlpakaQueue();
-            auto alpakaDevice = manager::Device<ComputeDevice>::get().current();
+            auto devForHeap = manager::Device<ComputeDevice>::get().current();
             /* Create an empty allocator. This one is resized after all exchanges
-             * for particles are created */
-            deviceHeap = std::make_shared<DeviceHeap>(alpakaDevice, alpakaQueue, 0u);
-            alpaka::wait(alpakaQueue);
+             * for particles are created.
+             *
+             * SYCL returns a null USM pointer for a zero-sized allocation, and a
+             * heap smaller than one allocator block breaks mallocMC's heap
+             * initialization kernel. Use one block as placeholder for SYCL; the
+             * heap is resized below. */
+#    if (ALPAKA_LANG_SYCL)
+            constexpr size_t initialHeapSize = static_cast<size_t>(picongpu::blockSize);
+#    else
+            constexpr size_t initialHeapSize = 0u;
+#    endif
+            deviceHeap = std::make_shared<DeviceHeap>(devForHeap, alpakaQueue, initialHeapSize);
+            alpaka::onHost::wait(alpakaQueue);
 #endif
 
             static_assert(
@@ -385,6 +395,15 @@ namespace picongpu
             createSpeciesMemory(deviceHeap, cellDescription.get());
 
             size_t freeGpuMem = freeDeviceMemory();
+#if defined(PIC_ONEAPI_CPU_DEVICE) && PIC_ONEAPI_CPU_DEVICE
+            /* The oneAPI CPU device reports the host RAM as device memory.
+             * Reserving nearly all of it for the particle heap is neither useful
+             * nor required for a CPU target, so bound the heap to a fixed size.
+             */
+            constexpr size_t oneApiCpuHeapLimit = 4ull * 1024ull * 1024ull * 1024ull;
+            if(freeGpuMem > oneApiCpuHeapLimit)
+                freeGpuMem = oneApiCpuHeapLimit;
+#endif
             if(freeGpuMem < reservedGpuMemorySize)
             {
                 pmacc::log<picLog::MEMORY>("%1% MiB free memory < %2% MiB required reserved memory")
@@ -395,7 +414,7 @@ namespace picongpu
                 throw std::runtime_error(msg.str());
             }
 
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_LANG_SYCL)
             size_t heapSize = freeGpuMem - reservedGpuMemorySize;
             if(isDeviceMemoryShared)
             {
@@ -408,8 +427,8 @@ namespace picongpu
                     "Device RAM is NOT shared between GPU and host, use '--apu' to signal shared device memory.");
 
             // initializing the heap for particles
-            deviceHeap->destructiveResize(alpakaDevice, alpakaQueue, heapSize);
-            alpaka::wait(alpakaQueue);
+            deviceHeap->destructiveResize(devForHeap, alpakaQueue, heapSize);
+            alpaka::onHost::wait(alpakaQueue);
 
             auto mallocMCBuffer = std::make_unique<MallocMCBuffer<DeviceHeap>>(*deviceHeap);
             dc.consume(std::move(mallocMCBuffer));
@@ -426,7 +445,7 @@ namespace picongpu
                 log<picLog::MEMORY>("free mem after all mem is allocated %1% MiB") % (freeGpuMem / 1024 / 1024);
             }
 
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_LANG_SYCL)
             /* add CUDA streams to the QueueController for concurrent execution */
             Environment<>::get().QueueController().addQueues(6);
 #endif
@@ -657,16 +676,16 @@ namespace picongpu
             size_t allocatableMemory = freeDeviceMemory;
             bool memAlloced = false;
             // tmpBuffer avoids that the memory is freed before all other MPI ranks created there test buffer
-            std::optional<::alpaka::Buf<ComputeDevice, std::byte, AlpakaDim<1>, size_t>> tmpBuffer{};
+            std::optional<::pmacc::ComputeBuffer<std::byte, DIM1>> tmpBuffer{};
 
             // Check how much memory can be allocated with a single allocation call.
             do
             {
                 try
                 {
-                    auto testBuffer = alpaka::allocBuf<std::byte, size_t>(
+                    auto testBuffer = alpaka::onHost::alloc<std::byte>(
                         pmacc::manager::Device<ComputeDevice>::get().current(),
-                        allocatableMemory);
+                        MemSpace<DIM1>(allocatableMemory).toAlpakaMemVec());
                     tmpBuffer = testBuffer;
                     memAlloced = true;
                 }

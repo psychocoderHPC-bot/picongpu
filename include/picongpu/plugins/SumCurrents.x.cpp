@@ -63,9 +63,9 @@ namespace picongpu
                     auto const cellIdxInSupercell = pmacc::math::mapToND(SuperCellSize::toRT(), linearIdx);
                     DataSpace<simDim> const cell(superCellIdx * SuperCellSize::toRT() + cellIdxInSupercell);
                     float3_X const myJ = fieldJ(cell);
-                    alpaka::atomicAdd(worker.getAcc(), &(sh_sumJ.x()), myJ.x(), ::alpaka::hierarchy::Threads{});
-                    alpaka::atomicAdd(worker.getAcc(), &(sh_sumJ.y()), myJ.y(), ::alpaka::hierarchy::Threads{});
-                    alpaka::atomicAdd(worker.getAcc(), &(sh_sumJ.z()), myJ.z(), ::alpaka::hierarchy::Threads{});
+                    ::alpaka::onAcc::atomicAdd(worker.getAcc(), &(sh_sumJ.x()), myJ.x(), ::alpaka::onAcc::scope::Block{});
+                    ::alpaka::onAcc::atomicAdd(worker.getAcc(), &(sh_sumJ.y()), myJ.y(), ::alpaka::onAcc::scope::Block{});
+                    ::alpaka::onAcc::atomicAdd(worker.getAcc(), &(sh_sumJ.z()), myJ.z(), ::alpaka::onAcc::scope::Block{});
                 });
 
             worker.sync();
@@ -73,9 +73,9 @@ namespace picongpu
             onlyMaster(
                 [&]()
                 {
-                    alpaka::atomicAdd(worker.getAcc(), &(gCurrent->x()), sh_sumJ.x(), ::alpaka::hierarchy::Blocks{});
-                    alpaka::atomicAdd(worker.getAcc(), &(gCurrent->y()), sh_sumJ.y(), ::alpaka::hierarchy::Blocks{});
-                    alpaka::atomicAdd(worker.getAcc(), &(gCurrent->z()), sh_sumJ.z(), ::alpaka::hierarchy::Blocks{});
+                    ::alpaka::onAcc::atomicAdd(worker.getAcc(), &(gCurrent->x()), sh_sumJ.x(), ::alpaka::onAcc::scope::Device{});
+                    ::alpaka::onAcc::atomicAdd(worker.getAcc(), &(gCurrent->y()), sh_sumJ.y(), ::alpaka::onAcc::scope::Device{});
+                    ::alpaka::onAcc::atomicAdd(worker.getAcc(), &(gCurrent->z()), sh_sumJ.z(), ::alpaka::onAcc::scope::Device{});
                 });
         }
     };

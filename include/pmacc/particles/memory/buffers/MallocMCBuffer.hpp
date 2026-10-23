@@ -29,7 +29,7 @@
 #include <memory>
 #include <string>
 
-#if (ALPAKA_ACC_GPU_CUDA_ENABLED || ALPAKA_ACC_GPU_HIP_ENABLED)
+#if (ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP || ALPAKA_LANG_SYCL)
 
 #    include <memory>
 
@@ -42,7 +42,7 @@ namespace pmacc
     {
     public:
         using DeviceHeap = T_DeviceHeap;
-        using BufferType = ::alpaka::Buf<HostDevice, uint8_t, AlpakaDim<DIM1>, MemIdxType>;
+        using BufferType = ComputeMappedBuffer<uint8_t, DIM1>;
 
         MallocMCBuffer(DeviceHeap& deviceHeap);
 

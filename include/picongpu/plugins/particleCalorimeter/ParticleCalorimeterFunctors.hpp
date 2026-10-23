@@ -80,7 +80,7 @@ namespace picongpu
         {
         }
 
-        HDINLINE CalorimeterFunctor(CalorimeterFunctor const&) = default;
+        CalorimeterFunctor(CalorimeterFunctor const&) = default;
 
         HINLINE void setCalorimeterData(T_CalorimeterDataBox const& calorimeterBox)
         {
@@ -147,11 +147,11 @@ namespace picongpu
                     energyBin = energyBin > 0 ? energyBin : 0;
                 }
 
-                alpaka::atomicAdd(
+                ::alpaka::onAcc::atomicAdd(
                     worker.getAcc(),
                     &this->m_calorimeterBox(DataSpace<DIM3>(yawBin, pitchBin, energyBin)),
                     energy * normedWeighting,
-                    ::alpaka::hierarchy::Threads{});
+                    ::alpaka::onAcc::scope::Block{});
             }
         }
     };

@@ -61,7 +61,8 @@ namespace picongpu::particles::atomicPhysics::kernel
                     // proportion of weight we want to reject
                     (deltaWeight - weight0) / deltaWeight,
                     // but at least one average one macro ion should be rejected
-                    picongpu::sim.unit.typicalNumParticlesPerMacroParticle() / deltaWeight);
+                    static_cast<float_X>(picongpu::sim.unit.typicalNumParticlesPerMacroParticle())
+                    / deltaWeight);
 
                 // set flag that we found at least one over subscribed resource
                 sharedResourcesOverSubscribed = true;

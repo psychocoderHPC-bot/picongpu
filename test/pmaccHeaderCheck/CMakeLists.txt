@@ -71,7 +71,7 @@ append_recursive_files_add_to_src_group("${_GENERATED_SOURCE_DIR}" "${_GENERATED
 list(APPEND _FILES_SOURCE "src/main.cpp")
 
 # Always add all files to the target executable build call to add them to the build project.
-alpaka_add_executable(
+add_executable(
         ${_TARGET_NAME}
         ${_FILES_SOURCE}
 )
@@ -79,6 +79,7 @@ alpaka_add_executable(
 target_link_libraries(${_TARGET_NAME} PUBLIC Catch2 Catch2WithMain)
 target_compile_definitions(${_TARGET_NAME} PRIVATE "PMACC_NO_TPP_INCLUDE")
 target_link_libraries(${_TARGET_NAME} PRIVATE pmacc::pmacc)
+alpaka_finalize(${_TARGET_NAME})
 
 set_target_properties(headerCheckTest PROPERTIES FOLDER "headerCheck")
 

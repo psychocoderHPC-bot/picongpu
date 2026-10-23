@@ -77,5 +77,5 @@ struct SetBoundaryConditions
                     buff1(bufPos) = 1.;
                 }
             });
-    };
+    }
 };

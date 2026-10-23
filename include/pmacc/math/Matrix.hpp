@@ -195,6 +195,6 @@ namespace pmacc::math
             return result;
         }
 
-        HDINLINE Matrix& operator=(Matrix const& rhs) = default;
+        Matrix& operator=(Matrix const& rhs) = default;
     };
 } // namespace pmacc::math

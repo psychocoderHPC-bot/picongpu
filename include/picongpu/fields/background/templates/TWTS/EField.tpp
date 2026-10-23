@@ -204,8 +204,8 @@ namespace picongpu
              *             the field */
             HDINLINE EField::float_T EField::calcTWTSEx(float3_64 const& pos, float_64 const time) const
             {
-                using complex_T = alpaka::Complex<float_T>;
-                using complex_64 = alpaka::Complex<float_64>;
+                using complex_T = pmacc::math::Complex<float_T>;
+                using complex_64 = pmacc::math::Complex<float_64>;
                 /* Unit of speed */
                 float_64 const UNIT_SPEED = sim.si.getSpeedOfLight();
                 /* Unit of time */

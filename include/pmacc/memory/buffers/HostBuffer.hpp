@@ -45,30 +45,37 @@ namespace pmacc
 
     /** N-dimensional host buffer
      *
+     * The memory is allocated as pinned host-mapped memory of the compute device so that
+     * kernels can access it. Views onto the memory carry the host API which is required to
+     * select the correct copy direction for host/device transfers.
+     *
      * @tparam T_Type datatype for buffer data
      * @tparam T_dim dimension of the buffer
      */
     template<typename T_Type, uint32_t T_dim>
     class HostBuffer : public Buffer<T_Type, T_dim>
     {
-        using BufferType = ::alpaka::Buf<HostDevice, T_Type, AlpakaDim<DIM1>, MemIdxType>;
-        using ViewType = alpaka::ViewPlainPtr<HostDevice, T_Type, AlpakaDim<T_dim>, MemIdxType>;
+        //! flat owning mapped allocation, the N-dimensional view below adds tight pitches
+        using BufferType = ComputeMappedBuffer<T_Type, DIM1>;
+        //! plain (non-pinned) host allocation used by code which must not allocate mapped memory
+        using PlainBufferType = decltype(::alpaka::onHost::alloc<T_Type>(
+            std::declval<HostDevice const&>(),
+            std::declval<::alpaka::Vec<MemIdxType, DIM1>>()));
+        using ViewType = ::alpaka::View<HostApi, T_Type, ::alpaka::Vec<MemIdxType, T_dim>>;
 
     public:
         using DataBoxType = typename Buffer<T_Type, T_dim>::DataBoxType;
         std::optional<BufferType> hostBuffer;
+        std::optional<PlainBufferType> hostPlainBuffer;
         std::optional<ViewType> view;
 
-        using BufferType1D = ::alpaka::ViewPlainPtr<HostDevice, T_Type, AlpakaDim<DIM1>, MemIdxType>;
+        using BufferType1D = ::alpaka::View<HostApi, T_Type, ::alpaka::Vec<MemIdxType, DIM1>>;
 
         BufferType1D as1DBuffer()
         {
             auto numElements = this->size();
             eventSystem::startOperation(ITask::TASK_HOST);
-            return BufferType1D(
-                alpaka::getPtrNative(*view),
-                alpaka::getDev(*hostBuffer),
-                MemSpace<DIM1>(numElements).toAlpakaMemVec());
+            return ::alpaka::makeView(*view, ::alpaka::onHost::data(*view), MemSpace<DIM1>(numElements).toAlpakaMemVec());
         }
 
         ViewType getAlpakaView() const
@@ -81,23 +88,38 @@ namespace pmacc
          *
          * @param size extent for each dimension (in elements)
          */
-        HostBuffer(MemSpace<T_dim> size)
-            : Buffer<T_Type, T_dim>(size)
-            , hostBuffer(
-                  alpaka::allocMappedBufIfSupported<T_Type, MemIdxType>(
-                      manager::Device<HostDevice>::get().current(),
-                      manager::Device<ComputeDevice>::get().getPlatform(),
-                      MemSpace<DIM1>(size.productOfComponents()).toAlpakaMemVec()))
+        HostBuffer(MemSpace<T_dim> size) : HostBuffer(size, true)
         {
-            MemSpace<T_dim> pitchInBytes;
-            pitchInBytes.x() = sizeof(T_Type);
-            for(uint32_t d = 1u; d < T_dim; ++d)
-                pitchInBytes[d] = pitchInBytes[d - 1u] * size[d - 1u];
-            view.emplace(ViewType(
-                alpaka::getPtrNative(*hostBuffer),
-                alpaka::getDev(*hostBuffer),
-                size.toAlpakaMemVec(),
-                pitchInBytes.toAlpakaMemVec()));
+        }
+
+        /** allocate data accessible from the host
+         *
+         * @param size extent for each dimension (in elements)
+         * @param mapped allocate host-mapped (pinned) memory if true, else plain host memory
+         */
+        HostBuffer(MemSpace<T_dim> size, bool mapped) : Buffer<T_Type, T_dim>(size)
+        {
+            T_Type* ptr = nullptr;
+            if(mapped)
+            {
+                hostBuffer.emplace(::alpaka::onHost::allocMapped<T_Type>(
+                    manager::Device<ComputeDevice>::get().current(),
+                    MemSpace<DIM1>(size.productOfComponents()).toAlpakaMemVec()));
+                ptr = ::alpaka::onHost::data(*hostBuffer);
+            }
+            else
+            {
+                hostPlainBuffer.emplace(::alpaka::onHost::alloc<T_Type>(
+                    manager::Device<HostDevice>::get().current(),
+                    MemSpace<DIM1>(size.productOfComponents()).toAlpakaMemVec()));
+                ptr = ::alpaka::onHost::data(*hostPlainBuffer);
+            }
+            auto const extents = size.toAlpakaMemVec();
+            view.emplace(::alpaka::makeView(
+                ::alpaka::onHost::DeviceSpec<HostApi, HostDeviceKind>{HostApi{}, HostDeviceKind{}},
+                ptr,
+                extents,
+                ::alpaka::calculatePitchesFromExtents<T_Type>(extents)));
             reset(false);
         }
 
@@ -111,14 +133,15 @@ namespace pmacc
          */
         HostBuffer(HostBuffer& source, MemSpace<T_dim> size, MemSpace<T_dim> offset = MemSpace<T_dim>())
             : Buffer<T_Type, T_dim>(size)
-            , hostBuffer(source->hostBuffer)
+            , hostBuffer(source.hostBuffer)
+            , hostPlainBuffer(source.hostPlainBuffer)
         {
-            auto subView = createSubView(*source.view, size.toAlpakaMemVec(), offset.toAlpakaMemVec());
-            view.emplace(ViewType(
-                alpaka::getPtrNative(subView),
-                alpaka::getDev(subView),
-                alpaka::getExtents(subView),
-                alpaka::getPitchesInBytes(subView)));
+            auto* shiftedPtr = &(*source.view)[offset.toAlpakaMemVec()];
+            view.emplace(::alpaka::makeView(
+                ::alpaka::onHost::DeviceSpec<HostApi, HostDeviceKind>{HostApi{}, HostDeviceKind{}},
+                shiftedPtr,
+                size.toAlpakaMemVec(),
+                ::alpaka::onHost::getPitches(*source.view)));
             reset(true);
         }
 
@@ -140,7 +163,7 @@ namespace pmacc
         {
             eventSystem::startOperation(ITask::TASK_HOST);
             PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
-            return alpaka::getPtrNative(*view);
+            return ::alpaka::onHost::data(*view);
         }
 
         void reset(bool preserveData = true) override
@@ -152,9 +175,9 @@ namespace pmacc
                 /* if it is a pointer out of other memory we can not assume that
                  * that the physical memory is contiguous
                  */
-                if(hostBuffer && alpaka::getPtrNative(*hostBuffer) == alpaka::getPtrNative(*view))
+                if(hostBuffer && ::alpaka::onHost::data(*hostBuffer) == ::alpaka::onHost::data(*view))
                     memset(
-                        reinterpret_cast<void*>(alpaka::getPtrNative(*view)),
+                        reinterpret_cast<void*>(::alpaka::onHost::data(*view)),
                         0,
                         this->capacityND().productOfComponents() * sizeof(T_Type));
                 else
@@ -176,7 +199,9 @@ namespace pmacc
             auto current_size = static_cast<int>(this->size());
             using D1Box = DataBoxDim1Access<DataBoxType>;
             D1Box d1Box(memBox, this->capacityND());
-#pragma omp parallel for
+#if defined(_OPENMP)
+#    pragma omp parallel for
+#endif
             for(int i = 0; i < current_size; i++)
             {
                 d1Box[i] = value;
@@ -186,8 +211,8 @@ namespace pmacc
         DataBoxType getDataBox() override
         {
             eventSystem::startOperation(ITask::TASK_HOST);
-            auto pitchBytes = MemSpace<T_dim>(getPitchesInBytes(*view));
-            return DataBoxType(PitchedBox<T_Type, T_dim>(alpaka::getPtrNative(*view), pitchBytes));
+            auto pitchBytes = MemSpace<T_dim>(::alpaka::onHost::getPitches(*view));
+            return DataBoxType(PitchedBox<T_Type, T_dim>(::alpaka::onHost::data(*view), pitchBytes));
         }
 
         typename Buffer<T_Type, T_dim>::CPtr getCPtrCurrentSize() final
@@ -195,7 +220,7 @@ namespace pmacc
             PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
             // size is notifying the event system, no need to do it manually
             size_t const size = this->size();
-            return {alpaka::getPtrNative(*view), size};
+            return {::alpaka::onHost::data(*view), size};
         }
 
         typename Buffer<T_Type, T_dim>::CPtr getCPtrCapacity() final
@@ -203,7 +228,7 @@ namespace pmacc
             PMACC_ASSERT_MSG(this->isContiguous(), "Memory must be contiguous!");
             size_t const size = this->capacityND().productOfComponents();
             eventSystem::startOperation(ITask::TASK_HOST);
-            return {alpaka::getPtrNative(*view), size};
+            return {::alpaka::onHost::data(*view), size};
         }
     };
 

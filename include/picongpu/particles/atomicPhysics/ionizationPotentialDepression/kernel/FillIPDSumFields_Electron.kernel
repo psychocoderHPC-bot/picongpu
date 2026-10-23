@@ -115,21 +115,21 @@ namespace picongpu::particles::atomicPhysics::ionizationPotentialDepression::ker
                 });
 
             // write worker partial sums for species to superCell field
-            alpaka::atomicAdd(
+            ::alpaka::onAcc::atomicAdd(
                 worker.getAcc(),
                 &(localSumWeightBox(superCellFieldIdx)),
                 sumWeight,
-                ::alpaka::hierarchy::Threads{});
-            alpaka::atomicAdd(
+                ::alpaka::onAcc::scope::Block{});
+            ::alpaka::onAcc::atomicAdd(
                 worker.getAcc(),
                 &(localSumTemperatureFunctionalBox(superCellFieldIdx)),
                 sumTemperatureFunctional,
-                ::alpaka::hierarchy::Threads{});
-            alpaka::atomicAdd(
+                ::alpaka::onAcc::scope::Block{});
+            ::alpaka::onAcc::atomicAdd(
                 worker.getAcc(),
                 &(localSumElectronWeightBox(superCellFieldIdx)),
                 sumElectronWeight,
-                ::alpaka::hierarchy::Threads{});
+                ::alpaka::onAcc::scope::Block{});
         }
     };
 } // namespace picongpu::particles::atomicPhysics::ionizationPotentialDepression::kernel

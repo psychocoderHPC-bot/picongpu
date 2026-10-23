@@ -374,11 +374,11 @@ namespace picongpu::particles::atomicPhysics::kernel
                         startIndexTransitionBlock + numberTransitions - u32(1u));
                 });
 
-            alpaka::atomicOr(
+            ::alpaka::onAcc::atomicOr(
                 worker.getAcc(),
                 &foundUnboundBox(superCellFieldIdx),
                 u32(foundInstantTransitionIon),
-                ::alpaka::hierarchy::Threads{});
+                ::alpaka::onAcc::scope::Block{});
         }
     };
 } // namespace picongpu::particles::atomicPhysics::kernel

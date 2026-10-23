@@ -22,7 +22,7 @@
 
 #include "pmacc/simulationControl/SimulationHelper.hpp"
 
-#include "TimeInterval.hpp"
+#include "pmacc/simulationControl/TimeInterval.hpp"
 #include "pmacc/Environment.hpp"
 #include "pmacc/dataManagement/DataConnector.hpp"
 #include "pmacc/dimensions/DataSpace.hpp"

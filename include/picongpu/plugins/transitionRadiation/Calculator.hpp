@@ -21,14 +21,16 @@
 
 #include "Particle.hpp"
 
+#include <pmacc/math/Complex.hpp>
+
 namespace picongpu
 {
     namespace plugins
     {
         namespace transitionRadiation
         {
-            using complex_X = alpaka::Complex<float_X>;
-            using complex_64 = alpaka::Complex<float_64>;
+            using complex_X = pmacc::math::Complex<float_X>;
+            using complex_64 = pmacc::math::Complex<float_64>;
 
             /* Arbitrary margin which is necessary to prevent division by 0 error
              * created by particles moving in the plane of the foil.
@@ -44,7 +46,6 @@ namespace picongpu
             {
             private:
                 transitionRadiation::Particle const& particle;
-                float3_X const& lookDirection;
 
                 float_X parMomSinTheta;
                 float_X parMomCosTheta;
@@ -61,7 +62,6 @@ namespace picongpu
                 HDINLINE
                 Calculator(transitionRadiation::Particle const& particleSet, float3_X const& lookDirection)
                     : particle(particleSet)
-                    , lookDirection(lookDirection)
                     , parMomPhi(particle.getMomPhi())
                     ,
                     // one has to add pi to the polar angle, because phi is in the range of 0 to 2 \pi

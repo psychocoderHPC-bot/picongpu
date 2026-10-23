@@ -31,6 +31,7 @@
 
 #include <string>
 #include <type_traits>
+#include <utility>
 
 namespace pmacc
 {
@@ -87,7 +88,7 @@ namespace pmacc
 
                     // get the return type of the user functor
                     using UserFunctorReturnType
-                        = decltype(alpaka::core::declval<UserFunctor>()(worker, std::forward<T_Args>(args)...));
+                        = decltype(std::declval<UserFunctor>()(worker, std::forward<T_Args>(args)...));
 
                     // compare user functor return type with the interface requirements
                     PMACC_CASSERT_MSG(
@@ -178,7 +179,7 @@ namespace pmacc
             template<typename T_OffsetType, typename T_Worker, typename... T_Args>
             HDINLINE auto operator()(T_Worker const& worker, T_OffsetType const& domainOffset, T_Args&&... args) const
                 -> acc::Interface<
-                    decltype(alpaka::core::declval<
+                    decltype(std::declval<
                              UserFunctor>()(worker, domainOffset, std::forward<T_Args>(args)...)),
                     T_numArguments,
                     T_ReturnType>

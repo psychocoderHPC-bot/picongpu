@@ -20,6 +20,11 @@
 
 #pragma once
 
+/** Enable field ionization (1) or use ions without ionization (0). */
+#ifndef PARAM_IONIZATION
+#    define PARAM_IONIZATION 0
+#endif
+
 
 #include "picongpu/particles/Particles.hpp"
 

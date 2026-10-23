@@ -82,7 +82,9 @@ namespace pmacc
                     T_ParticleFilter& parFilter)
                 {
                     auto gridSize = mapper.getGridDim();
-#pragma omp parallel for
+#if defined(_OPENMP)
+#    pragma omp parallel for
+#endif
                     for(int linearBlockIdx = 0; linearBlockIdx < gridSize.productOfComponents(); ++linearBlockIdx)
                     {
                         // local copy for each omp thread
@@ -131,7 +133,9 @@ namespace pmacc
 
                             int globalOffset;
 /* atomic update with openmp*/
-#pragma omp critical
+#if defined(_OPENMP)
+#    pragma omp critical
+#endif
                             {
                                 globalOffset = counter;
                                 counter += curNumParticles;

@@ -38,8 +38,12 @@ namespace picongpu
     {
         struct TomlParameter
         {
+            // nvcc's front-end flags the inline pointer-to-member declarator below
+            // as containing unnecessary parentheses, so name the type first.
+            using Destination = std::string openPMD::PluginParameters::*;
+
             std::string optionName;
-            std::string openPMD::PluginParameters::* destination;
+            Destination destination;
         };
 
         // We can't use pmacc::pluginSystem::Slice in a hostonly file due to PIConGPU include structure

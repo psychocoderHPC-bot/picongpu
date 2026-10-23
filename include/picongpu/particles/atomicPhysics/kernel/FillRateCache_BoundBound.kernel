@@ -255,8 +255,7 @@ namespace picongpu::particles::atomicPhysics::kernel
             {
                 auto forEachAtomicState = pmacc::lockstep::makeForEach<T_numberAtomicStates, T_Worker>(worker);
                 forEachAtomicState(
-                    [&worker,
-                     &rateCache,
+                    [&rateCache,
                      &atomicStateDataDataBox,
                      &startIndexDataBox,
                      &numberTransitionsDataBox,

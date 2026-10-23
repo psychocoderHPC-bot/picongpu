@@ -234,7 +234,7 @@ namespace pmacc
         /**
          * Constructor
          */
-        GridController(GridController const& gc)
+        GridController(GridController const&)
         {
         }
 

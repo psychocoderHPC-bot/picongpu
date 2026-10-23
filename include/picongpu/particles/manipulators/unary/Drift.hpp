@@ -58,18 +58,19 @@ namespace picongpu
                             float_X const macroWeighting = particle[weighting_];
                             float_X const macroMass = picongpu::traits::attribute::getMass(macroWeighting, particle);
 
-                            float_64 const myGamma = ParamClass::gamma;
+                            // The result is stored in float_X, so evaluate in float_X as
+                            // well. This keeps the kernel free of double arithmetic on
+                            // devices without fp64 support.
+                            float_X const myGamma = precisionCast<float_X>(ParamClass::gamma);
 
-                            float_64 const initFreeBeta = math::sqrt(1.0 - 1.0 / (myGamma * myGamma));
+                            float_X const initFreeBeta
+                                = math::sqrt(float_X(1.0) - float_X(1.0) / (myGamma * myGamma));
 
                             float3_X const driftDirection = ParamClass::driftDirection;
                             float3_X const normDir = driftDirection / pmacc::math::l2norm(driftDirection);
 
                             float3_X const mom(
-                                normDir
-                                * float_X(
-                                    myGamma * initFreeBeta * float_64(macroMass)
-                                    * float_64(sim.pic.getSpeedOfLight())));
+                                normDir * (myGamma * initFreeBeta * macroMass * sim.pic.getSpeedOfLight()));
 
                             ValueFunctor::operator()(particle[momentum_], mom);
                         }

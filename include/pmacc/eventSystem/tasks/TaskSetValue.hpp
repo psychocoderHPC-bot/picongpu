@@ -210,26 +210,24 @@ namespace pmacc
                 constexpr uint32_t xChunkSize = 256;
 
                 // number of blocks in x direction
-                gridSize.x() = alpaka::core::divCeil(gridSize.x(), static_cast<size_t>(xChunkSize));
+                gridSize.x() = (gridSize.x() + static_cast<size_t>(xChunkSize) - 1u) / static_cast<size_t>(xChunkSize);
                 auto blockCfg = lockstep::makeBlockCfg<xChunkSize>();
                 auto destBox = this->destination->getDataBox();
                 auto blockSize = DataSpace<dim>::create(1);
                 blockSize.x() = blockCfg.numWorkers();
 
-                auto one = DataSpace<dim>::create(1);
-                auto workDiv = alpaka::WorkDivMembers<AlpakaDim<dim>, IdxType>{
+                auto const threadSpec = ::alpaka::onHost::ThreadSpec{
                     gridSize.toAlpakaKernelVec(),
                     blockSize.toAlpakaKernelVec(),
-                    one.toAlpakaKernelVec()};
-                auto kernel = alpaka::createTaskKernel<Acc<dim>>(
-                    workDiv,
+                    ComputeExecutor};
+                auto queue = this->getAlpakaQueue();
+                queue.enqueue(
+                    threadSpec,
                     KernelSetValue<xChunkSize>{},
                     destBox,
                     this->value,
                     areaSizeND,
                     blockCfg);
-                auto queue = this->getAlpakaQueue();
-                alpaka::enqueue(queue, kernel);
             }
             this->activate();
         }
@@ -247,14 +245,13 @@ namespace pmacc
         using ValueType = T_ValueType;
         static constexpr uint32_t dim = T_dim;
 
-        using ValueBufferType = ::alpaka::Buf<HostDevice, T_ValueType, AlpakaDim<DIM1>, MemIdxType>;
+        using ValueBufferType = ComputeMappedBuffer<T_ValueType, DIM1>;
 
         TaskSetValue(DeviceBuffer<ValueType, dim>& dst, ValueType const& value)
             : TaskSetValueBase<ValueType, dim>(dst, value)
             , valueBuffer(
-                  std::make_shared<ValueBufferType>(alpaka::allocMappedBufIfSupported<ValueType, MemIdxType>(
-                      manager::Device<HostDevice>::get().current(),
-                      manager::Device<ComputeDevice>::get().getPlatform(),
+                  std::make_shared<ValueBufferType>(::alpaka::onHost::allocMapped<ValueType>(
+                      manager::Device<ComputeDevice>::get().current(),
                       MemSpace<DIM1>(1).toAlpakaMemVec())))
         {
         }
@@ -280,29 +277,31 @@ namespace pmacc
                 gridSize.x() = ceil(static_cast<double>(gridSize.x()) / static_cast<double>(xChunkSize));
 
                 auto firstElemBuffer = this->destination->as1DBufferNElem(1);
-                alpaka::getPtrNative(*valueBuffer)[0] = this->value; // copy value to new place
+                ::alpaka::onHost::data(*valueBuffer)[0] = this->value; // copy value to new place
 
                 auto queue = this->getAlpakaQueue();
-                alpaka::memcpy(queue, firstElemBuffer, *valueBuffer, MemSpace<DIM1>(1).toAlpakaMemVec());
+                auto valueHostView = ::alpaka::makeView(
+                    ::alpaka::onHost::DeviceSpec<HostApi, HostDeviceKind>{HostApi{}, HostDeviceKind{}},
+                    ::alpaka::onHost::data(*valueBuffer),
+                    MemSpace<DIM1>(1).toAlpakaMemVec());
+                ::alpaka::onHost::memcpy(queue, firstElemBuffer, valueHostView, MemSpace<DIM1>(1).toAlpakaMemVec());
 
                 auto blockCfg = lockstep::makeBlockCfg<xChunkSize>();
                 auto destBox = this->destination->getDataBox();
                 auto blockSize = DataSpace<dim>::create(1);
                 blockSize.x() = blockCfg.numWorkers();
 
-                auto one = DataSpace<dim>::create(1);
-                auto workDiv = alpaka::WorkDivMembers<AlpakaDim<dim>, IdxType>{
+                auto const threadSpec = ::alpaka::onHost::ThreadSpec{
                     gridSize.toAlpakaKernelVec(),
                     blockSize.toAlpakaKernelVec(),
-                    one.toAlpakaKernelVec()};
-                auto kernel = alpaka::createTaskKernel<Acc<dim>>(
-                    workDiv,
+                    ComputeExecutor};
+                queue.enqueue(
+                    threadSpec,
                     KernelSetValue<xChunkSize>{},
                     destBox,
-                    detail::IndirectValue<ValueType>{alpaka::getPtrNative(firstElemBuffer)},
+                    detail::IndirectValue<ValueType>{::alpaka::onHost::data(firstElemBuffer)},
                     areaSizeND,
                     blockCfg);
-                alpaka::enqueue(queue, kernel);
             }
 
             this->activate();

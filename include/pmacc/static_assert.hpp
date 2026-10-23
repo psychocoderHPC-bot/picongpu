@@ -24,6 +24,7 @@
 
 #include "pmacc/ppFunctions.hpp"
 
+#include <alpaka/core/config.hpp>
 #include <boost/mpl/assert.hpp>
 
 namespace pmacc
@@ -46,7 +47,7 @@ namespace pmacc
  * @param pmacc_unique_id pre compiler unique id
  * @param pmacc_typeInfo a type that is shown in error message
  */
-#if ALPAKA_LANG_CUDA && ALPAKA_COMP_CLANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_COMP_INTEL
+#if ALPAKA_LANG_CUDA && ALPAKA_COMP_CLANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_COMP_ICPX
 /* device compile with clang: boost static assert can not be used
  * error is: calling a `__host__` function from `__device__`
  * Therefore C++11 `static_assert` is used

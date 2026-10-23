@@ -275,7 +275,7 @@ namespace picongpu::particles::atomicPhysics::ionizationPotentialDepression
                     StewartPyattIPD<T_TemperatureFunctor, T_useSCFLYextendedStewartPyattIPD>,
                     std::integral_constant<bool, T_SkipFinishedSuperCell>>>;
             ForEachIonSpeciesApplyIPDIonization{}(mappingDesc);
-        };
+        }
 
         /** get the super cell constant input
          *

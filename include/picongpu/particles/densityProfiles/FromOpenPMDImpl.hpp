@@ -217,7 +217,7 @@ namespace picongpu
                         if(axisLabels.size() <= 1)
                             axisLabels = std::vector<std::string>{"x", "y", "z"};
                         std::array<std::string, 3> supportedAxes = {"x", "y", "z"};
-                        for(auto d = 0; d < simDim; d++)
+                        for(uint32_t d = 0; d < simDim; d++)
                         {
                             auto it = std::find(begin(supportedAxes), begin(supportedAxes) + simDim, axisLabels[d]);
                             if(it != std::end(supportedAxes))
@@ -241,7 +241,7 @@ namespace picongpu
                     T_Vector xyzToOpenPMD(T_Vector const& vector) const
                     {
                         auto result = vector;
-                        for(auto d = 0; d < simDim; d++)
+                        for(uint32_t d = 0; d < simDim; d++)
                             result[openPMDAxisIndex[d]] = vector[d];
                         return result;
                     }
@@ -256,7 +256,7 @@ namespace picongpu
                     T_Vector openPMDToXyz(T_Vector const& vector) const
                     {
                         auto result = vector;
-                        for(int32_t d = 0; d < simDim; d++)
+                        for(uint32_t d = 0; d < simDim; d++)
                             result[xyzAxisIndex[d]] = vector[d];
                         return result;
                     }

@@ -39,8 +39,10 @@ namespace pmacc
 
             HDINLINE result operator()(double value)
             {
-#if (PMACC_DEVICE_COMPILE == 1) // we are on gpu
+#if (PMACC_DEVICE_COMPILE == 1) && (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
                 return ::__double2int_ru(value);
+#elif (PMACC_DEVICE_COMPILE == 1) && ALPAKA_LANG_SYCL
+                return static_cast<int>(sycl::ceil(value));
 #else
                 return static_cast<int>(ceil(value));
 #endif
@@ -54,8 +56,10 @@ namespace pmacc
 
             HDINLINE result operator()(double value)
             {
-#if (PMACC_DEVICE_COMPILE == 1) // we are on gpu
+#if (PMACC_DEVICE_COMPILE == 1) && (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
                 return ::__double2int_rd(value);
+#elif (PMACC_DEVICE_COMPILE == 1) && ALPAKA_LANG_SYCL
+                return static_cast<int>(sycl::floor(value));
 #else
                 return static_cast<int>(floor(value));
 #endif
@@ -69,8 +73,10 @@ namespace pmacc
 
             HDINLINE result operator()(double value)
             {
-#if (PMACC_DEVICE_COMPILE == 1) // we are on gpu
+#if (PMACC_DEVICE_COMPILE == 1) && (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
                 return ::__double2int_rn(value);
+#elif (PMACC_DEVICE_COMPILE == 1) && ALPAKA_LANG_SYCL
+                return static_cast<int>(sycl::rint(value));
 #else
                 if(value < 0.0)
                     return -(*this)(-value);
