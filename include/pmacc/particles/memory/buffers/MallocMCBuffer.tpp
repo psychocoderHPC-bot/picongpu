@@ -21,7 +21,7 @@
 
 #pragma once
 
-#if (ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP || ALPAKA_LANG_SYCL)
 
 #    include "pmacc/alpakaHelper/Device.hpp"
 #    include "pmacc/eventSystem/eventSystem.hpp"

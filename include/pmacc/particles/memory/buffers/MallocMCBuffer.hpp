@@ -29,7 +29,7 @@
 #include <memory>
 #include <string>
 
-#if (ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP || ALPAKA_LANG_SYCL)
 
 #    include <memory>
 

@@ -26,7 +26,7 @@ namespace picongpu
 {
     using namespace pmacc;
 
-#if (!ALPAKA_LANG_CUDA && !ALPAKA_COMP_HIP)
+#if (!ALPAKA_LANG_CUDA && !ALPAKA_COMP_HIP && !ALPAKA_LANG_SYCL)
     /* dummy because we are not using mallocMC with CPU backends
      * DeviceHeap is defined in `mallocMC.param`
      */

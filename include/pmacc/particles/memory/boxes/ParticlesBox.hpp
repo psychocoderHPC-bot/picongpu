@@ -22,7 +22,7 @@
 
 #pragma once
 
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_LANG_SYCL)
 #    include <mallocMC/mallocMC.hpp>
 #endif
 #include "pmacc/dimensions/DataSpace.hpp"
@@ -102,7 +102,7 @@ namespace pmacc
             int const maxTries = 13; // magic number is not performance critical
             for(int numTries = 0; numTries < maxTries; ++numTries)
             {
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_LANG_SYCL)
                 tmp = (FrameType*) m_deviceHeapHandle.malloc(worker.getAcc(), sizeof(FrameType));
 #else
                 tmp = new(std::nothrow) FrameType;
@@ -131,7 +131,7 @@ namespace pmacc
         template<typename T_Worker>
         DINLINE void removeFrame(T_Worker const& worker, FramePtr& frame)
         {
-#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
+#if (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP || ALPAKA_LANG_SYCL)
             m_deviceHeapHandle.free(worker.getAcc(), (void*) frame.ptr);
 #else
             delete(frame.ptr);

@@ -251,6 +251,7 @@ set_target_properties(pmacc PROPERTIES LINKER_LANGUAGE CXX)
 
 add_library(pmacc::pmacc ALIAS pmacc)
 target_link_libraries(pmacc PUBLIC alpaka::alpaka)
+
 alpaka_finalize(pmacc)
 
 ###############################################################################
@@ -454,7 +455,7 @@ endif()
 # Find mallocMC
 ################################################################################
 
-if(alpaka_DEP_CUDA OR alpaka_DEP_HIP)
+if(alpaka_DEP_CUDA OR alpaka_DEP_HIP OR alpaka_DEP_ONEAPI)
     include(FetchContent)
 
     FetchContent_Declare(
