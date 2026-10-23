@@ -332,6 +332,8 @@ TEST_CASE("executor selection matches the configured backend", "[executor]")
     STATIC_REQUIRE(std::is_same_v<pmacc::ComputeExecutorType, ::alpaka::exec::GpuCuda>);
 #elif defined(ALPAKA_LANG_HIP) && ALPAKA_LANG_HIP
     STATIC_REQUIRE(std::is_same_v<pmacc::ComputeExecutorType, ::alpaka::exec::GpuHip>);
+#elif defined(ALPAKA_LANG_ONEAPI) && ALPAKA_LANG_ONEAPI
+    STATIC_REQUIRE(std::is_same_v<pmacc::ComputeExecutorType, ::alpaka::exec::OneApi>);
 #elif !defined(ALPAKA_DISABLE_EXEC_CpuOmpBlocks)
     STATIC_REQUIRE(std::is_same_v<pmacc::ComputeExecutorType, ::alpaka::exec::CpuOmpBlocks>);
 #elif !defined(ALPAKA_DISABLE_EXEC_CpuTbbBlocks)

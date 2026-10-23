@@ -45,7 +45,7 @@ help()
     echo "                       (default is <inputDirectory>)"
     echo "-b | --backend        - set compute backend and optionally the architecture"
     echo "                        syntax: backend[:architecture]"
-    echo "                        supported backends: cuda, hip, omp2b, serial, tbb, threads"
+    echo "                        supported backends: cuda, hip, omp2b, oneApi, serial, tbb, threads"
     echo "                        (e.g.: \"cuda:35;37;52;60\" or \"omp2b:native\" or \"omp2b\")"
     echo "                        default: \"cuda\" if not set via environment variable PIC_BACKEND"
     echo "                        note: architecture names are compiler dependent"
@@ -101,6 +101,10 @@ get_backend_flags()
         if [ $num_options -eq 2 ] ; then
             result+=" -DCMAKE_HIP_ARCHITECTURES=${backend_cfg[1]}"
         fi
+    elif [ "${backend_cfg[0]}" == "oneApi" ] ; then
+        # SYCL has no architecture set at configure time; the device targets are
+        # selected by alpaka (spir64 for Intel GPUs).
+        result+=" -Dalpaka_DEP_ONEAPI=ON -Dalpaka_EXEC_OneApi=ON -Dalpaka_DEP_OMP=OFF"
     else
         echo "unsupported backend given '$1'" >&2
         exit 1

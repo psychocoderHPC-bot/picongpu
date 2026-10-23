@@ -36,6 +36,65 @@ list(APPEND CMAKE_PREFIX_PATH "$ENV{CMAKE_PREFIX_PATH}")
 
 # own modules for find_packages e.g. FindmallocMC
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PMacc_DIR}/../../thirdParty/cmake-modules/)
+# own find module for the SYCL compiler target required by alpaka's oneAPI
+# backend (IntelSYCL::SYCL_CXX)
+list(APPEND CMAKE_MODULE_PATH "${PMacc_DIR}/../../cmake")
+
+################################################################################
+# Intel oneAPI/SYCL compiler setup
+################################################################################
+
+if(alpaka_DEP_ONEAPI)
+    include(CheckCXXCompilerFlag)
+    include(CheckCXXSourceCompiles)
+
+    # Probe only compilation. Linking -fsycl requires the SYCL runtime in the
+    # linker search path, which must not decide compiler support.
+    set(_pmacc_saved_try_compile_target_type "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+    check_cxx_compiler_flag("-fsycl" PMACC_CXX_HAS_FSYCL)
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE "${_pmacc_saved_try_compile_target_type}")
+
+    if(NOT PMACC_CXX_HAS_FSYCL)
+        message(
+            FATAL_ERROR
+            "alpaka_DEP_ONEAPI requires a SYCL capable compiler supporting '-fsycl' "
+            "(CMAKE_CXX_COMPILER: ${CMAKE_CXX_COMPILER})."
+        )
+    endif()
+
+    # alpaka derives ALPAKA_COMP_ICPX and ALPAKA_LANG_ONEAPI from
+    # __INTEL_LLVM_COMPILER. icpx predefines it, clang based DPC++ builds do
+    # not, although they are full SYCL compilers. Provide a non-zero version
+    # only for such compilers; any non-zero value enables ALPAKA_LANG_ONEAPI.
+    check_cxx_source_compiles(
+        "#ifndef __INTEL_LLVM_COMPILER
+#    error \"__INTEL_LLVM_COMPILER is not predefined\"
+#endif
+int main() { return 0; }"
+        PMACC_CXX_DEFINES_INTEL_LLVM_COMPILER
+    )
+    if(NOT PMACC_CXX_DEFINES_INTEL_LLVM_COMPILER)
+        # The value is only interpreted as a compiler version by alpaka. The
+        # SYCL standard version is taken from SYCL_LANGUAGE_VERSION.
+        add_compile_definitions(__INTEL_LLVM_COMPILER=20261014)
+    endif()
+
+    # clang 23's cpuid.h declares __cpuidex although '-fsycl' makes it a
+    # builtin, so including <cpuid.h> (used by alpaka's host sysInfo) fails
+    # with "static declaration follows non-static declaration". Renaming the
+    # function via the preprocessor keeps both the header's guard and alpaka's
+    # call consistent. Apply the workaround only for affected toolchains.
+    set(_pmacc_saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
+    set(CMAKE_REQUIRED_FLAGS "-fsycl")
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+    check_cxx_source_compiles("#include <cpuid.h>\nint main() { return 0; }" PMACC_SYCL_CPUID_HEADER_COMPILES)
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE "${_pmacc_saved_try_compile_target_type}")
+    set(CMAKE_REQUIRED_FLAGS "${_pmacc_saved_required_flags}")
+    if(NOT PMACC_SYCL_CPUID_HEADER_COMPILES)
+        add_compile_definitions(__cpuidex=w1_cpuidex)
+    endif()
+endif()
 
 ################################################################################
 # alpaka path

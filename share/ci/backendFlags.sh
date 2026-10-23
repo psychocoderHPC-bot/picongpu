@@ -47,6 +47,8 @@ get_backend_flags()
             # If no architecture is given build for Radeon VII or MI50/60.
             result+=" -DCMAKE_HIP_ARCHITECTURES=gfx906"
         fi
+    elif [ "${backend_cfg[0]}" == "oneApi" ] ; then
+        result+=" -Dalpaka_DEP_ONEAPI=ON -Dalpaka_EXEC_OneApi=ON -Dalpaka_DEP_OMP=OFF"
     else
         echo "unsupported backend given '$1'" >&2
         exit 1
