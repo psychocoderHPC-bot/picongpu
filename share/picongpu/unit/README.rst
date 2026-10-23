@@ -7,6 +7,6 @@ Example how to compile and execute the tests.compile
 
 .. code-block:: bash
     # compile for NVIDIA GPUs
-    cmake <path_to_picongpu_source>/share/picongpu/unit/ -Dalpaka_ACC_GPU_CUDA_ENABLE=ON
+    cmake <path_to_picongpu_source>/share/picongpu/unit/ -Dalpaka_DEP_CUDA=ON
     make -j
     ctest

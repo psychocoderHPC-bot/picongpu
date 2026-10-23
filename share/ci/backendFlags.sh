@@ -40,7 +40,7 @@ get_backend_flags()
             result+=" -DPMACC_CPU_ARCH=${backend_cfg[1]}"
         fi
     elif [ "${backend_cfg[0]}" == "hip" ] ; then
-        result+=" -Dalpaka_DEP_HIP=ON"
+        result+=" -Dalpaka_DEP_HIP=ON -Dalpaka_DEP_OMP=OFF"
         if [ $num_options -eq 2 ] ; then
             result+=" -DCMAKE_HIP_ARCHITECTURES=${backend_cfg[1]}"
         else
