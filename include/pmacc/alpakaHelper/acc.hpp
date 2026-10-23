@@ -48,7 +48,11 @@ namespace pmacc
     inline constexpr ComputeExecutorType ComputeExecutor = ::alpaka::exec::gpuHip;
 #elif defined(ALPAKA_LANG_ONEAPI) && ALPAKA_LANG_ONEAPI
     using ComputeApi = ::alpaka::api::OneApi;
+#    if defined(PIC_ONEAPI_CPU_DEVICE) && PIC_ONEAPI_CPU_DEVICE
+    using ComputeDeviceKind = ::alpaka::deviceKind::Cpu;
+#    else
     using ComputeDeviceKind = ::alpaka::deviceKind::IntelGpu;
+#    endif
     using ComputeExecutorType = ::alpaka::exec::OneApi;
     inline constexpr ComputeExecutorType ComputeExecutor = ::alpaka::exec::oneApi;
 #else

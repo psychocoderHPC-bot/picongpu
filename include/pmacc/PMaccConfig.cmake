@@ -103,6 +103,21 @@ int main() { return 0; }"
     if(NOT PMACC_SYCL_CPUID_HEADER_COMPILES)
         add_compile_definitions(__cpuidex=w1_cpuidex)
     endif()
+
+    # Select the oneAPI device kind at compile time. The default targets an
+    # Intel GPU; Cpu runs the same SYCL executor on the oneAPI CPU device, which
+    # is useful to validate the backend without accelerator hardware.
+    set(
+        PIC_ONEAPI_DEVICE_KIND
+        "IntelGpu"
+        CACHE STRING "oneAPI device kind used by PMacc and PIConGPU (IntelGpu or Cpu)"
+    )
+    set_property(CACHE PIC_ONEAPI_DEVICE_KIND PROPERTY STRINGS "IntelGpu" "Cpu")
+    if(PIC_ONEAPI_DEVICE_KIND STREQUAL "Cpu")
+        add_compile_definitions(PIC_ONEAPI_CPU_DEVICE=1)
+    elseif(NOT PIC_ONEAPI_DEVICE_KIND STREQUAL "IntelGpu")
+        message(FATAL_ERROR "PIC_ONEAPI_DEVICE_KIND must be 'IntelGpu' or 'Cpu'.")
+    endif()
 endif()
 
 ################################################################################
@@ -252,11 +267,17 @@ set_target_properties(pmacc PROPERTIES LINKER_LANGUAGE CXX)
 add_library(pmacc::pmacc ALIAS pmacc)
 target_link_libraries(pmacc PUBLIC alpaka::alpaka)
 
-if(alpaka_DEP_ONEAPI AND alpaka_ONEAPI_IntelGpu)
-    # The SPIR64 device target has no 128-bit long double, but PIConGPU's _X and
-    # _COLL literal operators must take long double by language rule. Compile
-    # the device pass with a 64-bit long double, the host ABI stays unchanged.
-    target_compile_options(pmacc PUBLIC -Xsycl-target-frontend=spir64 -mlong-double-64)
+if(alpaka_DEP_ONEAPI)
+    # The SPIR64 device targets have no 128-bit long double, but PIConGPU's _X
+    # and _COLL literal operators must take long double by language rule.
+    # Compile the device pass with a 64-bit long double, the host ABI stays
+    # unchanged.
+    if(alpaka_ONEAPI_IntelGpu)
+        target_compile_options(pmacc PUBLIC -Xsycl-target-frontend=spir64 -mlong-double-64)
+    endif()
+    if(alpaka_ONEAPI_Cpu)
+        target_compile_options(pmacc PUBLIC -Xsycl-target-frontend=spir64_x86_64 -mlong-double-64)
+    endif()
 endif()
 
 alpaka_finalize(pmacc)
