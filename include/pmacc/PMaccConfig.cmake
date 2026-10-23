@@ -252,6 +252,13 @@ set_target_properties(pmacc PROPERTIES LINKER_LANGUAGE CXX)
 add_library(pmacc::pmacc ALIAS pmacc)
 target_link_libraries(pmacc PUBLIC alpaka::alpaka)
 
+if(alpaka_DEP_ONEAPI AND alpaka_ONEAPI_IntelGpu)
+    # The SPIR64 device target has no 128-bit long double, but PIConGPU's _X and
+    # _COLL literal operators must take long double by language rule. Compile
+    # the device pass with a 64-bit long double, the host ABI stays unchanged.
+    target_compile_options(pmacc PUBLIC -Xsycl-target-frontend=spir64 -mlong-double-64)
+endif()
+
 alpaka_finalize(pmacc)
 
 ###############################################################################
