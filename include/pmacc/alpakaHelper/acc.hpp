@@ -129,7 +129,8 @@ namespace pmacc
      *
      * Value is 1 if device path is compiled else 0
      */
-#if defined(__CUDA_ARCH__) || (defined(__HIP_DEVICE_COMPILE__) && __HIP_DEVICE_COMPILE__ == 1 && defined(__HIP__))
+#if defined(__CUDA_ARCH__) || (defined(__HIP_DEVICE_COMPILE__) && __HIP_DEVICE_COMPILE__ == 1 && defined(__HIP__)) \
+    || defined(__SYCL_DEVICE_ONLY__)
 #    define PMACC_DEVICE_COMPILE 1
 #else
 #    define PMACC_DEVICE_COMPILE 0

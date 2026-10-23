@@ -55,12 +55,24 @@ namespace pmacc
      * @param isValid if false code execution will stop with an error, else nothing will be executed
      * @param printfArgs arguments forwarded to printf
      */
-    template<typename... T_PrintfArgs>
-    constexpr void device_verify_msg(bool isValid, T_PrintfArgs&&... printfArgs)
+    template<typename T_Format, typename... T_PrintfArgs>
+    constexpr void device_verify_msg(bool isValid, T_Format&& formatString, T_PrintfArgs&&... printfArgs)
     {
         if(!isValid)
         {
-            printf(std::forward<T_PrintfArgs>(printfArgs)...);
+#if defined(__SYCL_DEVICE_ONLY__)
+            // alpaka's SYCL printf wrapper stores the format in a static variable,
+            // which requires a constant expression. A forwarded format parameter is
+            // not constant, so call the SPIR-V printf builtin directly.
+            (sycl::ext::oneapi::experimental::printf)(
+                static_cast<char const*>(formatString),
+                std::forward<T_PrintfArgs>(printfArgs)...);
+#else
+            // Decay array format strings to pointers. alpaka's SYCL printf wrapper
+            // brace-initializes the pointer from the argument, which is ill-formed
+            // for an array lvalue.
+            printf(static_cast<char const*>(formatString), std::forward<T_PrintfArgs>(printfArgs)...);
+#endif
 #if (PMACC_DEVICE_COMPILE == 1)
 #    if ALPAKA_COMP_HIP
             __builtin_trap();

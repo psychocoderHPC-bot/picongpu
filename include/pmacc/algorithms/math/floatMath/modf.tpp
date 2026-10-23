@@ -36,7 +36,7 @@ namespace pmacc
 
             HDINLINE float operator()(float value, float* intpart)
             {
-#if (PMACC_DEVICE_COMPILE == 1) // we are on gpu
+#if (PMACC_DEVICE_COMPILE == 1) && (ALPAKA_LANG_CUDA || ALPAKA_COMP_HIP)
                 return ::modff(value, intpart);
 #else
                 return std::modf(value, intpart);

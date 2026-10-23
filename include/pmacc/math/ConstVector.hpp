@@ -25,6 +25,16 @@
 #include "pmacc/ppFunctions.hpp"
 #include "pmacc/types.hpp"
 
+/* Device storage qualifier for constant vectors. CUDA/HIP need __device__, SYCL
+ * is satisfied with a constant-initialized constexpr object. */
+#if ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP
+#    define PMACC_STATIC_CONST_VECTOR_DEVICE_STORAGE(Type) __device__ const Type
+#    define PMACC_STATIC_CONST_VECTOR_DEVICE_STORAGE_CONSTEXPR __device__ constexpr
+#elif ALPAKA_LANG_SYCL
+#    define PMACC_STATIC_CONST_VECTOR_DEVICE_STORAGE(Type) constexpr Type
+#    define PMACC_STATIC_CONST_VECTOR_DEVICE_STORAGE_CONSTEXPR constexpr
+#endif
+
 /* select namespace depending on __CUDA_ARCH__ compiler flag*/
 #if (PMACC_DEVICE_COMPILE == 1)
 #    define PMACC_USING_STATIC_CONST_VECTOR_NAMESPACE(id)                                                             \
@@ -34,12 +44,12 @@
         using namespace PMACC_JOIN(pmacc_static_const_vector_host, id)
 #endif
 
-#if ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP
+#if ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP || ALPAKA_LANG_SYCL
 #    define PMACC_STATIC_CONST_VECTOR_DIM_DEF_CUDA(id, Name, Type, ...)                                               \
         namespace PMACC_JOIN(pmacc_static_const_vector_device, id)                                                    \
         {                                                                                                             \
             /* store all values in a const C array on device*/                                                        \
-            [[maybe_unused]] __device__ const Type PMACC_JOIN(Name, _data)[] = {__VA_ARGS__};                                          \
+            [[maybe_unused]] PMACC_STATIC_CONST_VECTOR_DEVICE_STORAGE(Type) PMACC_JOIN(Name, _data)[] = {__VA_ARGS__};  \
         } /*namespace pmacc_static_const_vector_device + id */
 #else
 #    define PMACC_STATIC_CONST_VECTOR_DIM_DEF_CUDA(id, Name, Type, ...)
@@ -83,12 +93,12 @@
     } /* namespace pmacc_static_const_storage + id */                                                                 \
     using namespace PMACC_JOIN(pmacc_static_const_storage, id)
 
-#if ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP
+#if ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP || ALPAKA_LANG_SYCL
 #    define PMACC_STATIC_CONST_VECTOR_DIM_INSTANCE_CUDA(Name, id)                                                     \
         namespace PMACC_JOIN(pmacc_static_const_vector_device, id)                                                    \
         {                                                                                                             \
             /* create const instance on device */                                                                     \
-            [[maybe_unused]] __device__ constexpr PMACC_JOIN(Name, _t) Name{};                                        \
+            [[maybe_unused]] PMACC_STATIC_CONST_VECTOR_DEVICE_STORAGE_CONSTEXPR PMACC_JOIN(Name, _t) Name{};          \
         } /* namespace pmacc_static_const_vector_device + id */
 #else
 #    define PMACC_STATIC_CONST_VECTOR_DIM_INSTANCE_CUDA(Name, id)
