@@ -28,6 +28,119 @@ namespace picongpu
 {
     namespace plugins::binning
     {
+        /** Device functors used by this example.
+         *
+         * Plain structs with a templated call operator are used instead of generic
+         * lambdas because nvcc does not accept ``__host__ __device__`` generic lambdas.
+         */
+        struct GetPositionY
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE int operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle)
+                const
+            {
+                auto posBin = getParticlePosition<DomainOrigin::TOTAL>(domainInfo, particle);
+                return posBin[1];
+            }
+        };
+
+        struct GetMomentumY
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE float_X
+            operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle) const
+            {
+                return particle[momentum_][1] / particle[weighting_];
+            }
+        };
+
+        struct GetTimeStepParticle
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE uint32_t
+            operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle) const
+            {
+                return domainInfo.currentStep;
+            }
+        };
+
+        struct GetAllParticles
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE bool operator()(
+                T_Worker const& worker,
+                T_DomainInfo const& domainInfo,
+                T_Particle const& particle) const
+            {
+                return true;
+            }
+        };
+
+        struct GetParticleChargeDensity
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE float_X
+            operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle) const
+            {
+                float_X const charge = picongpu::traits::attribute::getCharge(particle[weighting_], particle);
+                float_X const particleChargeDensity
+                    = precisionCast<float_X>(charge / sim.pic.getCellSize().productOfComponents());
+                return particleChargeDensity;
+            }
+        };
+
+        struct GetParticleCount
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE float_X
+            operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle) const
+            {
+                return 1.0;
+            }
+        };
+
+        struct GetSquaredFieldAmplitude
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Field1, typename T_Field2>
+            HDINLINE float_X operator()(
+                T_Worker const& worker,
+                T_DomainInfo const& domainInfo,
+                T_Field1 const& field1,
+                T_Field2 const& field2) const
+            {
+                auto fieldValue = field1(domainInfo.template getCellIndex<DomainOrigin::LOCAL_WITH_GUARDS>());
+                auto squaredSum = fieldValue.x() * fieldValue.x() + fieldValue.y() * fieldValue.y()
+                                  + fieldValue.z() * fieldValue.z();
+                return squaredSum;
+            }
+        };
+
+        struct GetTimeStepField
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Field1, typename T_Field2>
+            HDINLINE uint32_t operator()(
+                T_Worker const& worker,
+                T_DomainInfo const& domainInfo,
+                T_Field1 const& field1,
+                T_Field2 const& field2) const
+            {
+                return domainInfo.currentStep;
+            }
+        };
+
+        struct GetFieldX
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Field1, typename T_Field2>
+            HDINLINE float_X operator()(
+                T_Worker const& worker,
+                T_DomainInfo const& domainInfo,
+                T_Field1 const& field1,
+                T_Field2 const& field2) const
+            {
+                return field1(domainInfo.template getCellIndex<DomainOrigin::LOCAL_WITH_GUARDS>()).x();
+            }
+        };
+
         void fieldBinningExample(BinningCreator& binningCreator);
 
         void particleBinningExample(BinningCreator& binningCreator);
@@ -48,12 +161,7 @@ namespace picongpu
 
             /// Axis 1
             // Define Functor
-            auto getPositionY
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> int
-            {
-                auto posBin = getParticlePosition<DomainOrigin::TOTAL>(domainInfo, particle);
-                return posBin[1];
-            };
+            GetPositionY getPositionY;
 
             // Create Functor Description
             auto cellPositionYDescription = createFunctorDescription<int>(getPositionY, "position_axisY");
@@ -68,9 +176,7 @@ namespace picongpu
 
             /// Axis 2
             // Define Functor
-            auto getMomentumY
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> float_X
-            { return particle[momentum_][1] / particle[weighting_]; };
+            GetMomentumY getMomentumY;
 
             // doc-include-start: units
             // Define units
@@ -94,9 +200,7 @@ namespace picongpu
 
             /// Axis 3
             // Define Functor
-            auto getTimeStep
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> uint32_t
-            { return domainInfo.currentStep; };
+            GetTimeStepParticle getTimeStep;
 
             // Create Functor Description
             auto timeStepDescription = createFunctorDescription<uint32_t>(getTimeStep, "time_axis");
@@ -120,9 +224,7 @@ namespace picongpu
              * Optionally pass a particle filter to be used for this
              * Simply a particle predicate functor
              */
-            auto allParticles
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> bool
-            { return true; };
+            GetAllParticles allParticles;
 
             auto filteredElectrons = FilteredSpecies{electronsObj, allParticles};
             // doc-include-end: filter
@@ -133,14 +235,7 @@ namespace picongpu
             /**
              * Define deposited quantity here
              */
-            auto getParticleChargeDensity
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> float_X
-            {
-                float_X const charge = picongpu::traits::attribute::getCharge(particle[weighting_], particle);
-                float_X const particleChargeDensity
-                    = precisionCast<float_X>(charge / sim.pic.getCellSize().productOfComponents());
-                return particleChargeDensity;
-            };
+            GetParticleChargeDensity getParticleChargeDensity;
 
             std::array<double, numUnits> depositedUnits{}; // Tell user the 7 dimensional format
             depositedUnits[SIBaseUnits::length] = -3.0;
@@ -152,9 +247,7 @@ namespace picongpu
                 = createFunctorDescription<float_X>(getParticleChargeDensity, "ChargeDensity", depositedUnits);
 
 
-            auto getParticleCount
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> float_X
-            { return 1.0; };
+            GetParticleCount getParticleCount;
             auto getCounts = createFunctorDescription<float_X>(getParticleCount, "Counts");
 
 
@@ -195,15 +288,7 @@ namespace picongpu
 
             /// Axis 1
             // Define Functor
-            auto getSquaredFieldAmplitude
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& field1, auto const& field2)
-                -> float_X
-            {
-                auto fieldValue = field1(domainInfo.template getCellIndex<DomainOrigin::LOCAL_WITH_GUARDS>());
-                auto squaredSum = fieldValue.x() * fieldValue.x() + fieldValue.y() * fieldValue.y()
-                                  + fieldValue.z() * fieldValue.z();
-                return squaredSum;
-            };
+            GetSquaredFieldAmplitude getSquaredFieldAmplitude;
 
             // Create Functor Description
             auto fieldDescription
@@ -218,9 +303,7 @@ namespace picongpu
 
             /// Axis 2
             // Define Functor
-            auto getTimeStep
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& field1, auto const& field2)
-                -> uint32_t { return domainInfo.currentStep; };
+            GetTimeStepField getTimeStep;
 
             // Create Functor Description
             auto timeStepDescription = createFunctorDescription<uint32_t>(getTimeStep, "time_axis");
@@ -241,9 +324,7 @@ namespace picongpu
              * Define deposited quantity here
              */
             // doc-include-start: fieldBox
-            auto getFieldX
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& field1, auto const& field2)
-                -> float_X { return field1(domainInfo.template getCellIndex<DomainOrigin::LOCAL_WITH_GUARDS>()).x(); };
+            GetFieldX getFieldX;
             // doc-include-end: fieldBox
 
             std::array<double, numUnits> depositedUnits{}; // Tell user the 7 dimensional format
