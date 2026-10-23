@@ -68,7 +68,7 @@ namespace pmacc
         {
         }
 
-        HDINLINE SharedBox(SharedBox const&) = default;
+        SharedBox(SharedBox const&) = default;
 
         /*!return the first value in the box (list)
          * @return first value

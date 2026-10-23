@@ -22,6 +22,7 @@
 #include <pmacc/boost_workaround.hpp>
 
 #include <pmacc/Environment.hpp>
+#include <pmacc/alpakaHelper/acc.hpp>
 #include <pmacc/lockstep.hpp>
 #include <pmacc/memory/buffers/HostDeviceBuffer.hpp>
 #include <pmacc/test/PMaccFixture.hpp>
@@ -31,6 +32,7 @@
 #include <iostream>
 #include <string>
 #include <tuple>
+#include <type_traits>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -45,6 +47,34 @@ static MyPMaccFixture fixture;
 
 constexpr uint32_t numElements = 4096u;
 
+/** Count how often each index is processed.
+ *
+ * A correct work division visits every index exactly once, independently of the
+ * executor (GPU, OpenMP blocks or serial).
+ */
+struct CountVisitsKernel
+{
+    template<typename T_Worker, typename T_DataBox>
+    HDINLINE void operator()(T_Worker const& worker, T_DataBox data, uint32_t size) const
+    {
+        constexpr uint32_t blockDomSize = T_Worker::blockDomSize();
+        auto numDataBlocks = (size + blockDomSize - 1u) / blockDomSize;
+
+        for(uint32_t dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
+        {
+            auto dataBlockOffset = dataBlock * blockDomSize;
+            auto forEach = pmacc::lockstep::makeForEach(worker);
+            forEach(
+                [&](uint32_t const inBlockIdx)
+                {
+                    auto idx = dataBlockOffset + inBlockIdx;
+                    if(idx < size)
+                        data[idx] += 1u;
+                });
+        }
+    }
+};
+
 // doc-include-start: lockstep generic kernel
 struct IotaGenericKernel
 {
@@ -55,7 +85,7 @@ struct IotaGenericKernel
         auto numDataBlocks = (size + blockDomSize - 1u) / blockDomSize;
 
         // grid-strided loop over the chunked data
-        for(int dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
+        for(uint32_t dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
         {
             auto dataBlockOffset = dataBlock * blockDomSize;
             auto forEach = pmacc::lockstep::makeForEach(worker);
@@ -119,7 +149,7 @@ struct IotaFixedChunkSizeKernel
         auto numDataBlocks = (size + blockDomSize - 1u) / blockDomSize;
 
         // grid-strided loop over the chunked data
-        for(int dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
+        for(uint32_t dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
         {
             auto dataBlockOffset = dataBlock * blockDomSize;
             auto forEach = pmacc::lockstep::makeForEach(worker);
@@ -163,7 +193,7 @@ struct IotaFixedChunkSizeKernelND
         // grid-strided loop over the chunked data
         auto numDataBlocks = (size + blockDomSize - 1u) / blockDomSize;
 
-        for(int dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
+        for(uint32_t dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
         {
             auto dataBlockOffset = dataBlock * blockDomSize;
             auto forEach = pmacc::lockstep::makeForEach(worker);
@@ -201,10 +231,10 @@ struct IotaGenericKernelWithDynSharedMem
         constexpr uint32_t blockDomSize = T_Worker::blockDomSize();
         auto numDataBlocks = (size + blockDomSize - 1u) / blockDomSize;
 
-        uint32_t* s_mem = ::alpaka::getDynSharedMem<uint32_t>(worker.getAcc());
+        uint32_t* s_mem = ::alpaka::onAcc::getDynSharedMem<uint32_t>(worker.getAcc());
 
         // grid-strided loop over the chunked data
-        for(int dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
+        for(uint32_t dataBlock = worker.blockDomIdx(); dataBlock < numDataBlocks; dataBlock += worker.gridDomSize())
         {
             auto dataBlockOffset = dataBlock * blockDomSize;
             auto forEach = pmacc::lockstep::makeForEach(worker);
@@ -292,4 +322,45 @@ TEST_CASE("lockstep kernel", "[iota]")
 
     // execute all tests
     std::apply([&](auto&... x) { (..., runTest(x)); }, testsFunctions);
+}
+
+TEST_CASE("executor selection matches the configured backend", "[executor]")
+{
+    // A build must use the executor selected by the alpaka CMake options. This
+    // guards against silently running a differently configured executor.
+#if defined(ALPAKA_LANG_CUDA) && ALPAKA_LANG_CUDA
+    STATIC_REQUIRE(std::is_same_v<pmacc::ComputeExecutorType, ::alpaka::exec::GpuCuda>);
+#elif defined(ALPAKA_LANG_HIP) && ALPAKA_LANG_HIP
+    STATIC_REQUIRE(std::is_same_v<pmacc::ComputeExecutorType, ::alpaka::exec::GpuHip>);
+#elif !defined(ALPAKA_DISABLE_EXEC_CpuOmpBlocks)
+    STATIC_REQUIRE(std::is_same_v<pmacc::ComputeExecutorType, ::alpaka::exec::CpuOmpBlocks>);
+#elif !defined(ALPAKA_DISABLE_EXEC_CpuTbbBlocks)
+    STATIC_REQUIRE(std::is_same_v<pmacc::ComputeExecutorType, ::alpaka::exec::CpuTbbBlocks>);
+#elif !defined(ALPAKA_DISABLE_EXEC_CpuSerial)
+    STATIC_REQUIRE(std::is_same_v<pmacc::ComputeExecutorType, ::alpaka::exec::CpuSerial>);
+#else
+    STATIC_REQUIRE(false); // no executor configured, acc.hpp must fail before this point
+#endif
+    STATIC_REQUIRE(std::is_same_v<decltype(pmacc::ComputeExecutor), pmacc::ComputeExecutorType const>);
+}
+
+TEST_CASE("lockstep visits every index exactly once", "[iota]")
+{
+    using namespace pmacc;
+
+    auto hostDeviceBuffer = HostDeviceBuffer<uint32_t, DIM1>(DataSpace<DIM1>{numElements});
+    constexpr uint32_t chunkSize = 128u;
+    // One block per chunk so that every index belongs to exactly one block and
+    // the grid-strided loop in the kernel has to cover the full range.
+    uint32_t const numBlocks = numElements / chunkSize;
+    STATIC_REQUIRE(numElements % chunkSize == 0u);
+
+    hostDeviceBuffer.getDeviceBuffer().setValue(0u);
+    PMACC_LOCKSTEP_KERNEL(CountVisitsKernel{})
+        .config<chunkSize>(numBlocks)(hostDeviceBuffer.getDeviceBuffer().getDataBox(), numElements);
+    hostDeviceBuffer.deviceToHost();
+
+    auto& hostBuffer = hostDeviceBuffer.getHostBuffer();
+    for(uint32_t i = 0u; i < numElements; ++i)
+        REQUIRE(hostBuffer.data()[i] == 1u);
 }

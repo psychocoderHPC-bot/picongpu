@@ -21,7 +21,7 @@
 
 #pragma once
 
-#if (PMACC_USE_STD_EXPERIMENTAL_FILESYSTEM == 1)
+#if defined(PMACC_USE_STD_EXPERIMENTAL_FILESYSTEM) && PMACC_USE_STD_EXPERIMENTAL_FILESYSTEM == 1
 #    include <experimental/filesystem>
 namespace stdfs = std::experimental::filesystem;
 #else

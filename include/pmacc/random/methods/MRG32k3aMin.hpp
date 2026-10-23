@@ -24,7 +24,7 @@
 #include "pmacc/static_assert.hpp"
 #include "pmacc/types.hpp"
 
-#if (!ALPAKA_ACC_GPU_CUDA_ENABLED)
+#if (!ALPAKA_LANG_CUDA)
 #    include "pmacc/random/methods/AlpakaRand.hpp"
 #else
 #    include <curand_kernel.h>
@@ -37,7 +37,7 @@ namespace pmacc
     {
         namespace methods
         {
-#if (!ALPAKA_ACC_GPU_CUDA_ENABLED)
+#if (!ALPAKA_LANG_CUDA)
             //! fallback to alpaka RNG if a cpu accelerator is used
             template<typename T_Acc = pmacc::Acc<DIM1>>
             using MRG32k3aMin = AlpakaRand<T_Acc>;
@@ -57,18 +57,30 @@ namespace pmacc
                 DINLINE void init(T_Worker const& worker, StateType& state, uint32_t seed, uint32_t subsequence = 0)
                     const
                 {
+                    /* curand device functions are only available in the device compilation pass.
+                     * The host version is never called (CPU builds use the AlpakaRand fallback).
+                     */
+#if defined(__CUDA_ARCH__) || (defined(__HIP_DEVICE_COMPILE__) && __HIP_DEVICE_COMPILE__ == 1)
                     curandStateMRG32k3a tmpState;
                     curand_init(seed, subsequence, 0, &tmpState);
                     AssignState(state, tmpState);
+#else
+                    ::alpaka::unused(worker, state, seed, subsequence);
+#endif
                 }
 
                 template<typename T_Worker>
                 DINLINE uint32_t get32Bits(T_Worker const& worker, StateType& state) const
                 {
+#if defined(__CUDA_ARCH__) || (defined(__HIP_DEVICE_COMPILE__) && __HIP_DEVICE_COMPILE__ == 1)
                     /* We can do this cast if: 1) Only state data is used and
                      *                         2) Data is aligned and positioned the same way
                      */
                     return curand(reinterpret_cast<curandStateMRG32k3a*>(&state));
+#else
+                    ::alpaka::unused(worker, state);
+                    return 0u;
+#endif
                 }
 
                 template<typename T_Worker>

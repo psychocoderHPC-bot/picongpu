@@ -138,27 +138,27 @@ namespace picongpu
                         auto const globalCellOffset = globalOffset + localSupercellStart + frameCellOffset;
                         float_X const posX = (float_X(globalCellOffset.x()) + pos.x()) * sim.pic.getCellSize().x();
 
-                        alpaka::atomicAdd(
+                        ::alpaka::onAcc::atomicAdd(
                             lockstepWorker.getAcc(),
                             &(shCount_e[index_y]),
                             normedWeighting,
-                            ::alpaka::hierarchy::Threads{});
+                            ::alpaka::onAcc::scope::Block{});
                         // weighted sum of single Electron values (Momentum = particle_momentum/weighting)
-                        alpaka::atomicAdd(
+                        ::alpaka::onAcc::atomicAdd(
                             lockstepWorker.getAcc(),
                             &(shSumMom2[index_y]),
                             mom.x() * mom.x() * normedWeighting,
-                            ::alpaka::hierarchy::Threads{});
-                        alpaka::atomicAdd(
+                            ::alpaka::onAcc::scope::Block{});
+                        ::alpaka::onAcc::atomicAdd(
                             lockstepWorker.getAcc(),
                             &(shSumPos2[index_y]),
                             posX * posX * normedWeighting,
-                            ::alpaka::hierarchy::Threads{});
-                        alpaka::atomicAdd(
+                            ::alpaka::onAcc::scope::Block{});
+                        ::alpaka::onAcc::atomicAdd(
                             lockstepWorker.getAcc(),
                             &(shSumMomPos[index_y]),
                             mom.x() * posX * normedWeighting,
-                            ::alpaka::hierarchy::Threads{});
+                            ::alpaka::onAcc::scope::Block{});
                     }
                 });
 
@@ -171,27 +171,27 @@ namespace picongpu
             forEachSuperCellInY(
                 [&](uint32_t const linearIdx)
                 {
-                    alpaka::atomicAdd(
+                    ::alpaka::onAcc::atomicAdd(
                         worker.getAcc(),
                         &(gSumMom2[gOffset + linearIdx]),
                         static_cast<float_64>(shSumMom2[linearIdx]),
-                        ::alpaka::hierarchy::Blocks{});
-                    alpaka::atomicAdd(
+                        ::alpaka::onAcc::scope::Device{});
+                    ::alpaka::onAcc::atomicAdd(
                         worker.getAcc(),
                         &(gSumPos2[gOffset + linearIdx]),
                         static_cast<float_64>(shSumPos2[linearIdx]),
-                        ::alpaka::hierarchy::Blocks{});
-                    alpaka::atomicAdd(
+                        ::alpaka::onAcc::scope::Device{});
+                    ::alpaka::onAcc::atomicAdd(
 
                         worker.getAcc(),
                         &(gSumMomPos[gOffset + linearIdx]),
                         static_cast<float_64>(shSumMomPos[linearIdx]),
-                        ::alpaka::hierarchy::Blocks{});
-                    alpaka::atomicAdd(
+                        ::alpaka::onAcc::scope::Device{});
+                    ::alpaka::onAcc::atomicAdd(
                         worker.getAcc(),
                         &(gCount_e[gOffset + linearIdx]),
                         static_cast<float_64>(shCount_e[linearIdx]),
-                        ::alpaka::hierarchy::Blocks{});
+                        ::alpaka::onAcc::scope::Device{});
                 });
         }
     };
@@ -465,7 +465,6 @@ namespace picongpu
 
             // Some variables required so that it is possible for the kernel
             // to calculate the absolute position of the particles
-            DataSpace<simDim> localSize(m_cellDescription->getGridLayout().sizeWithoutGuardND());
             SubGrid<simDim> const& subGrid = Environment<simDim>::get().SubGrid();
             int const globalDomainSizeY = subGrid.getGlobalDomain().size.y();
             auto movingWindow = MovingWindow::getInstance().getWindow(currentStep);

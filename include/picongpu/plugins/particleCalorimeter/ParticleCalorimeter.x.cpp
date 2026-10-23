@@ -89,7 +89,7 @@ namespace picongpu
                 vector.erase(vector.begin());
             }
             return vector;
-        };
+        }
 
         void writeMeta(::openPMD::Series& series, ::openPMD::Mesh& mesh, uint32_t currentStep)
         {

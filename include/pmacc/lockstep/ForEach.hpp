@@ -51,7 +51,7 @@ namespace pmacc
                 }
 
                 template<typename T_Functor, typename... T_CtxVars>
-                HDINLINE auto operator()(T_Functor&& functor, Idx idx, T_CtxVars&&... ctxVars) const
+                HDINLINE auto operator()(T_Functor&& functor, Idx, T_CtxVars&&... ctxVars) const
                     -> decltype(std::forward<T_Functor>(functor)(std::forward<T_CtxVars>(ctxVars)...))
                 {
                     return std::forward<T_Functor>(functor)(std::forward<T_CtxVars>(ctxVars)...);
@@ -72,7 +72,7 @@ namespace pmacc
                 }
 
                 template<typename T_Functor>
-                HDINLINE auto operator()(T_Functor&& functor, Idx idx) const
+                HDINLINE auto operator()(T_Functor&& functor, Idx) const
                     -> decltype(std::forward<T_Functor>(functor)())
                 {
                     return std::forward<T_Functor>(functor)();

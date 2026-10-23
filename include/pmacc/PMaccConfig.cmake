@@ -45,7 +45,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PMacc_DIR}/../../thirdParty/cmake-m
 # CMake is not forwarding CMAKE_CUDA_ARCHITECTURES to the CMake CUDA compiler check
 # error: clang: error: cannot find libdevice for sm_20. Provide path to different CUDA installation via --cuda-path, or pass -nocudalib to build without linking with libdevice.
 # The workaround is parsing CMAKE_CUDA_ARCHITECTURES and forward command line parameter directly to clang++.
-if(alpaka_ACC_GPU_CUDA_ENABLE AND CMAKE_CUDA_COMPILER)
+if(alpaka_DEP_CUDA AND CMAKE_CUDA_COMPILER)
     string(REGEX MATCH "(.*clang.*)" IS_CLANGCUDA_COMPILER ${CMAKE_CUDA_COMPILER})
     if(IS_CLANGCUDA_COMPILER)
         foreach(_CUDA_ARCH_ELEM ${CMAKE_CUDA_ARCHITECTURES})
@@ -56,7 +56,7 @@ endif()
 
 # workaround for a CMake bug which is not handled in alpaka 0.7.0
 # https://github.com/alpaka-group/alpaka/pull/1423
-if(alpaka_ACC_GPU_CUDA_ENABLE)
+if(alpaka_DEP_CUDA)
     include(CheckLanguage)
     check_language(CUDA)
     # Use user selected CMake CXX compiler as cuda host compiler to avoid fallback to the default system CXX host compiler.
@@ -89,8 +89,8 @@ endif()
 ################################################################################
 
 # the min and max. supported alpaka version
-set(_PMACC_MIN_ALPAKA_VERSION 1.2.0)
-set(_PMACC_MAX_ALPAKA_VERSION 1.2.0)
+set(_PMACC_MIN_ALPAKA_VERSION 3.0.0)
+set(_PMACC_MAX_ALPAKA_VERSION 3.0.0)
 
 # do not search for alpaka if it already exists
 # for example, a project that includes alpaka via add_subdirectory before including pmacc via add_subdirectory
@@ -104,7 +104,8 @@ if(NOT TARGET alpaka::alpaka)
     mark_as_advanced(PMACC_ALPAKA_PROVIDER)
 
     if(${PMACC_ALPAKA_PROVIDER} STREQUAL "internal")
-        set(alpaka_BUILD_EXAMPLES OFF)
+        set(alpaka_EXAMPLES OFF)
+        set(alpaka_TESTS OFF)
         set(BUILD_TESTING OFF)
         add_subdirectory(${PMacc_DIR}/../../thirdParty/alpaka ${CMAKE_BINARY_DIR}/alpaka EXCLUDE_FROM_ALL)
     else()
@@ -131,6 +132,37 @@ if(NOT TARGET alpaka::alpaka)
 endif()
 
 ################################################################################
+# Host executor selection
+################################################################################
+
+# alpaka enables every host executor whose dependency is available and only
+# disables one when the matching alpaka_EXEC_* build option is OFF. Its headers
+# do not derive ALPAKA_DISABLE_EXEC_* from the available dependencies alone
+# (in particular, disabling the OpenMP dependency with alpaka_DEP_OMP=OFF does
+# not disable the CpuOmpBlocks executor), therefore a serial or TBB build would
+# silently keep using the OpenMP blocks executor. Translate the requested host
+# backend into explicit ALPAKA_DISABLE_EXEC_* definitions. This mapping is
+# PMacc's own contract and is documented here rather than relying on alpaka's
+# internal option handling.
+#
+# The definitions are added to the directory scope before the pmacc target is
+# created: CMake snapshots the directory COMPILE_DEFINITIONS when a target is
+# created, so adding them later would not reach the pmacc library sources. Not
+# every target which compiles PMacc headers links pmacc or alpaka (for example
+# PIConGPU's host-only library), so all translation units must see the same
+# executor type from this directory scope.
+if(alpaka_DEP_OMP)
+    # OpenMP requested: keep CpuOmpBlocks as the preferred host executor.
+elseif(alpaka_DEP_TBB)
+    # TBB requested: the OpenMP blocks executor takes priority over TBB, so it
+    # must be disabled explicitly for CpuTbbBlocks to be selected.
+    add_compile_definitions(ALPAKA_DISABLE_EXEC_CpuOmpBlocks)
+else()
+    # Serial host backend: no block-parallel host executor is available.
+    add_compile_definitions(ALPAKA_DISABLE_EXEC_CpuOmpBlocks ALPAKA_DISABLE_EXEC_CpuTbbBlocks)
+endif()
+
+################################################################################
 # PMacc target
 ################################################################################
 
@@ -138,7 +170,7 @@ file(GLOB_RECURSE PMACC_SRC_FILES "${PMacc_DIR}/*.cpp")
 # remove files located in the directory 'test'
 string(REGEX REPLACE "${PMacc_DIR}/test/.*" "" PMACC_SRC_FILES "${PMACC_SRC_FILES}")
 
-alpaka_add_library(
+add_library(
         pmacc
         STATIC
         ${PMACC_SRC_FILES}
@@ -151,6 +183,7 @@ set_target_properties(pmacc PROPERTIES LINKER_LANGUAGE CXX)
 
 add_library(pmacc::pmacc ALIAS pmacc)
 target_link_libraries(pmacc PUBLIC alpaka::alpaka)
+alpaka_finalize(pmacc)
 
 ###############################################################################
 # Build Flags
@@ -334,7 +367,7 @@ endif()
 
 if(
     "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang"
-    AND (alpaka_ACC_GPU_HIP_ENABLE OR (alpaka_ACC_GPU_CUDA_ENABLE AND alpaka_CUDA_COMPILER MATCHES "clang"))
+    AND (alpaka_DEP_HIP OR (alpaka_DEP_CUDA AND CMAKE_CUDA_COMPILER_ID MATCHES "Clang"))
 )
     # For HIP the problem is that in alpaka '::isnan(), ::sinh(), ::isfinite(), ::isinf()' is not found.
     # The reason could be that if OpenMP is activated clang is using math C headers where all of these functions are macros.
@@ -353,14 +386,7 @@ endif()
 # Find mallocMC
 ################################################################################
 
-if(alpaka_ACC_GPU_CUDA_ENABLE OR alpaka_ACC_GPU_HIP_ENABLE)
-    if(PMACC_alpaka_PROVIDER STREQUAL "intern")
-        set(mallocMC_USE_alpaka
-            "${PMacc_DIR}/../../thirdParty/alpaka"
-            CACHE STRING
-            "Select which alpaka is used for mallocMC"
-        )
-    endif()
+if(alpaka_DEP_CUDA OR alpaka_DEP_HIP)
     include(FetchContent)
 
     FetchContent_Declare(
@@ -373,6 +399,49 @@ if(alpaka_ACC_GPU_CUDA_ENABLE OR alpaka_ACC_GPU_HIP_ENABLE)
     FetchContent_MakeAvailable(mallocMC)
 
     target_link_libraries(pmacc PUBLIC mallocMC::mallocMC)
+endif()
+
+################################################################################
+# Find hiprand
+################################################################################
+
+# ROCm ships the hiprand device headers inside an extra ``hiprand`` folder
+# (``<rocm>/include/hiprand/hiprand_kernel.h``) while the source uses the
+# unqualified ``<hiprand_kernel.h>`` include. Derive the ROCm include root from
+# the HIP toolchain and expose both the root and its ``hiprand`` subfolder.
+if(alpaka_DEP_HIP)
+    set(_pmacc_hip_include_candidates "")
+    if(TARGET hip::host)
+        get_target_property(_pmacc_hip_imported_dirs hip::host INTERFACE_INCLUDE_DIRECTORIES)
+        if(_pmacc_hip_imported_dirs)
+            list(APPEND _pmacc_hip_include_candidates ${_pmacc_hip_imported_dirs})
+        endif()
+    endif()
+    if(DEFINED ENV{ROCM_PATH})
+        list(APPEND _pmacc_hip_include_candidates "$ENV{ROCM_PATH}/include")
+    elseif(DEFINED ENV{HIP_PATH})
+        list(APPEND _pmacc_hip_include_candidates "$ENV{HIP_PATH}/include")
+    endif()
+    if(CMAKE_HIP_COMPILER)
+        # <rocm>/llvm/bin/clang++ -> <rocm>/include
+        get_filename_component(_pmacc_hip_compiler_dir "${CMAKE_HIP_COMPILER}" DIRECTORY)
+        get_filename_component(_pmacc_hip_compiler_dir "${_pmacc_hip_compiler_dir}" DIRECTORY)
+        get_filename_component(_pmacc_hip_compiler_dir "${_pmacc_hip_compiler_dir}" DIRECTORY)
+        list(APPEND _pmacc_hip_include_candidates "${_pmacc_hip_compiler_dir}/include")
+    endif()
+    find_path(
+        PMACC_HIPRAND_INCLUDE_DIR
+        NAMES hiprand/hiprand_kernel.h
+        HINTS ${_pmacc_hip_include_candidates}
+    )
+    if(PMACC_HIPRAND_INCLUDE_DIR)
+        target_include_directories(
+            pmacc
+            PUBLIC "${PMACC_HIPRAND_INCLUDE_DIR}" "${PMACC_HIPRAND_INCLUDE_DIR}/hiprand"
+        )
+    else()
+        message(WARNING "hiprand device headers (hiprand/hiprand_kernel.h) were not found")
+    endif()
 endif()
 
 ################################################################################

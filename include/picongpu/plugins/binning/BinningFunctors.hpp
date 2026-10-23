@@ -26,8 +26,6 @@
 #include <pmacc/lockstep/ForEach.hpp>
 #include <pmacc/particles/algorithm/ForEach.hpp>
 
-#include <alpaka/atomic/Traits.hpp>
-
 #include <cstdint>
 
 namespace picongpu
@@ -39,7 +37,7 @@ namespace picongpu
         {
             using result_type = void;
 
-            DINLINE FunctorParticle() = default;
+            FunctorParticle() = default;
 
             template<typename T_HistBox, typename T_DepositionFunctor, uint32_t T_nAxes>
             DINLINE void operator()(
@@ -83,11 +81,11 @@ namespace picongpu
                         [&](auto const&... extraUserData)
                         { return quantityFunctor(worker, domainInfo, particle, extraUserData...); },
                         userFunctorData);
-                    alpaka::atomicOp<T_AtomicOp>(
+                    ::alpaka::onAcc::atomicOp<T_AtomicOp>(
                         worker.getAcc(),
                         &(histBox[idxOneD]),
                         depositVal,
-                        ::alpaka::hierarchy::Blocks{});
+                        ::alpaka::onAcc::scope::Device{});
                 }
             }
         };
@@ -99,7 +97,7 @@ namespace picongpu
         {
             using result_type = void;
 
-            HINLINE ParticleBinningKernel() = default;
+            ParticleBinningKernel() = default;
 
             template<typename T_HistBox, typename T_DepositionFunctor, typename T_Mapping, uint32_t T_nAxes>
             DINLINE void operator()(
@@ -179,7 +177,7 @@ namespace picongpu
         {
             using result_type = void;
 
-            HINLINE LeavingParticleBinningKernel() = default;
+            LeavingParticleBinningKernel() = default;
 
             template<
                 typename T_Worker,
@@ -252,7 +250,7 @@ namespace picongpu
         {
             using result_type = void;
 
-            DINLINE FunctorCell() = default;
+            FunctorCell() = default;
 
             template<typename T_HistBox, typename T_DepositionFunctor, uint32_t T_nAxes>
             DINLINE void operator()(
@@ -294,11 +292,11 @@ namespace picongpu
                         [&](auto const&... userFunctorData)
                         { return quantityFunctor(worker, domainInfo, userFunctorData...); },
                         userFunctorData);
-                    alpaka::atomicOp<T_AtomicOp>(
+                    ::alpaka::onAcc::atomicOp<T_AtomicOp>(
                         worker.getAcc(),
                         &(histBox[idxOneD]),
                         depositVal,
-                        ::alpaka::hierarchy::Blocks{});
+                        ::alpaka::onAcc::scope::Device{});
                 }
             }
         };
@@ -308,7 +306,7 @@ namespace picongpu
         {
             using result_type = void;
 
-            HDINLINE FieldBinningKernel() = default;
+            FieldBinningKernel() = default;
 
             template<typename T_HistBox, typename T_DepositionFunctor, typename T_Mapping, uint32_t T_nAxes>
             DINLINE void operator()(

@@ -72,7 +72,7 @@ namespace picongpu
          */
 
         class openPMDWriter;
-        class Help;
+        struct Help;
 
         struct ThreadParams : PluginParameters
         {

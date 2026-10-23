@@ -28,6 +28,16 @@
 
 #pragma once
 
+/** Enable field ionization (1) or use ions without ionization (0). */
+#ifndef PARAM_IONIZATION
+#    define PARAM_IONIZATION 0
+#endif
+
+/** Enable (1) or disable (0) ions. Defaults must match speciesDefinition.param. */
+#ifndef PARAM_IONS
+#    define PARAM_IONS 0
+#endif
+
 #include "picongpu/particles/InitFunctors.hpp"
 
 namespace picongpu

@@ -39,7 +39,7 @@ namespace picongpu
         {
         }
 
-        HDINLINE FieldBackgroundE(FieldBackgroundE const&) = default;
+        FieldBackgroundE(FieldBackgroundE const&) = default;
 
         /** Specify your background field E(r,t) here
          *
@@ -73,7 +73,7 @@ namespace picongpu
         {
         }
 
-        HDINLINE FieldBackgroundB(FieldBackgroundB const&) = default;
+        FieldBackgroundB(FieldBackgroundB const&) = default;
 
         /** Specify your background field B(r,t) here
          *
@@ -107,7 +107,7 @@ namespace picongpu
         {
         }
 
-        HDINLINE FieldBackgroundJ(FieldBackgroundJ const&) = default;
+        FieldBackgroundJ(FieldBackgroundJ const&) = default;
 
         /** Specify your background field J(r,t) here
          *

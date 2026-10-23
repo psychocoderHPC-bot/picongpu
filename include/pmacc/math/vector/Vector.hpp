@@ -152,7 +152,7 @@ namespace pmacc
              * The order of members is automatically permuted from z,y,x to x,y,z.
              */
             template<typename T_MemberType>
-            constexpr explicit Vector(alpaka::Vec<::alpaka::DimInt<T_dim>, T_MemberType> const& alpakaVec)
+            constexpr explicit Vector(alpaka::Vec<T_MemberType, T_dim> const& alpakaVec)
                 : Vector([&](uint32_t const i) constexpr { return alpakaVec[T_dim - 1 - i]; })
             {
             }
@@ -431,10 +431,10 @@ namespace pmacc
              *
              * Only integral types are supported. The method is performing an static cast to MemIdxType.
              */
-            HDINLINE alpaka::Vec<::alpaka::DimInt<T_dim>, MemIdxType> toAlpakaMemVec() const
+            HDINLINE alpaka::Vec<MemIdxType, T_dim> toAlpakaMemVec() const
             {
                 static_assert(std::is_integral_v<T_Type>);
-                alpaka::Vec<::alpaka::DimInt<T_dim>, MemIdxType> result;
+                alpaka::Vec<MemIdxType, T_dim> result;
                 for(uint32_t i = 0u; i < T_dim; i++)
                     result[T_dim - 1 - i] = static_cast<MemIdxType>((*this)[i]);
                 return result;
@@ -447,10 +447,10 @@ namespace pmacc
              *
              * Only integral types are supported. The method is performing an static cast to IdxType.
              */
-            HDINLINE alpaka::Vec<::alpaka::DimInt<T_dim>, IdxType> toAlpakaKernelVec() const
+            HDINLINE alpaka::Vec<IdxType, T_dim> toAlpakaKernelVec() const
             {
                 static_assert(std::is_integral_v<T_Type>);
-                alpaka::Vec<::alpaka::DimInt<T_dim>, IdxType> result;
+                alpaka::Vec<IdxType, T_dim> result;
                 for(uint32_t i = 0u; i < T_dim; i++)
                     result[T_dim - 1 - i] = static_cast<IdxType>((*this)[i]);
                 return result;
@@ -486,7 +486,7 @@ namespace pmacc
              *
              * Returns always true
              */
-            constexpr bool operator==(Vector const& rhs) const
+            constexpr bool operator==(Vector const&) const
             {
                 return true;
             }
@@ -496,7 +496,7 @@ namespace pmacc
              *
              * Returns always false
              */
-            constexpr bool operator!=(Vector const& rhs) const
+            constexpr bool operator!=(Vector const&) const
             {
                 return false;
             }
@@ -673,7 +673,7 @@ namespace pmacc
             typename T_IntegralType,
             typename T_Storage,
             typename = std::enable_if_t<std::is_integral_v<T_IntegralType>>>
-        HDINLINE auto mapToND(Vector<T_IntegralType, DIM1, T_Storage> const& size, T_IntegralType linearIdx)
+        HDINLINE auto mapToND(Vector<T_IntegralType, DIM1, T_Storage> const&, T_IntegralType linearIdx)
         {
             return linearIdx;
         }

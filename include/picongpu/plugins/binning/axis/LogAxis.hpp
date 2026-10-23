@@ -182,10 +182,10 @@ namespace picongpu
                     : axisSplit{axSplit}
                     , label{label}
                     , units{unit_arr}
-                    , lAK{attrFunctor, axisSplit, unit_arr}
                     , geomFactor{std::pow(
                           static_cast<double>(axisSplit.m_range.max) / axisSplit.m_range.min,
                           1.0 / static_cast<double>(axSplit.nBins))}
+                    , lAK{attrFunctor, axisSplit, unit_arr}
                 {
                     initBinEdges();
                 }
@@ -224,7 +224,7 @@ namespace picongpu
             template<typename T_Attribute, typename T_FunctorDescription>
             HINLINE auto createLog(AxisSplitting<T_Attribute> const& axSplit, T_FunctorDescription const& functorDesc)
             {
-                if(axSplit.m_range.min < 0 != axSplit.m_range.max < 0)
+                if((axSplit.m_range.min < 0) != (axSplit.m_range.max < 0))
                 {
                     throw std::domain_error("Range can't include zero");
                 }

@@ -78,7 +78,7 @@ namespace pmacc
                             for(uint32_t i = 0u; i < numSamples; i++)
                             {
                                 Space2D idx = vWorkerRand(worker, boxSize);
-                                alpaka::atomicAdd(worker.getAcc(), &box(idx), 1u, ::alpaka::hierarchy::Blocks{});
+                                ::alpaka::onAcc::atomicAdd(worker.getAcc(), &box(idx), 1u, ::alpaka::onAcc::scope::Device{});
                             }
                         });
                 }

@@ -23,3 +23,10 @@
 
 #include "pmacc/math/complex/Complex.tpp"
 #include "pmacc/types.hpp"
+
+namespace pmacc::math
+{
+    //! alias to the alpaka3 complex type, avoids leaking `alpaka::` into user-facing headers
+    template<typename T_Type>
+    using Complex = ::alpaka::math::Complex<T_Type>;
+} // namespace pmacc::math

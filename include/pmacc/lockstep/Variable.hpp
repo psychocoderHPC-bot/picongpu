@@ -81,9 +81,9 @@ namespace pmacc
              */
             HDINLINE Variable(Variable const&) = delete;
 
-            HDINLINE Variable(Variable&&) = default;
+            Variable(Variable&&) = default;
 
-            HDINLINE Variable& operator=(Variable&&) = default;
+            Variable& operator=(Variable&&) = default;
 
             /** get element for the worker
              *
@@ -117,7 +117,7 @@ namespace pmacc
          * step.
          */
         template<typename T_Type, typename T_Worker, typename T_Config>
-        HDINLINE auto makeVar(ForEach<T_Worker, T_Config> const& forEach)
+        HDINLINE auto makeVar(ForEach<T_Worker, T_Config> const&)
         {
             return Variable<T_Type, typename ForEach<T_Worker, T_Config>::BaseConfig>();
         }
@@ -138,7 +138,7 @@ namespace pmacc
          * step.
          */
         template<typename T_Type, typename T_Worker, typename T_Config, typename... T_Args>
-        HDINLINE auto makeVar(ForEach<T_Worker, T_Config> const& forEach, T_Args&&... args)
+        HDINLINE auto makeVar(ForEach<T_Worker, T_Config> const&, T_Args&&... args)
         {
             return Variable<T_Type, typename ForEach<T_Worker, T_Config>::BaseConfig>(std::forward<T_Args>(args)...);
         }

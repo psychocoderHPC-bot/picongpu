@@ -148,7 +148,7 @@ namespace picongpu
 
                 pmacc::particles::operations::ConcatListOfFrames concatListOfFrames{};
 
-#    if (ALPAKA_ACC_GPU_CUDA_ENABLED || ALPAKA_ACC_GPU_HIP_ENABLED)
+#    if (ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP)
                 auto mallocMCBuffer
                     = rp.dc.template get<MallocMCBuffer<DeviceHeap>>(MallocMCBuffer<DeviceHeap>::getName());
                 auto particlesBox = rp.speciesTmp->getHostParticlesBox(mallocMCBuffer->getOffset());

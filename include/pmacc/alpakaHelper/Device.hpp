@@ -25,20 +25,52 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include <cassert>
 #include <map>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 namespace pmacc
 {
+    namespace detail
+    {
+        /** Extract the alpaka API and device kind from an onHost::Device type. */
+        template<typename T_Device>
+        struct DeviceSpecOf;
+
+        template<typename T_Api, typename T_DeviceKind>
+        struct DeviceSpecOf<::alpaka::onHost::Device<T_Api, T_DeviceKind>>
+        {
+            using Api = T_Api;
+            using DeviceKind = T_DeviceKind;
+        };
+    } // namespace detail
+
     namespace manager
     {
         template<typename T_DeviceType>
         struct Device
         {
             using DeviceType = T_DeviceType;
-            std::optional<DeviceType> m_device;
+            using Api = typename detail::DeviceSpecOf<DeviceType>::Api;
+            using DeviceKind = typename detail::DeviceSpecOf<DeviceType>::DeviceKind;
+
+            /** Handle to the alpaka device.
+             *
+             * The handle is intentionally leaked by giving it a no-op deleter. alpaka3's
+             * unifiedCudaHip::Device destructor calls hipDeviceReset()/cudaDeviceReset().
+             * PMacc keeps the handle in this function-local static, so without the leak the
+             * last reference is released from QueueController's static destructor while the
+             * CUDA/HIP runtime's own atexit cleanup is still pending. hipDeviceReset() then
+             * tears down the context underneath that cleanup and the process aborts with a
+             * double free in libamdhip64 during __cxa_finalize (seen on ROCm 7.2).
+             * The backend runtime owns context teardown and releases the leaked resources at
+             * process exit, so the no-op deleter is safe for both HIP and CUDA.
+             */
+            std::shared_ptr<DeviceType> m_device;
 
             int m_devIdx = -1;
 
@@ -48,9 +80,9 @@ namespace pmacc
                 return instance;
             }
 
-            auto getPlatform() const
+            static auto makeSelector()
             {
-                return alpaka::Platform<DeviceType>{};
+                return ::alpaka::onHost::makeDeviceSelector(Api{}, DeviceKind{});
             }
 
             auto device(int idx = 0) -> DeviceType&
@@ -76,16 +108,19 @@ namespace pmacc
 
                     std::optional<DeviceType> dev;
 
-                    auto const platform = getPlatform();
+                    auto selector = makeSelector();
                     try
                     {
-                        dev = std::make_optional<DeviceType>(alpaka::getDevByIdx(platform, idx));
+                        dev = std::make_optional<DeviceType>(selector.makeDevice(static_cast<uint32_t>(idx)));
                     }
                     catch(std::runtime_error const& e)
                     {
                         throw std::runtime_error(e.what());
                     }
-                    m_device = std::move(dev);
+                    /* Intentionally never destroy the handle, see the m_device comment. */
+                    m_device = std::shared_ptr<DeviceType>(
+                        new DeviceType(std::move(*dev)),
+                        [](DeviceType*) { /* no-op deleter: intentionally leak the handle */ });
                     m_devIdx = idx;
                     return *m_device;
                 }
@@ -107,6 +142,8 @@ namespace pmacc
                 else
                 {
                     m_devIdx = -1;
+                    /* Drop our reference but keep the handle alive: the no-op deleter above
+                     * must not run at static-destruction time. */
                     m_device.reset();
                 }
             }
@@ -118,14 +155,14 @@ namespace pmacc
 
             auto current() -> DeviceType&
             {
-                assert(m_device.has_value());
+                assert(m_device);
                 return *m_device;
             }
 
             auto count() -> int
             {
-                auto const platform = alpaka::Platform<DeviceType>{};
-                return static_cast<int>(::alpaka::getDevCount(platform));
+                auto selector = makeSelector();
+                return static_cast<int>(selector.getDeviceCount());
             }
 
         protected:

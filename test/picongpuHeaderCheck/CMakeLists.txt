@@ -91,7 +91,7 @@ append_recursive_files_add_to_src_group("${_GENERATED_SOURCE_DIR}" "${_GENERATED
 list(APPEND _FILES_SOURCE "src/main.cpp")
 
 # Always add all files to the target executable build call to add them to the build project.
-alpaka_add_executable(
+add_executable(
         ${_TARGET_NAME}
         ${_FILES_SOURCE}
 )
@@ -99,6 +99,12 @@ alpaka_add_executable(
 # Workaround for this bug https://github.com/nlohmann/json/issues/3907
 # We don't need ranges in <nlohmann/json.hpp>
 target_compile_definitions(${_TARGET_NAME} PRIVATE JSON_HAS_RANGES=0)
+
+# Mirror the main PIConGPU build, which always defines ENABLE_OPENPMD (0 when
+# openPMD is not enabled). Many headers test `#if (ENABLE_OPENPMD == 1)`, so
+# omitting the definition here breaks the header check with -Wundef. The header
+# check never links openPMD, therefore the plugin code stays disabled.
+target_compile_definitions(${_TARGET_NAME} PRIVATE ENABLE_OPENPMD=0)
 
 target_link_libraries(${_TARGET_NAME} PUBLIC Catch2 Catch2WithMain)
 target_link_libraries(${_TARGET_NAME} PRIVATE pmacc::pmacc)
@@ -108,6 +114,16 @@ target_include_directories(
     PRIVATE $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
 )
 target_link_libraries(${_TARGET_NAME} PRIVATE nlohmann_json::nlohmann_json)
+# Mirror the warning policy used by the PIConGPU build for the strict alpaka target:
+# unused parameters are intentional in many headers and `#pragma unroll` is CUDA-only.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(${_TARGET_NAME} PRIVATE -Wno-unused-parameter -Wno-unknown-pragmas)
+endif()
+if(CMAKE_CUDA_COMPILER)
+    set(CMAKE_CUDA_FLAGS
+        "${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-unused-parameter -Xcompiler -Wno-unknown-pragmas")
+endif()
+alpaka_finalize(${_TARGET_NAME})
 
 set_target_properties(${_TARGET_NAME} PROPERTIES FOLDER "picongpu-headerCheck")
 

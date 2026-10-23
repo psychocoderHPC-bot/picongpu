@@ -44,7 +44,7 @@ namespace picongpu
 
                 // default constructor
 
-                HDINLINE cuda_vec() = default;
+                cuda_vec() = default;
 
                 // constructor
 
@@ -55,7 +55,7 @@ namespace picongpu
                     this->z() = other.z();
                 }
 
-                HDINLINE cuda_vec(cuda_vec const& other) = default;
+                cuda_vec(cuda_vec const& other) = default;
 
                 HDINLINE static cuda_vec<V, T> zero()
                 {
@@ -72,7 +72,7 @@ namespace picongpu
                     this->z() = (T) other.z();
                 }
 
-                HDINLINE cuda_vec& operator=(cuda_vec const& other) = default;
+                cuda_vec& operator=(cuda_vec const& other) = default;
 
                 HDINLINE T& operator[](uint32_t dim)
                 {

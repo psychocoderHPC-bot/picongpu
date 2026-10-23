@@ -73,7 +73,7 @@ namespace picongpu
                 {
                 }
 
-                HDINLINE Curl(Curl const&) = default;
+                Curl(Curl const&) = default;
 
                 /** Return curl value at the given point
                  *

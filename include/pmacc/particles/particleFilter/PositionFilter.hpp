@@ -44,7 +44,7 @@ namespace pmacc
             DataSpace<dim> superCellIdx;
 
         public:
-            HDINLINE PositionFilter() = default;
+            PositionFilter() = default;
 
             HDINLINE void setWindowPosition(DataSpace<dim> offset, DataSpace<dim> size)
             {

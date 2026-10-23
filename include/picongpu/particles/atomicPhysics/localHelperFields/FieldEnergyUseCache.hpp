@@ -95,11 +95,11 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
         {
             checkWithinExtent(Extent::toRT(), localCellIndex);
 
-            alpaka::atomicAdd(
+            ::alpaka::onAcc::atomicAdd(
                 worker.getAcc(),
                 &(this->fieldEnergyUsed[pmacc::math::linearize(Extent::toRT(), localCellIndex)]),
                 energyUsed,
-                ::alpaka::hierarchy::Threads{});
+                ::alpaka::onAcc::scope::Block{});
         }
 
         /** add to cache entry using atomics and direct access version
@@ -115,11 +115,11 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
         {
             checkWithinLinearExtent(linearCellIndex);
 
-            alpaka::atomicAdd(
+            ::alpaka::onAcc::atomicAdd(
                 worker.getAcc(),
                 &(this->fieldEnergyUsed[linearCellIndex]),
                 energyUsed,
-                ::alpaka::hierarchy::Threads{});
+                ::alpaka::onAcc::scope::Block{});
         }
 
         /** add to cache entry, no atomics

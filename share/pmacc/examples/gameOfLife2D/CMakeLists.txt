@@ -121,11 +121,12 @@ include_directories(include)
 
 file(GLOB SRCFILES "*.cpp")
 
-alpaka_add_executable(gameOfLife
+add_executable(gameOfLife
     ${SRCFILES}
 )
 
 target_link_libraries(gameOfLife PRIVATE pmacc::pmacc)
+alpaka_finalize(gameOfLife)
 if(PNGwriter_FOUND)
     target_link_libraries(gameOfLife PRIVATE PNGwriter::PNGwriter)
 endif()

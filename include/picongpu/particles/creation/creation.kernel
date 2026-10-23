@@ -207,7 +207,7 @@ namespace picongpu
                                         targetParId = kernel::atomicAllInc(
                                             worker,
                                             &newFrameFillLvl,
-                                            ::alpaka::hierarchy::Threads{});
+                                            ::alpaka::onAcc::scope::Block{});
                                 },
                                 numNewParticlesCtx,
                                 targetParIdCtx);

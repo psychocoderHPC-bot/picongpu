@@ -42,7 +42,7 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
             T_Acc const&,
             T_FieldEnergyUseCache const& fieldEnergyUseCache,
             pmacc::DataSpace<picongpu::simDim> superCellFieldIdx) const
-            -> std::enable_if_t<std::is_same_v<alpaka::Dev<T_Acc>, alpaka::DevCpu>>
+            -> std::enable_if_t<pmacc::traits::isCpuAcc_v<T_Acc>>
         {
             std::cout << "FieldEnergyUseCache: " << superCellFieldIdx.toString(",", "[]") << " (cell): energyUsed [eV]"
                       << std::endl;
@@ -64,7 +64,7 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
         // gpu version, does nothing
         template<typename T_Acc, typename T_FieldEnergyUseCache>
         HDINLINE auto operator()(T_Acc const&, T_FieldEnergyUseCache const&, pmacc::DataSpace<picongpu::simDim>) const
-            -> std::enable_if_t<!std::is_same_v<alpaka::Dev<T_Acc>, alpaka::DevCpu>>
+            -> std::enable_if_t<!pmacc::traits::isCpuAcc_v<T_Acc>>
         {
         }
     };

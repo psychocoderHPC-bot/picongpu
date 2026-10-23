@@ -41,7 +41,7 @@ namespace picongpu
                 /* For the intermediate amplitude values we may use single precision,
                  * for the final accumulation we will have to use double precision.
                  */
-                using complex_T = alpaka::Complex<T_Float>;
+                using complex_T = pmacc::math::Complex<T_Float>;
                 /* number of scalar components in Amplitude = 3 (3D) * 2 (complex) = 6 */
                 static constexpr uint32_t numComponents
                     = uint32_t(3) * uint32_t(sizeof(complex_T) / sizeof(typename complex_T::value_type));

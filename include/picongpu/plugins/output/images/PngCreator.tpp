@@ -37,7 +37,7 @@
 #include <string>
 #include <vector>
 
-#if (PIC_ENABLE_PNG == 1)
+#if defined(PIC_ENABLE_PNG) && PIC_ENABLE_PNG == 1
 #    include <pngwriter.h>
 #endif
 
@@ -48,7 +48,7 @@ namespace picongpu
         std::shared_ptr<std::vector<T_DataType>> imageVector,
         MessageHeader const header)
     {
-#if (PIC_ENABLE_PNG == 1)
+#if defined(PIC_ENABLE_PNG) && PIC_ENABLE_PNG == 1
         if(m_createFolder)
         {
             pmacc::Filesystem::get().createDirectoryWithPermissions(m_folder);

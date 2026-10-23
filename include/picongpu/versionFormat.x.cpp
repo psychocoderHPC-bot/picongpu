@@ -36,7 +36,7 @@
 #    include <mallocMC/version.hpp>
 #endif
 #include <mpi.h>
-#if (PIC_ENABLE_PNG == 1)
+#if defined(PIC_ENABLE_PNG) && PIC_ENABLE_PNG == 1
 #    include <pngwriter.h>
 #endif
 #if (ENABLE_OPENPMD == 1)
@@ -109,7 +109,7 @@ namespace picongpu
 #endif
 
         std::stringstream pngwriter;
-#if (PIC_ENABLE_PNG == 1)
+#if defined(PIC_ENABLE_PNG) && PIC_ENABLE_PNG == 1
         pngwriter << PNGWRITER_VERSION_MAJOR << "." << PNGWRITER_VERSION_MINOR << "." << PNGWRITER_VERSION_PATCH;
 #else
         pngwriter << versionNotFound;

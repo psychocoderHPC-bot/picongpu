@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "pmacc/alpakaHelper/acc.hpp"
 #include "pmacc/debug/abortWithError.hpp"
 
 #include <cstdlib>

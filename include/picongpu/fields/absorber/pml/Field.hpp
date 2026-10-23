@@ -473,7 +473,7 @@ namespace picongpu
             using ComponentPos = std::remove_cv_t<std::remove_reference_t<decltype(Base{}()[0])>>;
             using Result = ::pmacc::math::Vector<ComponentPos, fields::absorber::pml::NodeValues::numComponents> const;
 
-            HDINLINE PmlFieldPositionFromBase() = default;
+            PmlFieldPositionFromBase() = default;
 
             HDINLINE Result operator()() const
             {

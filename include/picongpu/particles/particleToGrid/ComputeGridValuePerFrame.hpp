@@ -120,11 +120,11 @@ namespace picongpu
                          * note: the .x() is used because FieldTmp is a scalar field with only
                          * one "x" component
                          */
-                        alpaka::atomicAdd(
+                        ::alpaka::onAcc::atomicAdd(
                             worker.getAcc(),
                             &(fieldTmpShiftToParticle(offsetParticleCellToCurrentCell).x()),
                             assign * particleAttr,
-                            ::alpaka::hierarchy::Threads{});
+                            ::alpaka::onAcc::scope::Block{});
                     }
                 }
             }

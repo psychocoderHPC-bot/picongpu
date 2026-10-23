@@ -72,7 +72,7 @@ namespace picongpu
             /** @todo this should not be required but is kept because we do not know anymore why it is here
              * maybe it should catch possible backend (CUDA/HIP) errors.
              */
-            alpaka::wait(manager::Device<ComputeDevice>::get().current());
+            alpaka::onHost::wait(manager::Device<ComputeDevice>::get().current());
 
             log<picLog::SIMULATION_STATE>("Loading from persistent data finished");
         }

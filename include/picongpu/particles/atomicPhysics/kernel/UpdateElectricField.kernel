@@ -75,7 +75,7 @@ namespace picongpu::particles::atomicPhysics::kernel
 
             auto forEachCell = pmacc::lockstep::makeForEach<FieldEnergyUseCache::numberCells, T_Worker>(worker);
             forEachCell(
-                [&worker, &superCellCellOffset, &eFieldBox, &eFieldEnergyUseCache](uint32_t const linearCellIndex)
+                [&superCellCellOffset, &eFieldBox, &eFieldEnergyUseCache](uint32_t const linearCellIndex)
                 {
                     DataSpace<picongpu::simDim> const localCellIndex
                         = pmacc::math::mapToND(picongpu::SuperCellSize::toRT(), static_cast<int>(linearCellIndex));

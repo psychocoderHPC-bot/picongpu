@@ -71,11 +71,11 @@ namespace picongpu
             forEachParticle(
                 [&counterValue](auto const& lockstepWorker, auto& /*particle*/)
                 {
-                    alpaka::atomicAdd(
+                    ::alpaka::onAcc::atomicAdd(
                         lockstepWorker.getAcc(),
                         &counterValue,
                         static_cast<uint64_cu>(1LU),
-                        ::alpaka::hierarchy::Threads{});
+                        ::alpaka::onAcc::scope::Block{});
                 });
 
             worker.sync();

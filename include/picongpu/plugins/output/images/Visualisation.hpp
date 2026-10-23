@@ -421,7 +421,7 @@ namespace picongpu
                     if(isCellOnSlice)
                     {
                         // atomic avoids: WAW Error in cuda-memcheck racecheck
-                        kernel::atomicAllExch(worker, &superCellParticipate, 1, ::alpaka::hierarchy::Threads{});
+                        kernel::atomicAllExch(worker, &superCellParticipate, 1, ::alpaka::onAcc::scope::Block{});
                         isImageThread = true;
                     }
                 },
@@ -435,7 +435,7 @@ namespace picongpu
             // slice is always two dimensional
             using SharedMem = DataBox<PitchedBox<float_X, DIM2>>;
 
-            float_X* shBlock = ::alpaka::getDynSharedMem<float_X>(worker.getAcc());
+            float_X* shBlock = ::alpaka::onAcc::getDynSharedMem<float_X>(worker.getAcc());
 
             // shared memory box for particle counter
             SharedMem counter(
@@ -483,13 +483,13 @@ namespace picongpu
                         DataSpace<DIM2> const reducedCell(
                             particleCellOffset[transpose.x()],
                             particleCellOffset[transpose.y()]);
-                        alpaka::atomicAdd(
+                        ::alpaka::onAcc::atomicAdd(
                             lockstepWorker.getAcc(),
                             &(counter(reducedCell)),
                             // normalize the value to avoid bad precision for large macro particle weightings
                             particle[weighting_]
                                 / static_cast<float_X>(sim.unit.typicalNumParticlesPerMacroParticle()),
-                            ::alpaka::hierarchy::Threads{});
+                            ::alpaka::onAcc::scope::Block{});
                     }
                 });
 
@@ -679,7 +679,6 @@ namespace picongpu
         void notify(uint32_t currentStep) override
         {
             PMACC_ASSERT(cellDescription != nullptr);
-            DataSpace<simDim> const localSize(cellDescription->getGridLayout().sizeWithoutGuardND());
             Window window(MovingWindow::getInstance().getWindow(currentStep));
 
             /*sliceOffset is only used in 3D*/
@@ -839,7 +838,6 @@ namespace picongpu
             if(!m_notifyPeriod.empty())
             {
                 PMACC_ASSERT(cellDescription != nullptr);
-                DataSpace<simDim> const localSize(cellDescription->getGridLayout().sizeWithoutGuardND());
 
                 Window window(MovingWindow::getInstance().getWindow(0));
                 sliceOffset = (int) ((float_32) (window.globalDimensions.size[sliceDim]) * m_slicePoint)

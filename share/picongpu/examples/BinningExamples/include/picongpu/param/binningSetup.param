@@ -31,6 +31,144 @@ namespace picongpu
 {
     namespace plugins::binning
     {
+        /** Device functor returning the kinetic energy of a macro particle.
+         *
+         * A plain struct with a templated call operator is used instead of a generic
+         * lambda because nvcc does not accept ``__host__ __device__`` generic lambdas.
+         */
+        struct GetEnergy
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE float_X
+            operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle) const
+            {
+                float3_X const mom = particle[momentum_];
+                float_X const weighting = particle[weighting_];
+                float_X const mass = picongpu::traits::attribute::getMass(weighting, particle);
+
+                // calculate kinetic energy of a single electron in the macro particle
+                float_X energy = KinEnergy<>()(mom, mass) / weighting;
+
+                return energy;
+            }
+        };
+
+        /** Device functor returning the pointing angle in the x-y plane. */
+        struct GetPointingXY
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE float_X
+            operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle) const
+            {
+                auto theta = math::atan2(particle[momentum_][0], particle[momentum_][1]);
+                return theta;
+            }
+        };
+
+        /** Device functor returning the particle charge. */
+        struct GetParticleCharge
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE float_X
+            operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle) const
+            {
+                float_X const charge = picongpu::traits::attribute::getCharge(particle[weighting_], particle);
+                return charge;
+            }
+        };
+
+        /** Device functor returning the total-domain x position in PIC units. */
+        struct GetPositionX
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE float_X
+            operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle) const
+            {
+                auto pos = getParticlePosition<DomainOrigin::TOTAL, PositionPrecision::SUB_CELL, PositionUnits::PIC>(
+                    domainInfo,
+                    particle);
+                return pos.x();
+            }
+        };
+
+        /** Device functor returning the moving-window y position in PIC units. */
+        struct GetPositionY
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE float_X
+            operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle) const
+            {
+                auto pos = getParticlePosition<
+                    DomainOrigin::MOVING_WINDOW,
+                    PositionPrecision::SUB_CELL,
+                    PositionUnits::PIC>(domainInfo, particle);
+                return pos.y();
+            }
+        };
+
+        /** Device functor returning the total-domain z position in PIC units. */
+        struct GetPositionZ
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE float_X
+            operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle) const
+            {
+                auto pos = getParticlePosition<DomainOrigin::TOTAL, PositionPrecision::SUB_CELL, PositionUnits::PIC>(
+                    domainInfo,
+                    particle);
+                return pos.z();
+            }
+        };
+
+        /** Device functor returning the Larmor power of a macro particle. */
+        struct GetLarmorPower
+        {
+            template<typename T_Worker, typename T_DomainInfo, typename T_Particle>
+            HDINLINE float_X
+            operator()(T_Worker const& worker, T_DomainInfo const& domainInfo, T_Particle const& particle) const
+            {
+                namespace rad = plugins::radiation;
+
+                float_X const charge = picongpu::traits::attribute::getCharge(particle[weighting_], particle);
+                rad::vector_64 n = rad::vector_64(0.0, 1.0, 0.0); // observation directon
+
+                rad::vector_64 const particle_locationNow = rad::vector_64(0.0, 0.0, 0.0);
+
+                float_X const weighting = particle[weighting_];
+
+                // mass of macro-particle
+                float_X const particle_mass = picongpu::traits::attribute::getMass(weighting, particle);
+
+                rad::vector_X const particle_momentumNow = rad::vector_X(particle[momentum_]);
+                rad::vector_X const particle_momentumOld = rad::vector_X(particle[momentumPrev1_]);
+
+                // set up particle using the radiation's own particle class
+                rad::Particle const particleRad(
+                    particle_locationNow,
+                    particle_momentumOld,
+                    particle_momentumNow,
+                    particle_mass);
+
+                rad::vector_64 const beta(particleRad.getBeta<rad::When::now>()); // beta = v/c
+                rad::vector_64 const beta_dot(
+                    (beta - particleRad.getBeta<rad::When::now + 1>())
+                    / sim.pic.getDt()); // numeric differentiation (backward difference)
+                picongpu::float_64 const innerValue = 1.0 / rad::OneMinusBetaTimesN()(n, particleRad);
+                picongpu::float_64 const factor
+                    = innerValue * innerValue * innerValue * innerValue * innerValue; // x^5
+                // factor=1/(1-beta*n)^g   g=2 for DFT and g=3 for FFT
+                rad::vector_64 const numerator_vector = (n % ((n - beta) % beta_dot));
+                float_X const numerator = numerator_vector * numerator_vector;
+
+                float_X const SI_prefactor
+                    = 1.0_X
+                      / (16.0_X * pmacc::math::Pi<float_X>::value * pmacc::math::Pi<float_X>::value
+                         * picongpu::sim.pic.getEps0() * picongpu::sim.pic.getSpeedOfLight());
+
+                return SI_prefactor * charge * charge * numerator * factor;
+            }
+        };
+
         void eSpec(BinningCreator& binningCreator);
         void larmorPower(BinningCreator& binningCreator);
 
@@ -48,18 +186,7 @@ namespace picongpu
              */
 
             // axis 1: energy axis
-            auto getEnergy
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> float_X
-            {
-                float3_X const mom = particle[momentum_];
-                float_X const weighting = particle[weighting_];
-                float_X const mass = picongpu::traits::attribute::getMass(weighting, particle);
-
-                // calculate kinetic energy of a single electron in the macro particle
-                float_X energy = KinEnergy<>()(mom, mass) / weighting;
-
-                return energy;
-            };
+            GetEnergy getEnergy;
 
             // Define units of axis 1
             std::array<double, numUnits> energyDimension{};
@@ -80,12 +207,7 @@ namespace picongpu
 
 
             // axis 2: pointing axis
-            auto getPointingXY
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> float_X
-            {
-                auto theta = math::atan2(particle[momentum_][0], particle[momentum_][1]);
-                return theta;
-            };
+            GetPointingXY getPointingXY;
 
             // Define units of axis 2
             std::array<double, numUnits> pointingXYDimension{};
@@ -120,12 +242,7 @@ namespace picongpu
             /**
              * Define deposited quantity here: charge per bin
              */
-            auto getParticleCharge
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> float_X
-            {
-                float_X const charge = picongpu::traits::attribute::getCharge(particle[weighting_], particle);
-                return charge;
-            };
+            GetParticleCharge getParticleCharge;
 
             std::array<double, numUnits> depositedUnits{};
             depositedUnits[SIBaseUnits::length] = 0.0;
@@ -145,35 +262,13 @@ namespace picongpu
         inline void larmorPower(BinningCreator& binningCreator)
         {
             // axis 3a: x axis
-            auto getPositionX
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> float_X
-            {
-                auto pos = getParticlePosition<DomainOrigin::TOTAL, PositionPrecision::SUB_CELL, PositionUnits::PIC>(
-                    domainInfo,
-                    particle);
-                return pos.x();
-            };
+            GetPositionX getPositionX;
 
             // axis 3b: y axis
-            auto getPositionY
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> float_X
-            {
-                auto pos = getParticlePosition<
-                    DomainOrigin::MOVING_WINDOW,
-                    PositionPrecision::SUB_CELL,
-                    PositionUnits::PIC>(domainInfo, particle);
-                return pos.y();
-            };
+            GetPositionY getPositionY;
 
             // axis 3c: z axis
-            auto getPositionZ
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> float_X
-            {
-                auto pos = getParticlePosition<DomainOrigin::TOTAL, PositionPrecision::SUB_CELL, PositionUnits::PIC>(
-                    domainInfo,
-                    particle);
-                return pos.z();
-            };
+            GetPositionZ getPositionZ;
 
             // Write attribute to allow to convert y bin edges with moving window domain origin to total coordinates
             auto writeMovingWindowPosition
@@ -239,49 +334,7 @@ namespace picongpu
             /**
              * Define deposited quantity here: Larmor power per bin
              */
-            auto getLarmorPower
-                = [] ALPAKA_FN_ACC(auto const& worker, auto const& domainInfo, auto const& particle) -> float_X
-            {
-                namespace rad = plugins::radiation;
-
-                float_X const charge = picongpu::traits::attribute::getCharge(particle[weighting_], particle);
-                rad::vector_64 n = rad::vector_64(0.0, 1.0, 0.0); // observation directon
-
-                rad::vector_64 const particle_locationNow = rad::vector_64(0.0, 0.0, 0.0);
-
-                float_X const weighting = particle[weighting_];
-
-                // mass of macro-particle
-                float_X const particle_mass = picongpu::traits::attribute::getMass(weighting, particle);
-
-                rad::vector_X const particle_momentumNow = rad::vector_X(particle[momentum_]);
-                rad::vector_X const particle_momentumOld = rad::vector_X(particle[momentumPrev1_]);
-
-                // set up particle using the radiation's own particle class
-                rad::Particle const particleRad(
-                    particle_locationNow,
-                    particle_momentumOld,
-                    particle_momentumNow,
-                    particle_mass);
-
-                rad::vector_64 const beta(particleRad.getBeta<rad::When::now>()); // beta = v/c
-                rad::vector_64 const beta_dot(
-                    (beta - particleRad.getBeta<rad::When::now + 1>())
-                    / sim.pic.getDt()); // numeric differentiation (backward difference)
-                picongpu::float_64 const innerValue = 1.0 / rad::OneMinusBetaTimesN()(n, particleRad);
-                picongpu::float_64 const factor
-                    = innerValue * innerValue * innerValue * innerValue * innerValue; // x^5
-                // factor=1/(1-beta*n)^g   g=2 for DFT and g=3 for FFT
-                rad::vector_64 const numerator_vector = (n % ((n - beta) % beta_dot));
-                float_X const numerator = numerator_vector * numerator_vector;
-
-                float_X const SI_prefactor
-                    = 1.0_X
-                      / (16.0_X * pmacc::math::Pi<float_X>::value * pmacc::math::Pi<float_X>::value
-                         * picongpu::sim.pic.getEps0() * picongpu::sim.pic.getSpeedOfLight());
-
-                return SI_prefactor * charge * charge * numerator * factor;
-            };
+            GetLarmorPower getLarmorPower;
 
             std::array<double, numUnits> depositedUnitsLarmor{};
             depositedUnitsLarmor[SIBaseUnits::length] = 2.0;

@@ -38,7 +38,7 @@ namespace pmacc
      * @return name of LogClass
      */
     template<class LogClass>
-    std::string getLogName(LogClass const& dummy)
+    std::string getLogName(LogClass const&)
     {
         return std::string("UNDEFINED_LVL");
     }

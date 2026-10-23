@@ -59,6 +59,7 @@
 #include "picongpu/fields/background/templates/twtstight/numComponents.hpp"
 
 #include <pmacc/dimensions/DataSpace.hpp>
+#include <pmacc/math/Complex.hpp>
 #include <pmacc/math/Vector.hpp>
 #include <pmacc/types.hpp>
 
@@ -69,8 +70,8 @@ namespace picongpu::templates::twtstight
 {
     using float_T = float_X;
     using float3_T = ::pmacc::math::Vector<float_T, 3u>;
-    using complex_T = alpaka::Complex<float_T>;
-    using complex_64 = alpaka::Complex<float_64>;
+    using complex_T = pmacc::math::Complex<float_T>;
+    using complex_64 = pmacc::math::Complex<float_64>;
     /** To avoid underflows in computation, numsigmas controls where a zero cutoff is made.
      *  The fields thus are set to zero at a position (numSigmas * tauG * cspeed) ahead
      *  and behind the respective TWTS pulse envelope.

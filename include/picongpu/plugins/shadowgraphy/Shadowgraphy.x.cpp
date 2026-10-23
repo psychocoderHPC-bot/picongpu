@@ -20,7 +20,9 @@
 // required for SIMDIM definition
 #include "picongpu/defines.hpp"
 
-#if (SIMDIM == DIM3 && PIC_ENABLE_FFTW3 == 1 && ENABLE_OPENPMD == 1)
+#include <pmacc/math/Complex.hpp>
+
+#if (SIMDIM == DIM3 && defined(PIC_ENABLE_FFTW3) && PIC_ENABLE_FFTW3 == 1 && ENABLE_OPENPMD == 1)
 
 // clang-format of
 #    include "picongpu/param/shadowgraphy.param"
@@ -50,7 +52,7 @@
 
 namespace picongpu
 {
-    using complex_64 = alpaka::Complex<float_64>;
+    using complex_64 = pmacc::math::Complex<float_64>;
 
     namespace plugins
     {
@@ -176,8 +178,6 @@ namespace picongpu
                 };
 
             private:
-                MappingDesc* m_cellDescription = nullptr;
-
                 // do not change the plane, code is only supporting a plane in z direction
                 int plane = 2;
 
@@ -199,8 +199,7 @@ namespace picongpu
                     std::shared_ptr<plugins::multi::IHelp>& help,
                     size_t const id,
                     MappingDesc* cellDescription)
-                    : m_cellDescription(cellDescription)
-                    , m_help(std::static_pointer_cast<Help>(help))
+                    : m_help(std::static_pointer_cast<Help>(help))
                     , m_id(id)
                 {
                     static_assert(simDim == DIM3, "Shadowgraphy-plugin requires 3D simulations.");

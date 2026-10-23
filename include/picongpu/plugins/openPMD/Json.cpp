@@ -27,7 +27,7 @@
 /*
  * Note:
  * This is a hostonly .cpp file because CMake will not use -isystem for system
- * include paths on NVCC targets created with alpaka_add_executable.
+ * include paths on NVCC targets created through the alpaka CMake integration.
  * Since <nlohmann/json.hpp> throws a number of warnings, this .cpp file
  * ensures that NVCC never sees that library.
  */

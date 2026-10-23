@@ -84,7 +84,7 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
                 u32(T_ChooseTransitionGroup) < u32(atomicPhysics::enums::ChooseTransitionGroup::FINAL_NUMBER_ENTRIES));
 
             return true;
-        };
+        }
 
     public:
         /** add to cache entry, using atomics
@@ -107,11 +107,11 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
                     return;
                 }
 
-            alpaka::atomicAdd(
+            ::alpaka::onAcc::atomicAdd(
                 worker.getAcc(),
                 &(this->rateEntries[linearIndex(collectionIndex, u32(T_ChooseTransitionGroup))]),
                 rate,
-                ::alpaka::hierarchy::Threads{});
+                ::alpaka::onAcc::scope::Block{});
         }
 
         /** add to cache entry, no atomics
@@ -151,11 +151,11 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
         template<typename T_Worker>
         HDINLINE void setPresent(T_Worker const& worker, uint32_t const collectionIndex, bool const status)
         {
-            alpaka::atomicExch(
+            ::alpaka::onAcc::atomicExch(
                 worker.getAcc(),
                 &(this->m_present[collectionIndex]),
                 static_cast<uint32_t>(status),
-                ::alpaka::hierarchy::Threads{});
+                ::alpaka::onAcc::scope::Block{});
             return;
         }
 
@@ -243,7 +243,7 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
          */
         template<typename T_Acc>
         HDINLINE auto printToConsole(T_Acc const&, pmacc::DataSpace<picongpu::simDim> superCellFieldIdx) const
-            -> std::enable_if_t<std::is_same_v<alpaka::Dev<T_Acc>, alpaka::DevCpu>>
+            -> std::enable_if_t<pmacc::traits::isCpuAcc_v<T_Acc>>
         {
             std::cout << "rateCache" << superCellFieldIdx.toString(",", "[]")
                       << " atomicStateCollectionIndex [bb(up), bb(down), col.bf(up), a(down), f.bf(up)]" << std::endl;
@@ -268,7 +268,7 @@ namespace picongpu::particles::atomicPhysics::localHelperFields
         //! gpu version of write content of rate cache to console, does nothing
         template<typename T_Acc>
         HDINLINE auto printToConsole(T_Acc const&, pmacc::DataSpace<picongpu::simDim> superCellFieldIdx) const
-            -> std::enable_if_t<!std::is_same_v<alpaka::Dev<T_Acc>, alpaka::DevCpu>>
+            -> std::enable_if_t<!pmacc::traits::isCpuAcc_v<T_Acc>>
         {
         }
     };
