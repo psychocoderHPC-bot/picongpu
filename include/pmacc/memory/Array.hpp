@@ -39,13 +39,10 @@ namespace pmacc
         template<typename T_Type, size_t T_size>
         struct Array
         {
-            /* Workaround for an icpx 2026.2 SYCL CPU (spir64_x86_64) defect: the fully inlined
-             * shape-array interpolation returned NaN for finite field values, although the array
-             * content and element addresses were verified correct. An explicit noinline call
-             * boundary reproduces the fix. That boundary is the element lifetime here: elements are
-             * constructed individually and accessed through typed pointers instead of being
-             * reinterpreted out of an untyped byte buffer, so the shape values cannot be folded
-             * into the interpolation loops.
+            /* Elements are constructed individually in aligned storage and accessed
+             * through typed pointers. Copy and move therefore operate on constructed
+             * elements instead of reinterpreting an untyped buffer, and the generic
+             * constructor can no longer be selected for a copy from a non-const lvalue.
              */
 
             using value_type = T_Type;
