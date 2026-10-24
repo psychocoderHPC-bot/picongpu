@@ -41,8 +41,13 @@ namespace pmacc
         {
             namespace detail
             {
-/* XorMin and MRG32k3aMin uses the alpaka RNG as fallback for CPU accelerators
- * therefore we are not allowed to add a specialization for those RNG methods
+/* XorMin and MRG32k3aMin may alias the alpaka RNG when a CPU accelerator is used,
+ * therefore we must not add a specialization for those RNG methods in that case.
+ * XorMin is a distinct vendor type on CUDA and HIP, while MRG32k3aMin is only a
+ * distinct vendor type on CUDA. On HIP MRG32k3aMin aliases AlpakaRand (see
+ * MRG32k3aMin.hpp), so a specialization would also match AlpakaRand and shadow
+ * Normal_generic, changing the host RNG stream away from the alpaka2-identical
+ * values. Keep the MRG32k3aMin specialization CUDA only.
  */
 #    if (ALPAKA_ACC_GPU_CUDA_ENABLED || ALPAKA_ACC_GPU_HIP_ENABLED)
                 //! specialization for XorMin
@@ -50,7 +55,8 @@ namespace pmacc
                 struct Normal<float, methods::XorMin<T_Acc>, void> : public MullerBox<float, methods::XorMin<T_Acc>>
                 {
                 };
-
+#    endif
+#    if (ALPAKA_ACC_GPU_CUDA_ENABLED)
                 //! specialization for MRG32k3aMin
                 template<typename T_Acc>
                 struct Normal<float, methods::MRG32k3aMin<T_Acc>, void>
