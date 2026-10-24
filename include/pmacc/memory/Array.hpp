@@ -23,6 +23,11 @@
 
 #include "pmacc/types.hpp"
 
+#include <cstddef>
+#include <memory>
+#include <type_traits>
+#include <utility>
+
 namespace pmacc
 {
     namespace memory
@@ -34,6 +39,12 @@ namespace pmacc
         template<typename T_Type, size_t T_size>
         struct Array
         {
+            /* Elements are constructed individually in aligned storage and accessed
+             * through typed pointers. Copy and move therefore operate on constructed
+             * elements instead of reinterpreting an untyped buffer, and the generic
+             * constructor can no longer be selected for a copy from a non-const lvalue.
+             */
+
             using value_type = T_Type;
             using size_type = size_t;
             using reference = value_type&;
@@ -79,6 +90,43 @@ namespace pmacc
              */
             Array() = default;
 
+            /** copy constructor
+             *
+             * This has to be user-provided: a generic constructor below would
+             * otherwise be a better match for a non-const lvalue and would
+             * attempt to construct a single element from the array itself.
+             */
+            HDINLINE Array(Array const& other)
+            {
+                copyConstructFrom(other);
+            }
+
+            HDINLINE Array(Array&& other) noexcept(std::is_nothrow_move_constructible_v<T_Type>)
+            {
+                for(size_type i = 0; i < size(); ++i)
+                    std::construct_at(elemPtr(i), std::move(other[i]));
+            }
+
+            HDINLINE Array& operator=(Array const& other)
+            {
+                if(this != &other)
+                {
+                    for(size_type i = 0; i < size(); ++i)
+                        elemPtr(i)[0] = other[i];
+                }
+                return *this;
+            }
+
+            HDINLINE Array& operator=(Array&& other) noexcept(std::is_nothrow_move_assignable_v<T_Type>)
+            {
+                if(this != &other)
+                {
+                    for(size_type i = 0; i < size(); ++i)
+                        elemPtr(i)[0] = std::move(other[i]);
+                }
+                return *this;
+            }
+
             /** constructor
              *
              * initialize each member with the given value
@@ -86,10 +134,12 @@ namespace pmacc
              * @param value element assigned to each member
              */
             template<typename... T_Args>
+                requires(sizeof...(T_Args) > 0) && (!std::is_same_v<std::decay_t<T_Args>, Array<T_Type, T_size>> && ...)
+                     && (std::is_constructible_v<T_Type, T_Args&&...>)
             HDINLINE Array(T_Args&&... args)
             {
                 for(size_type i = 0; i < size(); ++i)
-                    reinterpret_cast<T_Type*>(m_data)[i] = std::move(T_Type{std::forward<T_Args>(args)...});
+                    std::construct_at(elemPtr(i), T_Type{std::forward<T_Args>(args)...});
             }
 
             /** get N-th value
@@ -102,26 +152,46 @@ namespace pmacc
             template<typename T_Idx>
             HDINLINE const_reference operator[](T_Idx const idx) const
             {
-                return reinterpret_cast<T_Type const*>(m_data)[idx];
+                return reinterpret_cast<const_pointer>(m_data)[idx];
             }
 
             template<typename T_Idx>
             HDINLINE reference operator[](T_Idx const idx)
             {
-                return reinterpret_cast<T_Type*>(m_data)[idx];
+                return elemPtr(idx)[0];
             }
 
             /** @} */
 
         private:
+            /** Array does not call element destructors, so only types with a
+             * trivial destructor are allowed.
+             */
+            static_assert(
+                std::is_trivially_destructible_v<T_Type>,
+                "pmacc::memory::Array requires a trivially destructible element type");
+
             /** data storage
              *
              * std::array is a so-called "aggregate" which does not default-initialize
              * its members. In order to allow arbitrary types to skip implementing
              * a default constructor, this member is not stored as
-             * `value_type m_data[ T_size ]` but as type-size aligned Byte type.
+             * `value_type m_data[ T_size ]` but as a type-size aligned byte array.
+             * Elements are created with placement construction.
              */
-            uint8_t m_data alignas(alignof(T_Type))[T_size * sizeof(T_Type)];
+            alignas(T_Type) std::byte m_data[T_size * sizeof(T_Type)];
+
+            /** get a pointer to the storage of the i-th element */
+            HDINLINE pointer elemPtr(size_type const i)
+            {
+                return reinterpret_cast<pointer>(m_data) + i;
+            }
+
+            HDINLINE void copyConstructFrom(Array const& other)
+            {
+                for(size_type i = 0; i < size(); ++i)
+                    std::construct_at(elemPtr(i), other[i]);
+            }
         };
 
     } // namespace memory
