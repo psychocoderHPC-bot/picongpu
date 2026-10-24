@@ -169,7 +169,7 @@ namespace alpaka
                 ALPAKA_FN_HOST_ACC auto operator()(
                     T_Ctx const& mathConcept,
                     ::pmacc::math::Vector<T_ScalarType1, T_dim, T_Storage1> const& vector1,
-                    ::pmacc::math::Vector<T_ScalarType1, T_dim, T_Storage2> const& vector2) -> ResultType
+                    ::pmacc::math::Vector<T_ScalarType2, T_dim, T_Storage2> const& vector2) -> ResultType
                 {
                     PMACC_CASSERT(T_dim > 0);
                     ResultType tmp;
@@ -201,7 +201,7 @@ namespace alpaka
                 ALPAKA_FN_HOST_ACC auto operator()(
                     T_Ctx const& mathConcept,
                     ::pmacc::math::Vector<T_ScalarType1, T_dim, T_Storage1> const& vector1,
-                    ::pmacc::math::Vector<T_ScalarType1, T_dim, T_Storage2> const& vector2) -> ResultType
+                    ::pmacc::math::Vector<T_ScalarType2, T_dim, T_Storage2> const& vector2) -> ResultType
                 {
                     PMACC_CASSERT(T_dim > 0);
                     ResultType tmp;
