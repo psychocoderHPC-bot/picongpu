@@ -46,19 +46,26 @@ namespace
         return static_cast<std::size_t>(i + nx * (j + ny * k));
     }
 
-    /** Minimal field accessor matching the interface expected by StencilFunc. */
+    /** Minimal field accessor matching the interface expected by StencilFunc.
+     *
+     * The production stencil functors are HDINLINE (host/device), so this mock
+     * must expose the same qualification. Without it nvcc warns that a
+     * __host__ __device__ functor calls host-only accessor methods. Only the
+     * host path is ever executed by the unit test; the device variants are
+     * well-formed because the accessor stores plain scalars.
+     */
     struct Accessor
     {
         float_64 center = 0.0;
         float_64 minus[3] = {0.0, 0.0, 0.0};
         float_64 plus[3] = {0.0, 0.0, 0.0};
 
-        float_64 operator*() const
+        HDINLINE float_64 operator*() const
         {
             return center;
         }
 
-        float_64 operator()(DataSpace<3u> const& offset) const
+        HDINLINE float_64 operator()(DataSpace<3u> const& offset) const
         {
             for(int d = 0; d < 3; ++d)
             {

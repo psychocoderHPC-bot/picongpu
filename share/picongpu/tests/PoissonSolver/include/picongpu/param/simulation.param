@@ -42,13 +42,17 @@
 
 #pragma once
 
-/** Select homogeneous Dirichlet ghost values for the Poisson solver.
+/** Poisson boundary condition selection.
  *
- * The production default stays homogeneous Neumann. The regression test uses
- * grounded Dirichlet boundaries for Cases B and C; fully periodic runs (Case A)
- * are unaffected because no boundary condition is applied there.
+ * This input set does not select a boundary condition itself, so a plain build
+ * uses the production default (Neumann). Cases B and C need grounded Dirichlet
+ * ghosts; ci.sh builds a second binary with
+ *
+ *   -DPARAM_OVERWRITES=-DPARAM_POISSON_BOUNDARY_CONDITION_DIRICHLET
+ *
+ * instead of hard-coding the switch here. Case A stays on the default Neumann
+ * binary, so every case runs with the boundary condition it is validated for.
  */
-#define PARAM_POISSON_BOUNDARY_CONDITION_DIRICHLET 1
 
 namespace picongpu
 {

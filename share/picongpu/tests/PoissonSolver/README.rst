@@ -36,11 +36,14 @@ Case C: uniform-density slab (``--periodic 0 1 1``)
   ``rho = rho0`` constant, ``phi = rho0/(2 eps0) x(Lx-x)``. Dirichlet in ``x``,
   periodic in ``y`` and ``z``; exact for the discrete operator.
 
-Cases B and C select homogeneous Dirichlet ghosts. The test input set defines
-``PARAM_POISSON_BOUNDARY_CONDITION_DIRICHLET`` in ``simulation.param``; the
-production default remains homogeneous Neumann. Case A is fully periodic and is
-not affected by this switch. The potential is added to the openPMD output by
-the test-only ``fileOutput.param``.
+Cases B and C select homogeneous Dirichlet ghosts. The boundary condition is a
+compile-time choice, so the input set itself does not define
+``PARAM_POISSON_BOUNDARY_CONDITION_DIRICHLET``; a plain build uses the production
+default (Neumann). ``ci.sh`` builds two binaries from the same input set: the
+default Neumann binary runs Case A, and a second binary configured with
+``-DPARAM_OVERWRITES=-DPARAM_POISSON_BOUNDARY_CONDITION_DIRICHLET`` runs Cases B
+and C. Case A is fully periodic and uses the default Neumann configuration. The
+potential is added to the openPMD output by the test-only ``fileOutput.param``.
 
 Metrics and thresholds
 ======================
@@ -90,12 +93,11 @@ C           1e-5       5e-6       1e-6
 Boundary-condition visibility
 -----------------------------
 
-``ci.sh`` captures each run log and checks the mean-of-rho projection line. The
-Neumann path (Case A, fully periodic) must log ``offsetting mean of rho by:``,
-while the Dirichlet cases B/C must not. A silent Neumann default therefore fails
-the test instead of masquerading as Dirichlet. The Poisson stage does not log the
-active boundary-condition name yet; adding that line in production code is a
-follow-up request, the test-side check above is the interim guard.
+``ci.sh`` captures each run log and checks the reported boundary-condition name
+plus the mean-of-rho projection line. Case A must report ``Neumann`` and log
+``offsetting mean of rho by:``; Cases B and C must report ``Dirichlet`` and must
+not log the projection. A run whose output contradicts its build flavor fails
+the test instead of passing silently.
 
 Running the test
 ================
@@ -107,5 +109,6 @@ Run ``ci.sh`` with the input set and a destination directory:
    ./picongpu/share/picongpu/tests/PoissonSolver/bin/ci.sh \
        picongpu/share/picongpu/tests/PoissonSolver/ ./run
 
-``ci.sh`` builds once and runs the three cases. Each run is a 32^3 grid with
+``ci.sh`` builds two binaries, a default Neumann one and a Dirichlet one, and
+runs the three cases with the matching binary. Each run is a 32^3 grid with
 ``-r 2`` and ``-s 0``, so the test stays small.

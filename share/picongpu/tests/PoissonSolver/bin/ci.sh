@@ -84,34 +84,57 @@ else
 fi
 
 if [ -d "$inputSetPath/include" ] ; then
+  # Resolve the input set before changing directories: it is used by pic-create
+  # for both build flavors below.
+  inputSetPath=$(absolute_path "$inputSetPath")
+
   if [ -d "$inputDestinationPath" ] ; then
     echo "Output directory $inputDestinationPath exists" >&2
     echo "removing now" >&2
-    rm -r $inputDestinationPath
+    rm -r "$inputDestinationPath"
   fi
-  echo "start setting up"
-  pic-create $inputSetPath $inputDestinationPath
+  mkdir -p "$inputDestinationPath"
+  inputDestinationPath=$(absolute_path "$inputDestinationPath")
+
+  # The boundary condition is a compile-time choice, so two binaries are
+  # required: the production default (Neumann) for the fully periodic Case A
+  # and homogeneous Dirichlet ghosts for Cases B and C.
+  neumannInput="$inputDestinationPath/neumann"
+  dirichletInput="$inputDestinationPath/dirichlet"
+
+  echo "start setting up Neumann (default) input"
+  pic-create "$inputSetPath" "$neumannInput"
   ret_create=$?
   if [ $ret_create -ne 0 ] ; then
     echo "pic-create failed"
     exit $ret_create
   fi
 
-  inputDestinationPath=$(absolute_path $inputDestinationPath)
-  cd $inputDestinationPath
+  echo "start setting up Dirichlet input"
+  pic-create "$inputSetPath" "$dirichletInput"
+  ret_create=$?
+  if [ $ret_create -ne 0 ] ; then
+    echo "pic-create failed"
+    exit $ret_create
+  fi
 
-  echo "building"
-  pic-build
-  ret_build=$?
+  echo "building Neumann (default) binary"
+  ( cd "$neumannInput" && pic-build )
+  ret_build_neumann=$?
+
+  echo "building Dirichlet binary"
+  ( cd "$dirichletInput" && pic-build \
+      -c "-DPARAM_OVERWRITES=-DPARAM_POISSON_BOUNDARY_CONDITION_DIRICHLET" )
+  ret_build_dirichlet=$?
 
 else
   echo "Input path $inputSetPath does not contain an include directory" >&2
   exit 2
 fi
 
-if [ $ret_build -eq 0 ] ; then
+if [ $ret_build_neumann -eq 0 ] && [ $ret_build_dirichlet -eq 0 ] ; then
   ## create simulation data directory
-  simPath="./simOutput"
+  simPath="$inputDestinationPath/simOutput"
 
   if [ -d "$simPath" ] ; then
       echo "Simulation path already in use, cannot create new folder" >&2
@@ -119,9 +142,6 @@ if [ $ret_build -eq 0 ] ; then
   fi
 
   mkdir -p $simPath
-
-  # use absolut path's
-  simPath=$(absolute_path $simPath)
 
   cd $simPath
 
@@ -132,20 +152,27 @@ if [ $ret_build -eq 0 ] ; then
     caseName=$1
     periodicFlags=$2
     fileName=$3
-    echo "running analytic case $caseName ($periodicFlags)"
-    mpiexec -n 1 ../bin/picongpu -d 1 1 1 -g 32 32 32 --periodic $periodicFlags -s 0 \
+    binary=$4
+    echo "running analytic case $caseName ($periodicFlags) with $binary"
+    mpiexec -n 1 "$binary" -d 1 1 1 -g 32 32 32 --periodic $periodicFlags -s 0 \
       --poisson.activate --openPMD.period 1 --openPMD.ext bp \
       --openPMD.file $fileName -r 2 2>&1 | tee "poissonCase${caseName}.log"
     return ${PIPESTATUS[0]}
   }
 
-  # The Poisson stage does not print the active boundary-condition name yet, so
-  # use the mean-of-rho projection as the observable: it is logged for Neumann
-  # and not for Dirichlet. This catches a silent fallback to the Neumann default.
+  # Each case must run with the boundary condition it is validated for. Check the
+  # reported name first, then the mean-of-rho projection as a second observable:
+  # Neumann logs it, non-periodic Dirichlet does not.
   check_bc_log() {
     caseName=$1
-    expectMean=$2
+    expectedName=$2
+    expectMean=$3
     log="poissonCase${caseName}.log"
+    if ! grep -qF -- "- boundary conditions: $expectedName" "$log" ; then
+      echo "BC visibility check failed for case $caseName: expected the solver to" \
+           "report '$expectedName' boundary conditions, but it did not" >&2
+      return 1
+    fi
     found=0
     if grep -q "offsetting mean of rho by:" "$log" ; then
       found=1
@@ -163,46 +190,46 @@ if [ $ret_build -eq 0 ] ; then
     return 0
   }
 
-  run_case A "1 1 1" simDataCaseA
+  run_case A "1 1 1" simDataCaseA "$neumannInput/bin/picongpu"
   ret_simA=$?
-  run_case B "0 0 0" simDataCaseB
+  run_case B "0 0 0" simDataCaseB "$dirichletInput/bin/picongpu"
   ret_simB=$?
-  run_case C "0 1 1" simDataCaseC
+  run_case C "0 1 1" simDataCaseC "$dirichletInput/bin/picongpu"
   ret_simC=$?
 
   ret_bcA=0
   ret_bcB=0
   ret_bcC=0
   if [ $ret_simA -eq 0 ] ; then
-    check_bc_log A yes || ret_bcA=1
+    check_bc_log A Neumann yes || ret_bcA=1
   fi
   if [ $ret_simB -eq 0 ] ; then
-    check_bc_log B no || ret_bcB=1
+    check_bc_log B Dirichlet no || ret_bcB=1
   fi
   if [ $ret_simC -eq 0 ] ; then
-    check_bc_log C no || ret_bcC=1
+    check_bc_log C Dirichlet no || ret_bcC=1
   fi
 
-  cd ..
   # validate the results
-  if [ -d "./lib/python/test/" ] ; then
+  validator="$neumannInput/lib/python/test/validate_analytic.py"
+  if [ -f "$validator" ] ; then
     ret_valA=1
     ret_valB=1
     ret_valC=1
 
     if [ $ret_simA -eq 0 ] ; then
       echo "validating analytic case A"
-      python3 ./lib/python/test/validate_analytic.py -r $simPath -f simDataCaseA -c A
+      python3 "$validator" -r $simPath -f simDataCaseA -c A
       ret_valA=$?
     fi
     if [ $ret_simB -eq 0 ] ; then
       echo "validating analytic case B"
-      python3 ./lib/python/test/validate_analytic.py -r $simPath -f simDataCaseB -c B
+      python3 "$validator" -r $simPath -f simDataCaseB -c B
       ret_valB=$?
     fi
     if [ $ret_simC -eq 0 ] ; then
       echo "validating analytic case C"
-      python3 ./lib/python/test/validate_analytic.py -r $simPath -f simDataCaseC -c C
+      python3 "$validator" -r $simPath -f simDataCaseC -c C
       ret_valC=$?
     fi
 
@@ -224,5 +251,8 @@ if [ $ret_build -eq 0 ] ; then
 
 else
   echo "build failed" >&2
-  exit $ret_build
+  if [ $ret_build_neumann -ne 0 ] ; then
+    exit $ret_build_neumann
+  fi
+  exit $ret_build_dirichlet
 fi
