@@ -1,0 +1,258 @@
+#!/bin/bash
+#
+# This file is part of PIConGPU.
+#
+# Copyright 2026-2026 PIConGPU contributors
+# Author: Edgar Marquardt
+#
+# PIConGPU is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# PIConGPU is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with PIConGPU.
+# If not, see <http://www.gnu.org/licenses/>.
+#
+
+function absolute_path()
+{
+    builtin cd -- $1 && pwd
+}
+
+help()
+{
+  echo "Analytic regression test for the Poisson solver."
+  echo ""
+  echo "Runs three closed-form cases on a 32^3 grid and checks E_max, E_L2 and"
+  echo "the discrete residual R of the electrostatic potential (see README.rst)."
+  echo ""
+  echo "Usage: ci.sh [-d dataPath] [inputSetPath] [destinationPath]"
+  echo ""
+  echo "Options"
+  echo "-h | --help                 - show help"
+  echo ""
+  echo "inputSetPath                - path to the simulation input set"
+  echo "                              Default: current directory"
+  echo "destinationPath             - path to the destination where the input set is cloned to via"
+  echo "                              'pic-create'"
+  echo "                              Default: current directory"
+}
+
+#####################
+## option handling ##
+#####################
+# options may be followed by
+# - one colon to indicate they have a required argument
+OPTS=`getopt -o h -l help -- "$@"`
+if [ $? != 0 ] ; then
+    # something went wrong, getopt will put out an error message for us
+    exit 1
+fi
+
+eval set -- "$OPTS"
+
+# parser
+while true ; do
+    case "$1" in
+        -h|--help)
+            echo -e "$(help)"
+            shift
+            exit 0
+            ;;
+        --) shift; break;;
+    esac
+    shift
+done
+
+
+############################
+## build and run picongpu ##
+############################
+if [ $# -eq 2 ] ; then
+  inputSetPath=$1
+  inputDestinationPath=$2
+else
+  echo "Two arguments are required, $# given!" >&2
+  echo -e "$(help)" >&2
+  exit 1
+fi
+
+if [ -d "$inputSetPath/include" ] ; then
+  # Resolve the input set before changing directories: it is used by pic-create
+  # for both build flavors below.
+  inputSetPath=$(absolute_path "$inputSetPath")
+
+  if [ -d "$inputDestinationPath" ] ; then
+    echo "Output directory $inputDestinationPath exists" >&2
+    echo "removing now" >&2
+    rm -r "$inputDestinationPath"
+  fi
+  mkdir -p "$inputDestinationPath"
+  inputDestinationPath=$(absolute_path "$inputDestinationPath")
+
+  # The boundary condition is a compile-time choice, so two binaries are
+  # required: the production default (Neumann) for the fully periodic Case A
+  # and homogeneous Dirichlet ghosts for Cases B and C.
+  neumannInput="$inputDestinationPath/neumann"
+  dirichletInput="$inputDestinationPath/dirichlet"
+
+  echo "start setting up Neumann (default) input"
+  pic-create "$inputSetPath" "$neumannInput"
+  ret_create=$?
+  if [ $ret_create -ne 0 ] ; then
+    echo "pic-create failed"
+    exit $ret_create
+  fi
+
+  echo "start setting up Dirichlet input"
+  pic-create "$inputSetPath" "$dirichletInput"
+  ret_create=$?
+  if [ $ret_create -ne 0 ] ; then
+    echo "pic-create failed"
+    exit $ret_create
+  fi
+
+  echo "building Neumann (default) binary"
+  ( cd "$neumannInput" && pic-build )
+  ret_build_neumann=$?
+
+  echo "building Dirichlet binary"
+  ( cd "$dirichletInput" && pic-build \
+      -c "-DPARAM_OVERWRITES=-DPARAM_POISSON_BOUNDARY_CONDITION_DIRICHLET" )
+  ret_build_dirichlet=$?
+
+else
+  echo "Input path $inputSetPath does not contain an include directory" >&2
+  exit 2
+fi
+
+if [ $ret_build_neumann -eq 0 ] && [ $ret_build_dirichlet -eq 0 ] ; then
+  ## create simulation data directory
+  simPath="$inputDestinationPath/simOutput"
+
+  if [ -d "$simPath" ] ; then
+      echo "Simulation path already in use, cannot create new folder" >&2
+      exit 3
+  fi
+
+  mkdir -p $simPath
+
+  cd $simPath
+
+  # run the simulation for the three analytic cases
+  echo "Simulation path: " $simPath"/"
+
+  run_case() {
+    caseName=$1
+    periodicFlags=$2
+    fileName=$3
+    binary=$4
+    echo "running analytic case $caseName ($periodicFlags) with $binary"
+    mpiexec -n 1 "$binary" -d 1 1 1 -g 32 32 32 --periodic $periodicFlags -s 0 \
+      --poisson.activate --openPMD.period 1 --openPMD.ext bp \
+      --openPMD.file $fileName -r 2 2>&1 | tee "poissonCase${caseName}.log"
+    return ${PIPESTATUS[0]}
+  }
+
+  # Each case must run with the boundary condition it is validated for. Check the
+  # reported name first, then the mean-of-rho projection as a second observable:
+  # Neumann logs it, non-periodic Dirichlet does not.
+  check_bc_log() {
+    caseName=$1
+    expectedName=$2
+    expectMean=$3
+    log="poissonCase${caseName}.log"
+    if ! grep -qF -- "- boundary conditions: $expectedName" "$log" ; then
+      echo "BC visibility check failed for case $caseName: expected the solver to" \
+           "report '$expectedName' boundary conditions, but it did not" >&2
+      return 1
+    fi
+    found=0
+    if grep -q "offsetting mean of rho by:" "$log" ; then
+      found=1
+    fi
+    if [ "$expectMean" = "yes" ] && [ $found -ne 1 ] ; then
+      echo "BC visibility check failed for case $caseName: expected the Neumann" \
+           "mean-of-rho projection log line, but it is missing" >&2
+      return 1
+    fi
+    if [ "$expectMean" = "no" ] && [ $found -eq 1 ] ; then
+      echo "BC visibility check failed for case $caseName: Dirichlet must not" \
+           "project the mean of rho, but the Neumann log line is present" >&2
+      return 1
+    fi
+    return 0
+  }
+
+  run_case A "1 1 1" simDataCaseA "$neumannInput/bin/picongpu"
+  ret_simA=$?
+  run_case B "0 0 0" simDataCaseB "$dirichletInput/bin/picongpu"
+  ret_simB=$?
+  run_case C "0 1 1" simDataCaseC "$dirichletInput/bin/picongpu"
+  ret_simC=$?
+
+  ret_bcA=0
+  ret_bcB=0
+  ret_bcC=0
+  if [ $ret_simA -eq 0 ] ; then
+    check_bc_log A Neumann yes || ret_bcA=1
+  fi
+  if [ $ret_simB -eq 0 ] ; then
+    check_bc_log B Dirichlet no || ret_bcB=1
+  fi
+  if [ $ret_simC -eq 0 ] ; then
+    check_bc_log C Dirichlet no || ret_bcC=1
+  fi
+
+  # validate the results
+  validator="$neumannInput/lib/python/test/validate_analytic.py"
+  if [ -f "$validator" ] ; then
+    ret_valA=1
+    ret_valB=1
+    ret_valC=1
+
+    if [ $ret_simA -eq 0 ] ; then
+      echo "validating analytic case A"
+      python3 "$validator" -r $simPath -f simDataCaseA -c A
+      ret_valA=$?
+    fi
+    if [ $ret_simB -eq 0 ] ; then
+      echo "validating analytic case B"
+      python3 "$validator" -r $simPath -f simDataCaseB -c B
+      ret_valB=$?
+    fi
+    if [ $ret_simC -eq 0 ] ; then
+      echo "validating analytic case C"
+      python3 "$validator" -r $simPath -f simDataCaseC -c C
+      ret_valC=$?
+    fi
+
+    for ret in $ret_simA $ret_simB $ret_simC $ret_bcA $ret_bcB $ret_bcC \
+               $ret_valA $ret_valB $ret_valC ; do
+      if [ $ret -ne 0 ] ; then
+        echo "analytic Poisson regression test failed" >&2
+        exit $ret
+      fi
+    done
+
+    echo "all successful"
+    exit 0
+
+  else
+    echo "Input path $inputSetPath does not contain an lib/python/test directory" >&2
+    exit 2
+  fi
+
+else
+  echo "build failed" >&2
+  if [ $ret_build_neumann -ne 0 ] ; then
+    exit $ret_build_neumann
+  fi
+  exit $ret_build_dirichlet
+fi

@@ -1,7 +1,7 @@
 """
 This file is part of PIConGPU.
-Copyright 2021-2024 PIConGPU contributors
-Authors: Hannes Troepgen, Brian Edward Marre, Richard Pausch
+Copyright 2021-2026 PIConGPU contributors
+Authors: Hannes Troepgen, Brian Edward Marre, Richard Pausch, Edgar Marquardt
 License: GPLv3+
 """
 
@@ -9,8 +9,12 @@ import math
 from collections.abc import Sequence
 from typing import Annotated, Any, Literal, Self
 
-from picmistandard import PICMI_BinomialSmoother, PICMI_ElectromagneticSolver
-from pydantic import BeforeValidator, ConfigDict, PrivateAttr, model_validator
+from picmistandard import (
+    PICMI_BinomialSmoother,
+    PICMI_ElectromagneticSolver,
+    PICMI_ElectrostaticSolver,
+)
+from pydantic import BeforeValidator, ConfigDict, Field, PrivateAttr, model_validator
 
 from picongpu.pypicongpu import util
 from picongpu.pypicongpu.field_solver import (
@@ -21,6 +25,7 @@ from picongpu.pypicongpu.field_solver import (
     NoneSolver,
     YeeSolver,
 )
+from picongpu.pypicongpu.poissonsolver import PoissonSolver
 
 _other_than_one_pass = (
     "a number of binomial smoothing passes other than one (PIConGPU's C++ current "
@@ -252,3 +257,32 @@ class ElectromagneticSolver(PICMI_ElectromagneticSolver):
                 return ArbitraryOrderFDTDSolver(neighbors=self._stencil_neighbors)
             case "other:None":
                 return NoneSolver()
+
+
+class ElectrostaticSolver(PICMI_ElectrostaticSolver):
+    """
+    PICMI Electrostatic Solver
+
+    See PICMI spec for full documentation.
+
+    Only the Bi-CGSTAB Poisson solver is supported; solver options that PIConGPU
+    does not implement are rejected at construction time.
+
+    All solver options default to ``None``, which means "use the PIConGPU
+    default": the generated parameter file then omits the corresponding
+    command-line option. See :class:`picongpu.pypicongpu.poissonsolver.PoissonSolver`
+    for the underlying defaults.
+    """
+
+    required_precision: Annotated[float, Field(gt=0.0)] | None = None
+    maximum_iterations: Annotated[int, Field(gt=0)] | None = None
+    preconditioner: Literal["chebyshev", "none"] | None = None
+    preconditioner_maximum_iterations: Annotated[int, Field(gt=0)] | None = None
+
+    def get_as_pypicongpu(self) -> PoissonSolver:
+        return PoissonSolver(
+            tolerance=self.required_precision,
+            max_steps=self.maximum_iterations,
+            preconditioner=self.preconditioner,
+            preconditioner_max_steps=self.preconditioner_maximum_iterations,
+        )
