@@ -162,9 +162,7 @@ def analytic_fields(case, N, h):
         phi = PHI0 * np.sin(kx * X) * np.sin(ky * Y) * np.sin(kz * Z)
         # The sine is an exact discrete eigenvector; use the discrete eigenvalue.
         N = np.asarray(N)
-        lambda_discrete = sum(
-            4.0 * np.sin(np.pi / N[d]) ** 2 / h[d] ** 2 for d in range(3)
-        )
+        lambda_discrete = sum(4.0 * np.sin(np.pi / N[d]) ** 2 / h[d] ** 2 for d in range(3))
         rho = epsilon_0 * lambda_discrete * phi
         Ex = -PHI0 * kx * np.cos(kx * X) * np.sin(ky * Y) * np.sin(kz * Z)
         Ey = -PHI0 * ky * np.sin(kx * X) * np.cos(ky * Y) * np.sin(kz * Z)
@@ -222,9 +220,7 @@ def main():
     parser.add_argument("-r", dest="path", required=True, help="Path to the simulation results")
     parser.add_argument("-f", dest="file", required=True, help="openPMD file base name")
     parser.add_argument("-c", dest="case", required=True, choices=sorted(CASES), help="Analytic case")
-    parser.add_argument(
-        "-e", dest="ext", default="bp", help="openPMD file extension (default: bp)"
-    )
+    parser.add_argument("-e", dest="ext", default="bp", help="openPMD file extension (default: bp)")
     args = parser.parse_args()
 
     filename = f"{args.path}/openPMD/{args.file}_000000.{args.ext}"
@@ -239,9 +235,8 @@ def main():
         V = np.asarray(comp[:, :, :], dtype=np.float64)
         series.flush()
         unit_si = float(comp.get_attribute("unitSI"))
-        h = (
-            np.asarray(comp.get_attribute("gridSpacing"), dtype=np.float64)[::-1]
-            * float(comp.get_attribute("gridUnitSI"))
+        h = np.asarray(comp.get_attribute("gridSpacing"), dtype=np.float64)[::-1] * float(
+            comp.get_attribute("gridUnitSI")
         )
     except KeyError:
         print("openPMD file does not contain the 'FieldV' mesh")
@@ -309,15 +304,10 @@ def main():
         print("analytic electric field is identically zero")
         return 2
 
-    E_defect_max = max(
-        float(np.max(np.abs(ideal - analytic))) for ideal, analytic in zip(E_ideal, E_analytic)
-    )
+    E_defect_max = max(float(np.max(np.abs(ideal - analytic))) for ideal, analytic in zip(E_ideal, E_analytic))
     E_defect_l2 = float(
         np.sqrt(
-            sum(
-                np.sum((ideal - analytic) ** 2)
-                for ideal, analytic in zip(E_ideal, E_analytic)
-            )
+            sum(np.sum((ideal - analytic) ** 2) for ideal, analytic in zip(E_ideal, E_analytic))
             / sum(np.sum(analytic**2) for analytic in E_analytic)
         )
     )
@@ -329,18 +319,11 @@ def main():
     E_field_L2_tol = E_FIRST_ORDER_MARGIN * E_defect_l2
 
     E_field_max = (
-        max(
-            float(np.max(np.abs(measured - analytic)))
-            for measured, analytic in zip(E_measured, E_analytic)
-        )
-        / E_peak
+        max(float(np.max(np.abs(measured - analytic))) for measured, analytic in zip(E_measured, E_analytic)) / E_peak
     )
     E_field_L2 = float(
         np.sqrt(
-            sum(
-                np.sum((measured - analytic) ** 2)
-                for measured, analytic in zip(E_measured, E_analytic)
-            )
+            sum(np.sum((measured - analytic) ** 2) for measured, analytic in zip(E_measured, E_analytic))
             / sum(np.sum(analytic**2) for analytic in E_analytic)
         )
     )

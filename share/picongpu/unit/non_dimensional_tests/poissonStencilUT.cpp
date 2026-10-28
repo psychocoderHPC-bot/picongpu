@@ -27,12 +27,12 @@
 
 namespace
 {
-    using pmacc::DataSpace;
+    using picongpu::fields::poissonSolver::GetFieldEStencil;
+    using picongpu::fields::poissonSolver::StencilFunc;
     using picongpu::float3_X;
     using picongpu::float_64;
     using picongpu::float_X;
-    using picongpu::fields::poissonSolver::GetFieldEStencil;
-    using picongpu::fields::poissonSolver::StencilFunc;
+    using pmacc::DataSpace;
 
     enum class Ghost
     {
@@ -105,15 +105,7 @@ namespace
         return field[index(idx[0], idx[1], idx[2], nx, ny)];
     }
 
-    Accessor makeAccessor(
-        std::vector<float_64> const& field,
-        int nx,
-        int ny,
-        int nz,
-        int i,
-        int j,
-        int k,
-        Ghost ghost)
+    Accessor makeAccessor(std::vector<float_64> const& field, int nx, int ny, int nz, int i, int j, int k, Ghost ghost)
     {
         Accessor accessor;
         accessor.center = field[index(i, j, k, nx, ny)];
@@ -138,22 +130,20 @@ namespace
             static_cast<float_X>(h * h),
             static_cast<float_X>(h * h),
             static_cast<float_X>(h * h)};
-        float_64 const fc0 = 2.0
-                            * (1.0 / cellSizeSquared[0] + 1.0 / cellSizeSquared[1]
-                               + 1.0 / cellSizeSquared[2]);
+        float_64 const fc0 = 2.0 * (1.0 / cellSizeSquared[0] + 1.0 / cellSizeSquared[1] + 1.0 / cellSizeSquared[2]);
 
         StencilFunc const stencil;
         for(int k = 0; k < nz; ++k)
             for(int j = 0; j < ny; ++j)
                 for(int i = 0; i < nx; ++i)
-                    result[index(i, j, k, nx, ny)]
-                        = stencil.stencilFunction(makeAccessor(field, nx, ny, nz, i, j, k, ghost), fc0, cellSizeSquared);
+                    result[index(i, j, k, nx, ny)] = stencil.stencilFunction(
+                        makeAccessor(field, nx, ny, nz, i, j, k, ghost),
+                        fc0,
+                        cellSizeSquared);
         return result;
     }
 
-    float_64 inner(
-        std::vector<float_64> const& lhs,
-        std::vector<float_64> const& rhs)
+    float_64 inner(std::vector<float_64> const& lhs, std::vector<float_64> const& rhs)
     {
         float_64 sum = 0.0;
         for(std::size_t i = 0; i < lhs.size(); ++i)
@@ -195,8 +185,7 @@ TEST_CASE("Poisson stencil is exact for the Dirichlet polynomial", "[poisson][st
                 float_64 const px = x * (L - x);
                 float_64 const py = y * (L - y);
                 float_64 const pz = z * (L - z);
-                float_64 const expected
-                    = 128.0 * phi0 * (py * pz + px * pz + px * py) / (L * L * L * L * L * L);
+                float_64 const expected = 128.0 * phi0 * (py * pz + px * pz + px * py) / (L * L * L * L * L * L);
                 maxError = std::max(maxError, std::abs(stencilPhi[index(i, j, k, n, n)] - expected));
                 maxExpected = std::max(maxExpected, std::abs(expected));
             }
@@ -323,8 +312,7 @@ TEST_CASE("Gradient and stencil satisfy the discrete adjoint identity", "[poisso
                     else
                     {
                         float3_X const previous = gradU[index(prev[0], prev[1], prev[2], n, n)];
-                        previousComponent
-                            = d == 0 ? previous.x() : (d == 1 ? previous.y() : previous.z());
+                        previousComponent = d == 0 ? previous.x() : (d == 1 ? previous.y() : previous.z());
                     }
                     divergence += (currentComponent - previousComponent) / h;
                 }

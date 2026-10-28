@@ -130,8 +130,8 @@ namespace picongpu
                         = 4.0 * pmacc::math::sin(PI / m_nx) * pmacc::math::sin(PI / m_nx) / (h[0] * h[0])
                           + 4.0 * pmacc::math::sin(PI / m_ny) * pmacc::math::sin(PI / m_ny) / (h[1] * h[1])
                           + 4.0 * pmacc::math::sin(PI / m_nz) * pmacc::math::sin(PI / m_nz) / (h[2] * h[2]);
-                    rho = SI::EPS0_SI * lambdaDiscrete * POISSON_TEST_PHI0_SI
-                          * pmacc::math::sin(kx * x) * pmacc::math::sin(ky * y) * pmacc::math::sin(kz * z);
+                    rho = SI::EPS0_SI * lambdaDiscrete * POISSON_TEST_PHI0_SI * pmacc::math::sin(kx * x)
+                          * pmacc::math::sin(ky * y) * pmacc::math::sin(kz * z);
                 }
                 else if(m_case == 1)
                 {
@@ -139,8 +139,8 @@ namespace picongpu
                     float_64 const px = x * (lx - x);
                     float_64 const py = y * (ly - y);
                     float_64 const pz = z * (lz - z);
-                    rho = 128.0 * SI::EPS0_SI * POISSON_TEST_PHI0_SI
-                          * (py * pz + px * pz + px * py) / (lx * lx * ly * ly * lz * lz);
+                    rho = 128.0 * SI::EPS0_SI * POISSON_TEST_PHI0_SI * (py * pz + px * pz + px * py)
+                          / (lx * lx * ly * ly * lz * lz);
                 }
                 else
                 {
@@ -151,8 +151,7 @@ namespace picongpu
                 float_64 const positivePart = rho > 0.0 ? rho : 0.0;
                 float_64 const negativePart = rho < 0.0 ? -rho : 0.0;
                 float_64 const magnitude
-                    = (T_Positive ? positivePart : negativePart)
-                      / (-SI::ELECTRON_CHARGE_SI * sim.si.getBaseDensity());
+                    = (T_Positive ? positivePart : negativePart) / (-SI::ELECTRON_CHARGE_SI * sim.si.getBaseDensity());
                 return static_cast<float_X>(magnitude);
             }
 
