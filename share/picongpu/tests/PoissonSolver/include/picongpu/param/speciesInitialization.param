@@ -39,8 +39,8 @@ namespace picongpu
          * the functors are called in order (from first to last functor)
          */
         using InitPipeline = pmacc::mp_list<
-            CreateDensity<densityProfiles::CoaxialWireOuter, startPosition::Random, PIC_Electrons>,
-            CreateDensity<densityProfiles::CoaxialWireInner, startPosition::Random, PIC_Ions>>;
+            CreateDensity<densityProfiles::AnalyticNegative, startPosition::AnalyticNode, PIC_Electrons>,
+            CreateDensity<densityProfiles::AnalyticPositive, startPosition::AnalyticNode, PIC_Ions>>;
 
     } // namespace particles
 } // namespace picongpu

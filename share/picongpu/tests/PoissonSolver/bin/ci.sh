@@ -27,7 +27,10 @@ function absolute_path()
 
 help()
 {
-  echo "Tests the Poisson solver with a simple setup."
+  echo "Analytic regression test for the Poisson solver."
+  echo ""
+  echo "Runs three closed-form cases on a 32^3 grid and checks E_max, E_L2 and"
+  echo "the discrete residual R of the electrostatic potential (see README.rst)."
   echo ""
   echo "Usage: ci.sh [-d dataPath] [inputSetPath] [destinationPath]"
   echo ""
@@ -122,62 +125,57 @@ if [ $ret_build -eq 0 ] ; then
 
   cd $simPath
 
-  # run the simulation
+  # run the simulation for the three analytic cases
   echo "Simulation path: " $simPath"/"
-  mpiexec -n 1 ../bin/picongpu -d 1 1 1 -g 128 512 128 --periodic 0 0 0 -s 4 \
-  --openPMD.period 8 --openPMD.ext bp --openPMD.file simDataOpen --poisson.activate
-  ret_sim1=$?
-  if [ $ret_sim1 -ne 0 ] ; then
-    echo "running open simulation failed" >&2
-  fi
 
-  mpiexec -n 1 ../bin/picongpu -d 1 1 1 -g 128 512 128 --periodic 1 1 1 -s 4 \
-  --openPMD.period 8 --openPMD.ext bp --openPMD.file simDataPeriodic --poisson.activate
-  ret_sim2=$?
+  run_case() {
+    caseName=$1
+    periodicFlags=$2
+    fileName=$3
+    echo "running analytic case $caseName ($periodicFlags)"
+    mpiexec -n 1 ../bin/picongpu -d 1 1 1 -g 32 32 32 --periodic $periodicFlags -s 0 \
+      --poisson.activate --openPMD.period 1 --openPMD.ext bp \
+      --openPMD.file $fileName -r 2
+    return $?
+  }
 
-  if [ $ret_sim2 -ne 0 ] ; then
-    echo "running periodic simulation failed" >&2
-  fi
-  if [ $ret_sim1 -eq 0 ] && [ $ret_sim2 -eq 0 ] ; then
-    echo "simulations finished"
-  fi
+  run_case A "1 1 1" simDataCaseA
+  ret_simA=$?
+  run_case B "0 0 0" simDataCaseB
+  ret_simB=$?
+  run_case C "0 1 1" simDataCaseC
+  ret_simC=$?
 
   cd ..
   # validate the results
   if [ -d "./lib/python/test/" ] ; then
-    if [ $ret_sim1 -eq 0 ] ; then
-      echo "validating open simulation test"
-      python3 ./lib/python/test/validate_results.py -r $simPath -b open
-      ret_val1=$?
-      if [ $ret_val1 -eq 0 ] ; then
-        echo "test successfully validated"
-      else
-        echo "test validation failed"
-      fi
+    ret_valA=1
+    ret_valB=1
+    ret_valC=1
+
+    if [ $ret_simA -eq 0 ] ; then
+      echo "validating analytic case A"
+      python3 ./lib/python/test/validate_analytic.py -r $simPath -f simDataCaseA -c A
+      ret_valA=$?
     fi
-    if [ $ret_sim2 -eq 0 ] ; then
-      echo "validating periodic simulation test"
-      python3 ./lib/python/test/validate_results.py -r $simPath -b periodic
-      ret_val2=$?
-      if [ $ret_val2 -eq 0 ] ; then
-        echo "test successfully validated"
-      else
-        echo "test validation failed"
-      fi
+    if [ $ret_simB -eq 0 ] ; then
+      echo "validating analytic case B"
+      python3 ./lib/python/test/validate_analytic.py -r $simPath -f simDataCaseB -c B
+      ret_valB=$?
+    fi
+    if [ $ret_simC -eq 0 ] ; then
+      echo "validating analytic case C"
+      python3 ./lib/python/test/validate_analytic.py -r $simPath -f simDataCaseC -c C
+      ret_valC=$?
     fi
 
-    if [ $ret_sim1 -ne 0 ] ; then
-      exit $ret_sim1
-    fi
-    if [ $ret_sim2 -ne 0 ] ; then
-      exit $ret_sim2
-    fi
-    if [ $ret_val1 -ne 0 ] ; then
-      exit $ret_val1
-    fi
-    if [ $ret_val2 -ne 0 ] ; then
-      exit $ret_val2
-    fi
+    for ret in $ret_simA $ret_simB $ret_simC $ret_valA $ret_valB $ret_valC ; do
+      if [ $ret -ne 0 ] ; then
+        echo "analytic Poisson regression test failed" >&2
+        exit $ret
+      fi
+    done
+
     echo "all successful"
     exit 0
 

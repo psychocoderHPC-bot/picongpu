@@ -41,7 +41,11 @@ namespace picongpu
          *      be created / will be deleted
          *
          *  unit: none */
-        constexpr float_X MIN_WEIGHTING = 1.0e-3;
+        /* The analytic injection places exactly one macro particle per grid node. Its
+         * weighting equals the number of real particles in the cell and can be
+         * very small for the polynomial and slab cases, so the cut-off is lowered
+         * to keep every node populated. */
+        constexpr float_X MIN_WEIGHTING = 1.0e-30;
 
         namespace startPosition
         {
@@ -64,6 +68,20 @@ namespace picongpu
             /** Definition of start position functor that randomly distributes macro-particles within a cell. */
 
             using Random = RandomImpl<RandomParameter>;
+
+            /** Put one macro particle exactly on the lower node of each cell.
+             *
+             * Combined with the CIC shape this deposits the full weight on that
+             * node, which turns the analytic density profile into an exact grid
+             * charge density without sampling noise.
+             */
+            struct AnalyticNodeParam
+            {
+                static constexpr float3_X inCellOffset = float3_X{0.0_X, 0.0_X, 0.0_X};
+                static constexpr uint32_t numParticlesPerCell = 1u;
+            };
+
+            using AnalyticNode = OnePositionImpl<AnalyticNodeParam>;
 
         } // namespace startPosition
     } // namespace particles

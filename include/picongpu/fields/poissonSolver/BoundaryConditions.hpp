@@ -518,7 +518,12 @@ namespace picongpu::fields::poissonSolver
     };
 
     // Use Neumann boundary conditions for the Poisson solver by default.
-    // Change this to BoundaryConditionsDirichlet to use Dirichlet boundary conditions instead.
-    // maybe make this a param file parameter in the future
+    // Define PARAM_POISSON_BOUNDARY_CONDITION_DIRICHLET in simulation.param to
+    // select homogeneous Dirichlet ghost values instead. The default behaviour
+    // is unchanged.
+#ifdef PARAM_POISSON_BOUNDARY_CONDITION_DIRICHLET
+    using BoundaryConditions = BoundaryConditionsDirichlet;
+#else
     using BoundaryConditions = BoundaryConditionsNeumann;
+#endif
 } // namespace picongpu::fields::poissonSolver

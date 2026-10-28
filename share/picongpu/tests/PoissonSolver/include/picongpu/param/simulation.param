@@ -42,6 +42,14 @@
 
 #pragma once
 
+/** Select homogeneous Dirichlet ghost values for the Poisson solver.
+ *
+ * The production default stays homogeneous Neumann. The regression test uses
+ * grounded Dirichlet boundaries for Cases B and C; fully periodic runs (Case A)
+ * are unaffected because no boundary condition is applied there.
+ */
+#define PARAM_POISSON_BOUNDARY_CONDITION_DIRICHLET 1
+
 namespace picongpu
 {
     namespace SI
