@@ -286,14 +286,24 @@ def main():
     # -grad(phi) as the expected first-order defect. The tolerance is that
     # defect times a small margin: a correct first-order field passes, while a
     # sign flip, a one-cell stagger or a wrong 1/h scaling fails.
+    # The comparison assumes the Yee-grid component positions: E_x at
+    # (0.5, 0, 0), E_y at (0, 0.5, 0), E_z at (0, 0, 0.5), and FieldV at
+    # (0, 0, 0). The analytic field is therefore evaluated at the half-cell
+    # shifted coordinate of each component.
     try:
         field_e = series.iterations[0].meshes["E"]
         E_measured = []
         for name in ("x", "y", "z"):
             component = field_e[name]
-            values = np.asarray(component[:, :, :], dtype=np.float64)
-            E_measured.append(np.transpose(values) * float(component.get_attribute("unitSI")))
-        series.flush()
+            unit_si = float(component.get_attribute("unitSI"))
+            # Request the chunk, flush it into the backing store, then take a
+            # private copy. Without the flush before the copy the array is a
+            # view into uninitialised memory, and only the last flushed
+            # component would be valid.
+            values = np.asarray(component[:, :, :])
+            series.flush()
+            values = np.array(values, dtype=np.float64)
+            E_measured.append(np.transpose(values) * unit_si)
     except KeyError:
         print("openPMD file does not contain the 'E' mesh components")
         return 2
