@@ -29,6 +29,14 @@
 
 namespace picongpu::fields::poissonSolver
 {
+    /** Boundary value (Dirichlet) or outward-normal derivative (Neumann) used by
+     *  the *FromFunction* kernels.
+     *
+     *  Only homogeneous boundary conditions are supported: this functor always
+     *  returns zero and there is no parameter-file hook to change it. The
+     *  *FromFunction* kernels are therefore equivalent to the homogeneous
+     *  kernels, and non-homogeneous Dirichlet/Neumann values are not implemented.
+     */
     struct BoundaryFunction
     {
         // gives the potential at the boundary, given the total cell coordinate for Dirichlet BCs and the outward
@@ -418,23 +426,6 @@ namespace picongpu::fields::poissonSolver
         }
     };
 
-    struct BoundaryConditionsHomogenousDirichlet : BoundaryConditionsDirichlet
-    {
-        static constexpr char const* name() noexcept
-        {
-            return "Dirichlet (homogeneous)";
-        }
-
-        void operator()(FieldV& fieldV, MappingDesc const& cellDescription, float_64 const& normalizationFactor = 1.0)
-            const
-        {
-            applyBoundaryConditions<ApplyDirichletBCsHomogeneousKernel>(
-                *fieldV.fieldVBuffer,
-                cellDescription,
-                normalizationFactor);
-        }
-    };
-
     struct BoundaryConditionsNeumann
     {
         //! Human readable name of the boundary condition, used for logging and reporting.
@@ -514,28 +505,6 @@ namespace picongpu::fields::poissonSolver
             }
 
             return -sim.pic.getEps0() * boundaryFluxSum / static_cast<float_64>(numVertices);
-        }
-    };
-
-    struct BoundaryConditionsHomogenousNeumann : BoundaryConditionsNeumann
-    {
-        static constexpr char const* name() noexcept
-        {
-            return "Neumann (homogeneous)";
-        }
-
-        void operator()(FieldV& fieldV, MappingDesc const& cellDescription, float_64 const& normalizationFactor = 1.0)
-            const
-        {
-            applyBoundaryConditions<ApplyNeumannBCsHomogeneousKernel>(
-                *fieldV.fieldVBuffer,
-                cellDescription,
-                normalizationFactor);
-        }
-
-        float_64 specificRhoMean(auto const& globalDomainSize, auto const& cellSize) const
-        {
-            return 0.0; // Homogeneous Neumann BCs require rho to have mean zero.
         }
     };
 

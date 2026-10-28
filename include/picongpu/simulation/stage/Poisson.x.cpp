@@ -883,7 +883,8 @@ namespace picongpu
                 if(foundSolution)
                 {
                     if(ioRank)
-                        log<picLog::PHYSICS>("  - converged after %1%/%2% iterations with norm=%3%, total epsilon=%4%")
+                        log<picLog::PHYSICS>(
+                            "  - converged after %1%/%2% iterations with RHS norm=%3%, final residual norm=%4%")
                             % maxGlobalIterations % maxIterations % maxGlobalNormRho % std::sqrt(maxGlobalTotalSum2);
 
                     // normalize v back
@@ -946,8 +947,8 @@ namespace picongpu
                     if(ioRank)
                     {
                         log<picLog::PHYSICS>(
-                            "  - did not converge after %1% iterations with norm=%2%, total epsilon=%3%")
-                            % maxIterations % normRho % std::sqrt(rho1);
+                            "  - did not converge after %1% iterations with RHS norm=%2%, final residual norm=%3%")
+                            % maxIterations % maxGlobalNormRho % std::sqrt(maxGlobalTotalSum2);
                     }
                     throw std::runtime_error("Poisson solver did not converge after max iterations");
                 }

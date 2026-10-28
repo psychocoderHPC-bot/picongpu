@@ -70,6 +70,33 @@ The 7-point stencil itself, including the Dirichlet and Neumann mirror-ghost
 handling and the gradient/divergence adjoint identity, is covered by
 ``share/picongpu/unit/non_dimensional_tests/poissonStencilUT.cpp``.
 
+Electric-field check
+--------------------
+
+The validator also compares the reconstructed electric field with the analytic
+gradient ``-grad(phi)``:
+
+``E_field_max = max|E - (-grad phi)| / max|grad phi|``
+
+``E_field_L2  = sqrt(sum|E + grad phi|^2 / sum|grad phi|^2)``
+
+These are reported separately from the potential metrics. The solver uses the
+discrete adjoint of the divergence, ``E_i = (V_i - V_{i+1}) / h``, so the
+divergence of ``E`` reproduces the solver's Laplacian term exactly while the
+pointwise field is only first-order accurate. Compared with the analytic
+gradient at the same node index, the forward difference is centred half a cell
+away and leaves a defect of order ``(h/2) d^2 phi/dx^2``.
+
+The tolerance is not a fixed number: at run time the validator forms the ideal
+forward difference of the analytic potential and measures its relative distance
+to ``-grad(phi)``. That distance is the expected first-order defect. The
+acceptance limit is ``1.5`` times this value, which leaves room for a correct
+first-order field while still rejecting a sign flip (about ``2`` on this scale),
+a one-cell stagger (about ``3`` times the defect) and a wrong ``1/h`` scaling
+(orders of magnitude too large). On the 32^3 grid the expected relative defect
+is about ``9.8e-2`` for Case A and ``3.2e-2`` for Cases B and C; the actual
+limits are printed with each run.
+
 Precision and thresholds
 ------------------------
 
@@ -89,6 +116,27 @@ A           5e-3       2e-3       1e-6
 B           1e-5       5e-6       1e-6
 C           1e-5       5e-6       1e-6
 ==========  =========  =========  =========
+
+Accuracy
+--------
+
+(a) In 64-bit the potential matches the analytic solution at the solver
+tolerance; the fixed ``E_max``/``E_L2`` limits above are far above that and act
+as regression gates, not as a tight accuracy measurement.
+
+(b) The electric field is first-order accurate pointwise, while its discrete
+divergence is exact: ``div_disc(E)`` reproduces the solver's right-hand side to
+the residual. Refining the grid reduces the pointwise field error linearly.
+Users who need an accurate initial field, rather than an accurate potential or
+Gauss law, must account for this O(h) defect.
+
+(c) In 32-bit the injected right-hand side has a measured relative floor of
+``-5.2e-7`` / ``-2.4e-6`` / ``-7.4e-6`` for Cases A/B/C, which puts ``R`` above
+``1e-6``. The test therefore runs in 64-bit; see above.
+
+(d) Multi-rank execution is untested by CI. Every case runs with one MPI rank
+(``mpiexec -n 1``), so the parallel reduction and domain-decomposition paths of
+the solver are not covered here.
 
 Boundary-condition visibility
 -----------------------------

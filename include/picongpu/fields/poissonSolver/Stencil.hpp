@@ -67,6 +67,26 @@ namespace picongpu::fields::poissonSolver
         }
     };
 
+    /** Reconstruct the electric field from the potential as E_i = (V_i - V_{i+1}) / h.
+     *
+     *  This is a uniform first-order forward difference, the discrete adjoint of
+     *  the divergence used by the solver. Consequently the discrete Gauss law is
+     *  satisfied exactly (up to the solver residual): applying the adjoint
+     *  divergence to E reproduces the solver's discrete Laplacian term,
+     *  div_disc(E) = L_h(V) = rho/eps0 in the solver's sign convention. This
+     *  mimetic property is what makes the field suitable for particle pushing,
+     *  which relies on the divergence/charge consistency rather than on pointwise
+     *  derivative accuracy.
+     *
+     *  Pointwise, however, E = -grad(V) carries an O(h) error: the forward
+     *  difference is centred on the cell face at x_i + h/2, so comparing it with
+     *  the gradient at the node x_i leaves a defect of order (h/2) d^2V/dx^2.
+     *  E is not a higher-order interpolation of the exact field. Users who care
+     *  about the initial electric field itself (for example for field diagnostics
+     *  at t = 0) should account for this first-order pointwise error; the
+     *  potential V and the divergence of E are not affected by it. Refining the
+     *  grid reduces the pointwise error linearly, not quadratically.
+     */
     struct GetFieldEStencil
     {
         HDINLINE auto operator()(auto fieldIn) const

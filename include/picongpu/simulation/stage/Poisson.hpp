@@ -46,7 +46,15 @@
 
 namespace picongpu::simulation::stage
 {
-    //! Functor for the stage of the PIC loop performing charge deposition
+    /** Initial-potential stage: solve -laplacian(V) = rho/eps0 from the initial
+     *  charge density and reconstruct the electric field from V.
+     *
+     *  This stage runs once during initialisation (before the first PIC step),
+     *  and only on a fresh start: a restart skips it, restoring the checkpointed
+     *  electric field instead. FieldV is not checkpointed, so after a restart
+     *  the potential is zero and is not re-solved; only FieldE is continued
+     *  from the checkpoint.
+     */
     struct Poisson
     {
         Poisson();
@@ -102,7 +110,7 @@ namespace picongpu::simulation::stage
 
         // defaults will be overwritten by command line arguments
         bool m_useSolver = false;
-        uint32_t m_maxSolverSteps = 20;
+        uint32_t m_maxSolverSteps = 2000;
         float_64 m_solverTolerance = 1.0e-8;
 
         bool m_disablePreconditioner = false;

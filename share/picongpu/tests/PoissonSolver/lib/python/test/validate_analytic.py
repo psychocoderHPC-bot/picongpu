@@ -34,6 +34,22 @@ Metrics (never divide per point by phi or rho):
   E_L2  = sqrt(sum|V - phi|^2 / sum|phi|^2)
   R     = ||L_h(V) - rho/eps0||_2 / ||rho/eps0||_2
 
+The electric field is checked separately against the analytic gradient
+``-grad(phi)``:
+
+  E_field_max = max|E - (-grad phi)| / max|grad phi|
+  E_field_L2  = sqrt(sum|E + grad phi|^2 / sum|grad phi|^2)
+
+The solver reconstructs ``E_i = (V_i - V_{i+1}) / h``. Compared with the
+analytic gradient at the same node index this is a first-order defect of
+magnitude ``(h/2) d^2 phi/dx^2`` (the forward difference is centred half a cell
+away). The tolerance is therefore derived at run time from the analytic
+potential rather than fixed: the ideal forward difference of ``phi`` is formed
+and its relative distance to ``-grad(phi)`` is the expected first-order defect.
+A small margin above that value lets a correct first-order field pass while a
+sign flip, a one-cell stagger or a wrong 1/h scaling fails. The E metrics are
+reported separately from the potential metrics.
+
 The discrete operator L_h is the negative 7-point Laplacian used by the solver.
 Periodic axes wrap; Dirichlet axes use zero ghost nodes.
 
@@ -63,11 +79,17 @@ CASES = {
 }
 
 
-def apply_stencil(V, h, periodic):
-    """Apply the solver's negative 7-point Laplacian with case boundary ghosts."""
-    N = V.shape
+def pad_with_ghosts(field, periodic):
+    """Pad a field by one node per side.
+
+    Periodic axes wrap; Dirichlet axes keep zero ghost nodes. Interior node i
+    (0-based) lives at padded[i + 1]. The periodic neighbour below node 0 is
+    node N - 1, which sits at padded[N], not at padded[N - 1]. The neighbour
+    above node N - 1 is node 0 at padded[1].
+    """
+    N = field.shape
     padded = np.zeros(tuple(n + 2 for n in N), dtype=np.float64)
-    padded[1:-1, 1:-1, 1:-1] = V
+    padded[1:-1, 1:-1, 1:-1] = field
 
     for axis in range(3):
         if not periodic[axis]:
@@ -79,13 +101,16 @@ def apply_stencil(V, h, periodic):
         source_upper = [slice(1, -1)] * 3
         lower[axis] = 0
         upper[axis] = N[axis] + 1
-        # Interior node i (0-based) lives at padded[i + 1]. The periodic
-        # neighbour below node 0 is node N - 1, which sits at padded[N], not at
-        # padded[N - 1]. The neighbour above node N - 1 is node 0 at padded[1].
         source_lower[axis] = N[axis]
         source_upper[axis] = 1
         padded[tuple(lower)] = padded[tuple(source_lower)]
         padded[tuple(upper)] = padded[tuple(source_upper)]
+    return padded
+
+
+def apply_stencil(V, h, periodic):
+    """Apply the solver's negative 7-point Laplacian with case boundary ghosts."""
+    padded = pad_with_ghosts(V, periodic)
 
     center = padded[1:-1, 1:-1, 1:-1]
     result = np.zeros_like(V)
@@ -98,8 +123,29 @@ def apply_stencil(V, h, periodic):
     return result
 
 
+def forward_gradient_from_potential(phi, h, periodic):
+    """Apply the solver's E reconstruction to a potential.
+
+    Returns the three components of ``E_d = (phi_i - phi_{i+1}) / h_d`` with the
+    same boundary handling as the stencil, i.e. the field a solver would write
+    if its potential were exactly ``phi``.
+    """
+    padded = pad_with_ghosts(phi, periodic)
+    center = padded[1:-1, 1:-1, 1:-1]
+    components = []
+    for axis in range(3):
+        plus = [slice(1, -1)] * 3
+        plus[axis] = slice(2, None)
+        components.append((center - padded[tuple(plus)]) / h[axis])
+    return components
+
+
 def analytic_fields(case, N, h):
-    """Evaluate the analytic potential and charge density at the node coordinates."""
+    """Evaluate the analytic potential, charge density and E field at the nodes.
+
+    Returns ``(phi, rho, periodic, E_analytic)`` where ``E_analytic`` is a tuple
+    of the three components of ``-grad(phi)``.
+    """
     periodic = CASES[case][0]
     shift = np.array([0.0 if p else 1.0 for p in periodic])
     L = (np.asarray(N, dtype=np.float64) + shift) * h
@@ -120,6 +166,9 @@ def analytic_fields(case, N, h):
             4.0 * np.sin(np.pi / N[d]) ** 2 / h[d] ** 2 for d in range(3)
         )
         rho = epsilon_0 * lambda_discrete * phi
+        Ex = -PHI0 * kx * np.cos(kx * X) * np.sin(ky * Y) * np.sin(kz * Z)
+        Ey = -PHI0 * ky * np.sin(kx * X) * np.cos(ky * Y) * np.sin(kz * Z)
+        Ez = -PHI0 * kz * np.sin(kx * X) * np.sin(ky * Y) * np.cos(kz * Z)
     elif case == "B":
         px = X * (L[0] - X)
         py = Y * (L[1] - Y)
@@ -127,12 +176,18 @@ def analytic_fields(case, N, h):
         norm = L[0] ** 2 * L[1] ** 2 * L[2] ** 2
         phi = 64.0 * PHI0 * px * py * pz / norm
         rho = 128.0 * epsilon_0 * PHI0 * (py * pz + px * pz + px * py) / norm
+        Ex = -64.0 * PHI0 * (L[0] - 2.0 * X) * py * pz / norm
+        Ey = -64.0 * PHI0 * px * (L[1] - 2.0 * Y) * pz / norm
+        Ez = -64.0 * PHI0 * px * py * (L[2] - 2.0 * Z) / norm
     else:  # case C
         rho0 = 8.0 * epsilon_0 * PHI0 / L[0] ** 2
         phi = rho0 / (2.0 * epsilon_0) * X * (L[0] - X)
         rho = np.full_like(phi, rho0)
+        Ex = -rho0 / (2.0 * epsilon_0) * (L[0] - 2.0 * X)
+        Ey = np.zeros_like(phi)
+        Ez = np.zeros_like(phi)
 
-    return phi, rho, periodic
+    return phi, rho, periodic, (Ex, Ey, Ez)
 
 
 def relative_norm(values, reference):
@@ -193,7 +248,7 @@ def main():
         return 2
 
     V = np.transpose(V) * unit_si
-    phi, rho, periodic = analytic_fields(args.case, V.shape, h)
+    phi, rho, periodic, E_analytic = analytic_fields(args.case, V.shape, h)
 
     phi_max = np.max(np.abs(phi))
     if phi_max == 0.0:
@@ -229,13 +284,82 @@ def main():
     residual = apply_stencil(V, h, periodic) - rhs
     R = relative_norm(residual, rhs)
 
+    # Electric-field check. The solver reconstructs E with a first-order forward
+    # difference, E_i = (V_i - V_{i+1}) / h, so compared with -grad(phi) at the
+    # same node index it carries a defect of order (h/2) d^2 phi/dx^2. Build the
+    # ideal forward difference of the analytic potential and use its distance to
+    # -grad(phi) as the expected first-order defect. The tolerance is that
+    # defect times a small margin: a correct first-order field passes, while a
+    # sign flip, a one-cell stagger or a wrong 1/h scaling fails.
+    try:
+        field_e = series.iterations[0].meshes["E"]
+        E_measured = []
+        for name in ("x", "y", "z"):
+            component = field_e[name]
+            values = np.asarray(component[:, :, :], dtype=np.float64)
+            E_measured.append(np.transpose(values) * float(component.get_attribute("unitSI")))
+        series.flush()
+    except KeyError:
+        print("openPMD file does not contain the 'E' mesh components")
+        return 2
+
+    E_ideal = forward_gradient_from_potential(phi, h, periodic)
+    E_peak = max(float(np.max(np.abs(component))) for component in E_analytic)
+    if E_peak == 0.0:
+        print("analytic electric field is identically zero")
+        return 2
+
+    E_defect_max = max(
+        float(np.max(np.abs(ideal - analytic))) for ideal, analytic in zip(E_ideal, E_analytic)
+    )
+    E_defect_l2 = float(
+        np.sqrt(
+            sum(
+                np.sum((ideal - analytic) ** 2)
+                for ideal, analytic in zip(E_ideal, E_analytic)
+            )
+            / sum(np.sum(analytic**2) for analytic in E_analytic)
+        )
+    )
+    #! The expected first-order defect sits at 1.0 on this scale. A one-cell
+    #! stagger is ~3x larger and a sign flip is ~2 on the same scale, so 1.5
+    #! leaves headroom for the correct field and still rejects both.
+    E_FIRST_ORDER_MARGIN = 1.5
+    E_field_max_tol = E_FIRST_ORDER_MARGIN * E_defect_max / E_peak
+    E_field_L2_tol = E_FIRST_ORDER_MARGIN * E_defect_l2
+
+    E_field_max = (
+        max(
+            float(np.max(np.abs(measured - analytic)))
+            for measured, analytic in zip(E_measured, E_analytic)
+        )
+        / E_peak
+    )
+    E_field_L2 = float(
+        np.sqrt(
+            sum(
+                np.sum((measured - analytic) ** 2)
+                for measured, analytic in zip(E_measured, E_analytic)
+            )
+            / sum(np.sum(analytic**2) for analytic in E_analytic)
+        )
+    )
+
     _, E_max_tol, E_L2_tol, R_tol = CASES[args.case]
     print(f"case {args.case}: grid {V.shape}, spacing {h}")
     print(f"  E_max = {E_max:.6e}  (limit {E_max_tol:.1e})")
     print(f"  E_L2  = {E_L2:.6e}  (limit {E_L2_tol:.1e})")
     print(f"  R     = {R:.6e}  (limit {R_tol:.1e})")
+    print(f"  E_field_max = {E_field_max:.6e}  (limit {E_field_max_tol:.6e})")
+    print(f"  E_field_L2  = {E_field_L2:.6e}  (limit {E_field_L2_tol:.6e})")
 
-    failed = E_max > E_max_tol or E_L2 > E_L2_tol or R > R_tol
+    failed = (
+        E_max > E_max_tol
+        or E_L2 > E_L2_tol
+        or R > R_tol
+        or E_field_max > E_field_max_tol
+        or E_field_L2 > E_field_L2_tol
+    )
     if failed:
         print("analytic Poisson regression test FAILED")
         return 1
