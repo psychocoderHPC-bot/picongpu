@@ -372,6 +372,12 @@ namespace picongpu::fields::poissonSolver
 
     struct BoundaryConditionsDirichlet
     {
+        //! Human readable name of the boundary condition, used for logging and reporting.
+        static constexpr char const* name() noexcept
+        {
+            return "Dirichlet";
+        }
+
         // Solver work buffers use homogeneous BCs; FieldV uses BoundaryFunction below.
         template<typename T_Buffer>
         void operator()(T_Buffer& buffer, MappingDesc const& cellDescription) const
@@ -414,6 +420,11 @@ namespace picongpu::fields::poissonSolver
 
     struct BoundaryConditionsHomogenousDirichlet : BoundaryConditionsDirichlet
     {
+        static constexpr char const* name() noexcept
+        {
+            return "Dirichlet (homogeneous)";
+        }
+
         void operator()(FieldV& fieldV, MappingDesc const& cellDescription, float_64 const& normalizationFactor = 1.0)
             const
         {
@@ -426,6 +437,12 @@ namespace picongpu::fields::poissonSolver
 
     struct BoundaryConditionsNeumann
     {
+        //! Human readable name of the boundary condition, used for logging and reporting.
+        static constexpr char const* name() noexcept
+        {
+            return "Neumann";
+        }
+
         // Solver work buffers use homogeneous BCs; FieldV uses BoundaryFunction below.
         template<typename T_Buffer>
         void operator()(T_Buffer& buffer, MappingDesc const& cellDescription) const
@@ -502,6 +519,11 @@ namespace picongpu::fields::poissonSolver
 
     struct BoundaryConditionsHomogenousNeumann : BoundaryConditionsNeumann
     {
+        static constexpr char const* name() noexcept
+        {
+            return "Neumann (homogeneous)";
+        }
+
         void operator()(FieldV& fieldV, MappingDesc const& cellDescription, float_64 const& normalizationFactor = 1.0)
             const
         {
@@ -526,4 +548,10 @@ namespace picongpu::fields::poissonSolver
 #else
     using BoundaryConditions = BoundaryConditionsNeumann;
 #endif
+
+    //! Name of the boundary condition selected at compile time.
+    inline constexpr char const* activeBoundaryConditionName() noexcept
+    {
+        return BoundaryConditions::name();
+    }
 } // namespace picongpu::fields::poissonSolver

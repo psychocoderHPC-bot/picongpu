@@ -34,13 +34,19 @@
 #include <pmacc/Environment.hpp>
 #include <pmacc/algorithms/ForEachCell.hpp>
 #include <pmacc/dataManagement/DataConnector.hpp>
+#include <pmacc/math/functions/Abs.hpp>
 #include <pmacc/memory/boxes/DataBoxDim1Access.hpp>
 #include <pmacc/memory/boxes/DataBoxUnaryTransform.hpp>
 #include <pmacc/particles/traits/FilterByFlag.hpp>
 #include <pmacc/type/Area.hpp>
 
 #include <chrono>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <sstream>
+#include <string>
 #include <tuple>
 
 #include <picongpu/param/particle.param>
@@ -92,10 +98,12 @@ namespace picongpu
                 namespace po = boost::program_options;
                 po::options_description solverDesc("Poisson solver");
 
+                std::string const activateHelp = std::string("enable poisson solver (active boundary condition: ")
+                                                 + fields::poissonSolver::activeBoundaryConditionName() + ")";
                 solverDesc.add_options()(
                     "poisson.activate",
                     po::value<bool>(&m_useSolver)->zero_tokens(),
-                    "enable poisson solver");
+                    activateHelp.c_str());
                 solverDesc.add_options()(
                     "poisson.maxSteps",
                     po::value<uint32_t>(&m_maxSolverSteps)->default_value(2000),
@@ -116,12 +124,55 @@ namespace picongpu
                 desc.add(solverDesc);
             }
 
+            pmacc::traits::StringProperty Poisson::getStringProperties()
+            {
+                pmacc::traits::StringProperty propList("name", "Poisson");
+                propList["param"]
+                    = std::string("boundaryCondition=") + fields::poissonSolver::activeBoundaryConditionName();
+                return propList;
+            }
+
             void Poisson::init(MappingDesc const mappingDesc)
             {
                 m_mappingDesc = std::make_optional<MappingDesc>(mappingDesc);
 
                 if(m_useSolver)
                 {
+                    /* Fail early with an actionable message instead of letting a
+                     * huge grid die later during an allocation deep in the particle
+                     * setup. The solver keeps eleven grid-sized float_64 buffers:
+                     * seven Krylov vectors (pk, rk, r0, mpk, ampk, zk, azk), three
+                     * preconditioner scratch buffers (y, w, z) and FieldV. Each
+                     * buffer is allocated on host and device, so the estimate is
+                     * 11 * cells * 2 * sizeof(float_64) = 176 B/cell. Exchange
+                     * buffers and shared-memory (APU) layouts are not modelled;
+                     * this is a cheap early guard, not an exact allocator.
+                     */
+                    constexpr std::size_t numWorkBuffers = 11u;
+                    auto const gridSize = m_mappingDesc->getGridLayout().sizeND();
+                    std::size_t const cellsPerRank = static_cast<std::size_t>(gridSize.productOfComponents());
+                    std::size_t const requiredDeviceBytes = numWorkBuffers * cellsPerRank * sizeof(float_64);
+                    std::size_t const requiredHostBytes = requiredDeviceBytes;
+
+                    std::size_t freeDeviceBytes = 0u;
+                    Environment<>::get().MemoryInfo().getMemoryInfo(&freeDeviceBytes);
+
+                    // A reported free memory of zero means the backend does not
+                    // expose the value; skip the guard instead of failing falsely.
+                    if(freeDeviceBytes > 0u && requiredDeviceBytes > freeDeviceBytes)
+                    {
+                        std::ostringstream errorMessage;
+                        errorMessage << "Poisson solver cannot allocate its float_64 work buffers: requires "
+                                     << (requiredDeviceBytes + requiredHostBytes) << " bytes in total ("
+                                     << requiredDeviceBytes << " bytes on the device and " << requiredHostBytes
+                                     << " bytes on the host) for " << numWorkBuffers << " grid-sized buffers over "
+                                     << cellsPerRank << " cells per rank, but only " << freeDeviceBytes
+                                     << " bytes of device memory are available per rank. Reduce the simulation grid "
+                                        "size (--grid) or increase the number of devices (-d) to lower the per-device "
+                                        "memory footprint.";
+                        throw std::runtime_error(errorMessage.str());
+                    }
+
                     pkBuffer = std::make_unique<GridBuffer<float_64, simDim>>(m_mappingDesc->getGridLayout());
                     rkBuffer = std::make_unique<GridBuffer<float_64, simDim>>(m_mappingDesc->getGridLayout());
                     r0Buffer = std::make_unique<GridBuffer<float_64, simDim>>(m_mappingDesc->getGridLayout());
@@ -373,6 +424,8 @@ namespace picongpu
                         log<picLog::PHYSICS>("  - disabled");
                     return;
                 }
+                if(mainRank)
+                    log<picLog::PHYSICS>("  - boundary conditions: %1%") % poi::activeBoundaryConditionName();
                 pmacc::eventSystem::getTransactionEvent().waitForFinished();
                 auto beginT = std::chrono::high_resolution_clock::now();
 
@@ -426,6 +479,15 @@ namespace picongpu
                     float_64 const globalRhoSum = reduceGlobal(coreBorderSize, rhoValues);
                     float_64 const meanRho = globalRhoSum / globalCellCount;
 
+                    /* Peak absolute source value before the projection. The warning
+                     * below reports the removed offset relative to this scale.
+                     */
+                    TransformDataBox rhoAbsValues(
+                        [rhoBox] DEVICEONLY(pmacc::DataSpace<simDim> const& idx) -> float_64
+                        { return pmacc::math::abs(precisionCast<float_64>(rhoBox[idx].x())); });
+                    float_64 const maxAbsRho
+                        = reduceGlobal(coreBorderSize, rhoAbsValues, pmacc::math::operation::Max());
+
                     auto const globalDomainSize = Environment<simDim>::get().SubGrid().getGlobalDomain().size;
                     auto const cellSize = sim.pic.getCellSize<float_64>();
                     float_64 const targetMeanRho = boundaryConditions.specificRhoMean(globalDomainSize, cellSize);
@@ -434,6 +496,37 @@ namespace picongpu
                     if(mainRank)
                         log<picLog::PHYSICS>("  - offsetting mean of rho by: %1% to reach target mean: %2%")
                             % meanRhoCorr % targetMeanRho;
+
+                    /* Reporting thresholds for the mean projection, relative to
+                     * max|rho| over core+border. Shifts below 1e-6 of the peak
+                     * source are round-off level and not reported here; a shift
+                     * above 1e-6 is worth printing, and one above 1e-2 (1% of the
+                     * peak) is a physically meaningful removal of source charge
+                     * and is warned about explicitly.
+                     */
+                    constexpr float_64 relativeNoteThreshold = 1.0e-6;
+                    constexpr float_64 relativeWarnThreshold = 1.0e-2;
+                    float_64 const absMeanRhoCorr = std::abs(meanRhoCorr);
+                    float_64 const relativeRhoCorr
+                        = maxAbsRho > 0.0 ? absMeanRhoCorr / maxAbsRho
+                                          : (absMeanRhoCorr > 0.0 ? std::numeric_limits<float_64>::infinity() : 0.0);
+
+                    if(mainRank && relativeRhoCorr > relativeWarnThreshold)
+                    {
+                        log<picLog::PHYSICS>(
+                            "  - WARNING: the %1% boundary condition required removing a mean source offset "
+                            "of %2% (%3% of max|rho| = %4%). The solve therefore uses a mean-projected, "
+                            "charge-neutralized source, not the raw charge distribution; this can change "
+                            "the physical result.")
+                            % poi::activeBoundaryConditionName() % absMeanRhoCorr % relativeRhoCorr % maxAbsRho;
+                    }
+                    else if(mainRank && relativeRhoCorr > relativeNoteThreshold)
+                    {
+                        log<picLog::PHYSICS>(
+                            "  - note: mean projection removed a source offset of %1% (%2% of max|rho| = %3%); "
+                            "the solve used a mean-projected source.")
+                            % absMeanRhoCorr % relativeRhoCorr % maxAbsRho;
+                    }
 
                     pmacc::algorithms::forEachCell(
                         coreBorderMapper,

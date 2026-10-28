@@ -37,6 +37,7 @@
 #include <pmacc/mpi/MPIReduce.hpp>
 #include <pmacc/mpi/reduceMethods/Reduce.hpp>
 #include <pmacc/particles/traits/FilterByFlag.hpp>
+#include <pmacc/traits/GetStringProperties.hpp>
 #include <pmacc/type/Area.hpp>
 
 #include <boost/program_options.hpp>
@@ -53,6 +54,12 @@ namespace picongpu::simulation::stage
         void init(picongpu::MappingDesc const mappingDesc);
 
         void registerHelp(po::options_description& desc);
+
+        /** Report the solver configuration (including the active boundary condition).
+         *
+         * @return string property list consumed by the simulation summary/openPMD metadata
+         */
+        static pmacc::traits::StringProperty getStringProperties();
 
         /** Compute the current created by particles and add it to the current
          *  density
