@@ -286,10 +286,11 @@ def main():
     # -grad(phi) as the expected first-order defect. The tolerance is that
     # defect times a small margin: a correct first-order field passes, while a
     # sign flip, a one-cell stagger or a wrong 1/h scaling fails.
-    # The comparison assumes the Yee-grid component positions: E_x at
-    # (0.5, 0, 0), E_y at (0, 0.5, 0), E_z at (0, 0, 0.5), and FieldV at
-    # (0, 0, 0). The analytic field is therefore evaluated at the half-cell
-    # shifted coordinate of each component.
+    # The analytic potential and field are evaluated at the potential nodes, the
+    # same points as FieldV, not at the half-cell positions of the Yee components
+    # (E_x at (0.5, 0, 0), E_y at (0, 0.5, 0), E_z at (0, 0, 0.5)). The measured
+    # E is therefore compared index-aligned with the node-centred analytic field;
+    # the half-cell offset enters only through the modelled defect term above.
     try:
         field_e = series.iterations[0].meshes["E"]
         E_measured = []
