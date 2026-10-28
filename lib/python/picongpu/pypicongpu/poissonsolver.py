@@ -17,14 +17,14 @@ class PoissonSolver(RenderedObject, BaseModel):
     Bi-CGSTAB Poisson solver for the electric field in the starting condition.
 
     Every option defaults to ``None``, meaning "use the PIConGPU default"
-    (``include/picongpu/simulation/stage/Poisson.hpp``): 20 solver steps, a
+    (``include/picongpu/simulation/stage/Poisson.hpp``): 2000 solver steps, a
     tolerance of 1e-8, the Chebyshev preconditioner enabled, and 20
     preconditioner steps. Options left at ``None`` are not emitted into the
     generated parameter file, so the C++ defaults apply.
     """
 
     max_steps: Annotated[int, Field(gt=0)] | None = None
-    """maximum number of iterations for the Poisson solver, ``None`` -> PIConGPU default (20)"""
+    """maximum number of iterations for the Poisson solver, ``None`` -> PIConGPU default (2000)"""
 
     tolerance: Annotated[float, Field(gt=0.0)] | None = None
     """maximum tolerance for the Poisson solver, ``None`` -> PIConGPU default (1e-8)"""

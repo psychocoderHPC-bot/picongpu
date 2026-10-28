@@ -37,6 +37,17 @@ namespace picongpu
         /** InitPipeline define in which order species are initialized
          *
          * the functors are called in order (from first to last functor)
+         *
+         * Sign bookkeeping for the analytic density:
+         * SI::BASE_CHARGE_SI is ELECTRON_CHARGE_SI, i.e. negative. The species
+         * charge is chargeRatio * BASE_CHARGE_SI, so PIC_Electrons
+         * (ChargeRatioElectrons = +1) carries charge -e and PIC_Ions
+         * (ChargeRatioIons = -1) carries +e. The density profile returns a
+         * non-negative number density (the analytic charge density divided by
+         * q_species * BASE_DENSITY_SI), therefore the negative part of rho must
+         * go to the electrons and the positive part to the ions. Swapping the
+         * profiles would inject -rho and is caught by the validator's density
+         * sign check.
          */
         using InitPipeline = pmacc::mp_list<
             CreateDensity<densityProfiles::AnalyticNegative, startPosition::AnalyticNode, PIC_Electrons>,

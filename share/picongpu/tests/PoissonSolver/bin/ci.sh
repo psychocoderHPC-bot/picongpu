@@ -135,8 +135,32 @@ if [ $ret_build -eq 0 ] ; then
     echo "running analytic case $caseName ($periodicFlags)"
     mpiexec -n 1 ../bin/picongpu -d 1 1 1 -g 32 32 32 --periodic $periodicFlags -s 0 \
       --poisson.activate --openPMD.period 1 --openPMD.ext bp \
-      --openPMD.file $fileName -r 2
-    return $?
+      --openPMD.file $fileName -r 2 2>&1 | tee "poissonCase${caseName}.log"
+    return ${PIPESTATUS[0]}
+  }
+
+  # The Poisson stage does not print the active boundary-condition name yet, so
+  # use the mean-of-rho projection as the observable: it is logged for Neumann
+  # and not for Dirichlet. This catches a silent fallback to the Neumann default.
+  check_bc_log() {
+    caseName=$1
+    expectMean=$2
+    log="poissonCase${caseName}.log"
+    found=0
+    if grep -q "offsetting mean of rho by:" "$log" ; then
+      found=1
+    fi
+    if [ "$expectMean" = "yes" ] && [ $found -ne 1 ] ; then
+      echo "BC visibility check failed for case $caseName: expected the Neumann" \
+           "mean-of-rho projection log line, but it is missing" >&2
+      return 1
+    fi
+    if [ "$expectMean" = "no" ] && [ $found -eq 1 ] ; then
+      echo "BC visibility check failed for case $caseName: Dirichlet must not" \
+           "project the mean of rho, but the Neumann log line is present" >&2
+      return 1
+    fi
+    return 0
   }
 
   run_case A "1 1 1" simDataCaseA
@@ -145,6 +169,19 @@ if [ $ret_build -eq 0 ] ; then
   ret_simB=$?
   run_case C "0 1 1" simDataCaseC
   ret_simC=$?
+
+  ret_bcA=0
+  ret_bcB=0
+  ret_bcC=0
+  if [ $ret_simA -eq 0 ] ; then
+    check_bc_log A yes || ret_bcA=1
+  fi
+  if [ $ret_simB -eq 0 ] ; then
+    check_bc_log B no || ret_bcB=1
+  fi
+  if [ $ret_simC -eq 0 ] ; then
+    check_bc_log C no || ret_bcC=1
+  fi
 
   cd ..
   # validate the results
@@ -169,7 +206,8 @@ if [ $ret_build -eq 0 ] ; then
       ret_valC=$?
     fi
 
-    for ret in $ret_simA $ret_simB $ret_simC $ret_valA $ret_valB $ret_valC ; do
+    for ret in $ret_simA $ret_simB $ret_simC $ret_bcA $ret_bcB $ret_bcC \
+               $ret_valA $ret_valB $ret_valC ; do
       if [ $ret -ne 0 ] ; then
         echo "analytic Poisson regression test failed" >&2
         exit $ret

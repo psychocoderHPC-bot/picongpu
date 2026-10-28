@@ -69,7 +69,9 @@ namespace picongpu
 
             HINLINE AnalyticPoissonDensity(uint32_t)
             {
-                auto const& environment = pmacc::Environment<simDim>::get();
+                // EnvironmentController() and SubGrid() are non-const, so the
+                // singleton reference must be non-const as well.
+                auto& environment = pmacc::Environment<simDim>::get();
                 auto const periodic = environment.EnvironmentController().getCommunicator().getPeriodic();
                 auto const globalSize = environment.SubGrid().getGlobalDomain().size;
 

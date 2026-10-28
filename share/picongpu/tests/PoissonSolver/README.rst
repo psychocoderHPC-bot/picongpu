@@ -54,11 +54,30 @@ The validator never divides per point by ``phi`` or ``rho``:
 ``R     = ||L_h(V) - rho/eps0||_2 / ||rho/eps0||_2``
 
 ``L_h`` is the solver's negative 7-point Laplacian. Periodic axes wrap; Dirichlet
-axes use zero ghost nodes.
+axes use zero ghost nodes. Interior node ``i`` (0-based) sits at ``padded[i + 1]``,
+so the periodic neighbour below node ``0`` is node ``N - 1`` at ``padded[N]``.
+
+Before the field comparison the validator reconstructs the effective injected
+charge density as ``L_h(V)`` (the iteration-0 openPMD charge-density meshes are
+not populated) and compares it with the analytic ``rho``: it reports the relative
+L2 error and requires a positive inner product. A sign-flipped injection fails
+there with an explicit message instead of showing up as ``E_max ~ 2``.
 
 The 7-point stencil itself, including the Dirichlet and Neumann mirror-ghost
 handling and the gradient/divergence adjoint identity, is covered by
 ``share/picongpu/unit/non_dimensional_tests/poissonStencilUT.cpp``.
+
+Precision and thresholds
+------------------------
+
+The input set overrides ``precision.param`` (test-local, production stays 32-bit)
+and runs the sequence in 64-bit. This keeps ``R`` a measure of the solver: with
+32-bit data the injected right-hand side carries a coherent scale bias of
+``-5.2e-7`` / ``-2.4e-6`` / ``-7.4e-6`` for Cases A/B/C on a 32^3 grid, which
+places ``R`` at ``2.4e-6..7.4e-6`` and above the ``1e-6`` limit even though the
+residual shape is clean to ``1e-9..3e-7``. If the test is ever run in 32-bit
+again, those measured values are the achievable floor and ``R = 1e-6`` would
+have to be relaxed to roughly ``1e-5``.
 
 ==========  =========  =========  =========
 case        E_max      E_L2       R
@@ -67,6 +86,16 @@ A           5e-3       2e-3       1e-6
 B           1e-5       5e-6       1e-6
 C           1e-5       5e-6       1e-6
 ==========  =========  =========  =========
+
+Boundary-condition visibility
+-----------------------------
+
+``ci.sh`` captures each run log and checks the mean-of-rho projection line. The
+Neumann path (Case A, fully periodic) must log ``offsetting mean of rho by:``,
+while the Dirichlet cases B/C must not. A silent Neumann default therefore fails
+the test instead of masquerading as Dirichlet. The Poisson stage does not log the
+active boundary-condition name yet; adding that line in production code is a
+follow-up request, the test-side check above is the interim guard.
 
 Running the test
 ================
