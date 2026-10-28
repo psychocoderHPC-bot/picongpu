@@ -7,12 +7,14 @@ License: GPLv3+
 
 import math
 from collections.abc import Sequence
-from typing import Annotated, Any, Literal, Self, get_args
+from typing import Annotated, Any, Literal, Self
 
-from picmistandard import PICMI_BinomialSmoother, PICMI_ElectromagneticSolver
-from picmistandard.base import _PICMIModel
-from picmistandard.fields import PICMI_AnyGrid
-from pydantic import BeforeValidator, ConfigDict, PrivateAttr, model_validator, Field, computed_field
+from picmistandard import (
+    PICMI_BinomialSmoother,
+    PICMI_ElectromagneticSolver,
+    PICMI_ElectrostaticSolver,
+)
+from pydantic import BeforeValidator, ConfigDict, Field, PrivateAttr, model_validator
 
 from picongpu.pypicongpu import util
 from picongpu.pypicongpu.field_solver import (
@@ -257,31 +259,6 @@ class ElectromagneticSolver(PICMI_ElectromagneticSolver):
                 return NoneSolver()
 
 
-class PICMI_ElectrostaticSolver(_PICMIModel):
-    """
-    Electrostatic field solver
-    """
-
-    @computed_field
-    def methods_list(self) -> list[str]:
-        # Retained for backwards compatibility reasons.
-        # The type annotation of `method` is the ground-truth.
-        return list(get_args(type(self).__annotations__["method"]))
-
-    grid: PICMI_AnyGrid = Field(description="Grid object for the diagnostic")
-
-    method: Literal["FFT", "Multigrid"] | None = Field(
-        default=None,
-        description="The advance method use to solve the poisson equation. The default method is code dependent.",
-    )
-
-    required_precision: float | None = Field(default=None, description="The required precision for iterative solvers.")
-
-    maximum_iterations: int | None = Field(
-        default=None, description="The maximum number of iterations for iterative solvers."
-    )
-
-
 class ElectrostaticSolver(PICMI_ElectrostaticSolver):
     """
     PICMI Electrostatic Solver
@@ -290,12 +267,17 @@ class ElectrostaticSolver(PICMI_ElectrostaticSolver):
 
     Only the Bi-CGSTAB Poisson solver is supported; solver options that PIConGPU
     does not implement are rejected at construction time.
+
+    All solver options default to ``None``, which means "use the PIConGPU
+    default": the generated parameter file then omits the corresponding
+    command-line option. See :class:`picongpu.pypicongpu.poissonsolver.PoissonSolver`
+    for the underlying defaults.
     """
 
-    required_precision: Annotated[float, Field(..., gt=0.0)] = 1e-8
-    maximum_iterations: Annotated[int, Field(..., gt=0)] = 2000
-    preconditioner: Literal["chebyshev", "none"] = "chebyshev"
-    preconditioner_maximum_iterations: Annotated[int, Field(..., gt=0)] = 20
+    required_precision: Annotated[float, Field(gt=0.0)] | None = None
+    maximum_iterations: Annotated[int, Field(gt=0)] | None = None
+    preconditioner: Literal["chebyshev", "none"] | None = None
+    preconditioner_maximum_iterations: Annotated[int, Field(gt=0)] | None = None
 
     def get_as_pypicongpu(self) -> PoissonSolver:
         return PoissonSolver(

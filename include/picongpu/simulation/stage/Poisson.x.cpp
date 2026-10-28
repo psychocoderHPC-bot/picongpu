@@ -25,7 +25,6 @@
 #include "picongpu/fields/FieldTmpOperations.hpp"
 #include "picongpu/fields/currentDeposition/Deposit.hpp"
 #include "picongpu/fields/poissonSolver/BoundaryConditions.hpp"
-#include "picongpu/fields/poissonSolver/RightHandSideNormalization.hpp"
 #include "picongpu/fields/poissonSolver/Stencil.hpp"
 #include "picongpu/particles/filter/filter.hpp"
 #include "picongpu/particles/param.hpp"
