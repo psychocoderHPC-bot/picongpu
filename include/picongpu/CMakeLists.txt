@@ -412,6 +412,69 @@ endif()
 pic_dependency_set_status(openPMD ${openPMD_FOUND})
 
 ################################################################################
+# neuralBunch
+################################################################################
+
+pic_dependency(neuralBunch "Neural bunch field initializer (requires openPMD and alpakaNN)" AUTO)
+
+if(PIC_SEARCH_neuralBunch)
+    if(NOT PIC_HAVE_openPMD)
+        message(STATUS "neuralBunch requires openPMD - NOT BUILDING the neural bunch initializer")
+        pic_dependency_set_status(neuralBunch FALSE)
+    else()
+        include(FetchContent)
+
+        # alpakaVendor and alpakaNN are pinned to the neural-bunch runtime branches. The
+        # vendored alpaka::alpaka target already exists from find_package(PMacc), so the
+        # vendor is configured with the extern provider and no second alpaka is added.
+        set(alpakaV_ALPAKA_PROVIDER "extern" CACHE STRING "alpaka source provider used by alpakaVendor" FORCE)
+        set(alpakaV_TESTS OFF CACHE BOOL "Disable alpakaVendor tests." FORCE)
+        set(alpakaV_DOCS OFF CACHE BOOL "Disable alpakaVendor docs." FORCE)
+        # The vendor is configured before alpakaNN, so its mandatory BLAS backend must be
+        # derived here from the alpaka backends selected by PMacc (same logic as
+        # alpakaNN/cmake/alpakaNNVendorBackends.cmake).
+        set(alpakaV_DEP_OPENBLAS ON CACHE BOOL "OpenBLAS host backend (required by alpakaNN)." FORCE)
+        if(alpaka_DEP_CUDA)
+            set(alpakaV_DEP_CUBLAS ON CACHE BOOL "cuBLAS CUDA backend (required by alpakaNN)." FORCE)
+            set(alpakaV_DEP_CUFFT ON CACHE BOOL "cuFFT CUDA backend." FORCE)
+        endif()
+        if(alpaka_DEP_HIP)
+            set(alpakaV_DEP_ROCBLAS ON CACHE BOOL "rocBLAS HIP backend (required by alpakaNN)." FORCE)
+            set(alpakaV_DEP_ROCFFT ON CACHE BOOL "rocFFT HIP backend." FORCE)
+        endif()
+        FetchContent_Declare(
+            alpakaVendor
+            GIT_REPOSITORY https://github.com/psychocoderHPC-bot/alpakaVendor.git
+            GIT_TAG c49342ad8d1ddd5331998279f319be00593c641f
+        )
+        FetchContent_MakeAvailable(alpakaVendor)
+
+        set(alpakaNN_BUILD_TESTS OFF CACHE BOOL "Disable alpakaNN tests." FORCE)
+        FetchContent_Declare(
+            alpakaNN
+            GIT_REPOSITORY https://github.com/psychocoderHPC-bot/alpakaNN.git
+            GIT_TAG c34d940b7f511b2401e895ddc1c2a69ba64d3c5a
+        )
+        FetchContent_MakeAvailable(alpakaNN)
+
+        if(TARGET alpaka::nn AND TARGET alpakaVendor::alpakaVendor)
+            message(STATUS "Found alpakaNN: neural bunch initializer enabled")
+            set(PIC_ENABLE_NEURAL_BUNCH 1)
+            add_definitions(-DPIC_ENABLE_NEURAL_BUNCH=1)
+            pic_dependency_set_status(neuralBunch TRUE)
+        else()
+            message(STATUS "alpakaNN/alpakaVendor targets are missing - NOT BUILDING the neural bunch initializer")
+            pic_dependency_set_status(neuralBunch FALSE)
+        endif()
+    endif()
+endif()
+
+if(NOT PIC_ENABLE_NEURAL_BUNCH)
+    add_definitions(-DPIC_ENABLE_NEURAL_BUNCH=0)
+endif()
+
+
+################################################################################
 # JSON
 ################################################################################
 
@@ -623,6 +686,11 @@ if(PIC_HAVE_FFTW3)
     target_link_libraries(picongpu PRIVATE PkgConfig::FFTW3)
     target_compile_definitions(picongpu PUBLIC "-DPIC_ENABLE_FFTW3=1")
 endif(PIC_HAVE_FFTW3)
+
+if(PIC_HAVE_neuralBunch)
+    target_link_libraries(picongpu PUBLIC alpaka::nn alpakaVendor::alpakaVendor)
+    target_compile_definitions(picongpu PUBLIC "-DPIC_ENABLE_NEURAL_BUNCH=1")
+endif(PIC_HAVE_neuralBunch)
 
 # Including <nlohmann/json.hpp> will throw loads of warnings. Quiet them.
 # (Doesn't work for nvcc??)

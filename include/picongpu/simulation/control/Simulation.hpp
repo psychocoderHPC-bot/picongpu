@@ -49,6 +49,7 @@
 #include "picongpu/simulation/stage/FieldBackground.hpp"
 #include "picongpu/simulation/stage/IterationStart.hpp"
 #include "picongpu/simulation/stage/MomentumBackup.hpp"
+#include "picongpu/simulation/stage/NeuralBunchInit.hpp"
 #include "picongpu/simulation/stage/ParticleBoundaries.hpp"
 #include "picongpu/simulation/stage/ParticleInit.hpp"
 #include "picongpu/simulation/stage/ParticleIonization.hpp"
@@ -462,6 +463,8 @@ namespace picongpu
                     (*atomicPhysics).fixAtomicStateInit(*cellDescription);
                     // Check Debye resolution
                     particles::debyeLength::check(*cellDescription);
+                    // Neural bunch initializer: fields (pass 1), then particles (pass 2).
+                    simulation::stage::NeuralBunchInit{}(step, *cellDescription);
                 }
             }
 

@@ -1,0 +1,56 @@
+/* Copyright 2026
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
+#pragma once
+
+/** User-facing parameters of the neural bunch initializer (Phase A).
+ *
+ * Phase A is plumbing and mechanism only:
+ *  - the model domain bounds (``d_min_cells``/``d_max_cells``) are deliberately
+ *    ignored, every (source, tile) pair is evaluated by the neural path;
+ *  - the reference fallback is not implemented yet, so
+ *    ``enableReferenceFallback`` is accepted but has no effect in this phase;
+ *  - ``timePolicy`` must stay 0, which means the openPMD source time equals the
+ *    injection time (no linear drift is applied);
+ *  - ``a_y = a_z = 1`` because PIConGPU cells are cubic in this phase, matching
+ *    the model's dx/dy/dz tile spacing.
+ *
+ * ``Species`` selects the PIConGPU species that receives the particles. It
+ * must be an electron species and its name must match ``species``, the name of
+ * the particle species inside the openPMD file.
+ */
+
+#include "picongpu/param/speciesDefinition.param"
+
+#include <cstdint>
+#include <string>
+
+namespace picongpu::neuralBunch
+{
+    //! PIConGPU species that receives the loaded particles.
+    using Species = PIC_Electrons;
+
+    struct NeuralBunchParam
+    {
+        //! openPMD series path, e.g. ``bunch.h5`` or ``bunch.bp5``.
+        std::string filename = "bunch.h5";
+        //! Iteration inside the openPMD series that is read for both passes.
+        std::uint64_t iteration = 0;
+        //! Particle species name inside the openPMD file.
+        std::string species = "e";
+        //! Path prefix of the model artifact (``<modelPath>.json``/``.bin``).
+        std::string modelPath = "model";
+        //! Number of global source particles streamed per collective chunk.
+        std::uint64_t chunkSize = 1u << 20;
+        //! Number of tiles evaluated per inference batch (accepted, Phase A uses one tile at a time).
+        std::uint32_t tileBatch = 1;
+        //! Reserved for Phase B, accepted but ignored in Phase A.
+        bool enableReferenceFallback = false;
+        //! Must stay 0: source time equals injection time (no drift applied).
+        int timePolicy = 0;
+    };
+
+    inline NeuralBunchParam const neuralBunchParam{};
+} // namespace picongpu::neuralBunch
