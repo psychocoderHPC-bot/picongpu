@@ -220,16 +220,40 @@ namespace
             std::abs(tg::minimumStaggeredDistanceCells(farX, origin, cells) - 2.5) < 1.0e-12,
             "anisotropic hand-computed distance");
 
-        // Classification boundaries.
+        // Classification: no validated band disables the neural path.
         tg::DomainBounds domain;
         check(
-            tg::classify(1.0, 1.0, 2.0, 0.5, 10.0, domain) == tg::PairRoute::neural,
-            "hybrid: in-domain pair is neural");
-        check(tg::classify(1.0, 1.0, 2.0, 0.5, 3.999, domain) == tg::PairRoute::referenceNear, "hybrid: near pair");
-        check(tg::classify(1.0, 1.0, 2.0, 0.5, 512.001, domain) == tg::PairRoute::referenceFar, "hybrid: far pair");
-        check(tg::classify(1.0, 101.0, 2.0, 0.5, 10.0, domain) == tg::PairRoute::referenceGamma, "hybrid: gamma pair");
+            tg::classify(1.0, 1.0, 2.0, 0.5, 10.0, domain) == tg::PairRoute::referenceUnvalidated,
+            "hybrid: no band routes to reference");
         check(
-            tg::classify(0.0, 1.0, 2.0, 0.5, 1.0, domain) == tg::PairRoute::zeroWeight,
+            tg::classify(1.0, 1.0, 2.0, 0.5, 10.0, domain, nullptr, true) == tg::PairRoute::neural,
+            "hybrid: test-only override restores neural");
+        tg::ValidatedBand band;
+        band.dMinCells = 4.0;
+        band.dMaxCells = 100.0;
+        band.gammaMin = 1.0;
+        band.gammaMax = 100.0;
+        band.aYMin = 1.0;
+        band.aYMax = 4.0;
+        band.aZMin = 0.25;
+        band.aZMax = 1.0;
+        check(
+            tg::classify(1.0, 10.0, 2.0, 0.5, 10.0, domain, &band) == tg::PairRoute::neural,
+            "hybrid: in-band pair is neural");
+        check(
+            tg::classify(1.0, 10.0, 2.0, 0.5, 4.1, domain, &band) == tg::PairRoute::referenceNear,
+            "hybrid: near-band margin uses reference");
+        check(
+            tg::classify(1.0, 10.0, 2.0, 0.5, 96.0, domain, &band) == tg::PairRoute::referenceFar,
+            "hybrid: far-band margin uses reference");
+        check(
+            tg::classify(1.0, 101.0, 2.0, 0.5, 10.0, domain, &band) == tg::PairRoute::referenceGamma,
+            "hybrid: gamma outside band uses reference");
+        check(
+            tg::classify(1.0, 10.0, 3.9, 0.5, 10.0, domain, &band) == tg::PairRoute::referenceAspect,
+            "hybrid: aspect outside band margin uses reference");
+        check(
+            tg::classify(0.0, 1.0, 2.0, 0.5, 1.0, domain, &band) == tg::PairRoute::zeroWeight,
             "hybrid: zero weight skipped");
         check(tg::aspectCovered(cells, domain), "hybrid: anisotropic aspect covered");
         tg::CellSizes bad{1.0, 20.0, 1.0};

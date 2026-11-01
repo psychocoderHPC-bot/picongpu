@@ -150,6 +150,21 @@ namespace picongpu::particles::neuralBunch::tileGeometry
     };
 
     /** Model domain limits copied from the artifact metadata. */
+    struct ValidatedBand
+    {
+        double gammaMin = 1.0;
+        double gammaMax = 100.0;
+        double aYMin = 0.1;
+        double aYMax = 10.0;
+        double aZMin = 0.1;
+        double aZMax = 10.0;
+        double dMinCells = 4.0;
+        double dMaxCells = 512.0;
+        double measuredMaxRelRmsE = 0.0;
+        double measuredMaxRelRmsCb = 0.0;
+        double measuredMinForcePassShare = 0.0;
+    };
+
     struct DomainBounds
     {
         double gammaMin = 1.0;
@@ -169,6 +184,7 @@ namespace picongpu::particles::neuralBunch::tileGeometry
         referenceAspect,
         referenceNear,
         referenceFar,
+        referenceUnvalidated,
         zeroWeight
     };
 
@@ -186,6 +202,8 @@ namespace picongpu::particles::neuralBunch::tileGeometry
             return "reference:near";
         case PairRoute::referenceFar:
             return "reference:far";
+        case PairRoute::referenceUnvalidated:
+            return "reference:unvalidated";
         case PairRoute::zeroWeight:
             return "skip:zero-weight";
         }
@@ -272,24 +290,62 @@ namespace picongpu::particles::neuralBunch::tileGeometry
         return std::sqrt(best2);
     }
 
-    /** Deterministic routing exactly as MODEL-FORMAT's fallback policy. */
+    //! Fractional safety margin on the validated band. A pair must lie at least
+    //! 5% of each band width inside the measured interval to use the neural path.
+    inline constexpr double kBandMarginFraction = 0.05;
+
+    namespace detail
+    {
+        inline bool insideBand(double value, double low, double high)
+        {
+            double const margin = kBandMarginFraction * (high - low);
+            return value >= low + margin && value <= high - margin;
+        }
+    } // namespace detail
+
+    /** Deterministic routing.
+     *
+     * Without a measured validated band the neural path is disabled and every
+     * non-zero-weight pair goes to the reference kernel. With a band, a pair is
+     * neural only when gamma, both aspects and the distance lie inside the band
+     * shrunk by @ref kBandMarginFraction. `allowUnvalidated` is a test-only
+     * override that restores the unvalidated artifact-domain routing.
+     */
     inline PairRoute classify(
         double weight,
         double gamma,
         double aspectY,
         double aspectZ,
         double distanceCells,
-        DomainBounds const& domain)
+        DomainBounds const& domain,
+        ValidatedBand const* band = nullptr,
+        bool allowUnvalidated = false)
     {
         if(weight == 0.0)
             return PairRoute::zeroWeight;
-        if(gamma < domain.gammaMin || gamma > domain.gammaMax)
+        if(allowUnvalidated)
+        {
+            if(gamma < domain.gammaMin || gamma > domain.gammaMax)
+                return PairRoute::referenceGamma;
+            if(aspectY < domain.aYMin || aspectY > domain.aYMax || aspectZ < domain.aZMin || aspectZ > domain.aZMax)
+                return PairRoute::referenceAspect;
+            if(distanceCells < domain.dMinCells)
+                return PairRoute::referenceNear;
+            if(distanceCells > domain.dMaxCells)
+                return PairRoute::referenceFar;
+            return PairRoute::neural;
+        }
+        if(band == nullptr)
+            return PairRoute::referenceUnvalidated;
+        if(!detail::insideBand(gamma, band->gammaMin, band->gammaMax))
             return PairRoute::referenceGamma;
-        if(aspectY < domain.aYMin || aspectY > domain.aYMax || aspectZ < domain.aZMin || aspectZ > domain.aZMax)
+        if(!detail::insideBand(aspectY, band->aYMin, band->aYMax)
+           || !detail::insideBand(aspectZ, band->aZMin, band->aZMax))
             return PairRoute::referenceAspect;
-        if(distanceCells < domain.dMinCells)
+        double const distanceMargin = kBandMarginFraction * (band->dMaxCells - band->dMinCells);
+        if(distanceCells < band->dMinCells + distanceMargin)
             return PairRoute::referenceNear;
-        if(distanceCells > domain.dMaxCells)
+        if(distanceCells > band->dMaxCells - distanceMargin)
             return PairRoute::referenceFar;
         return PairRoute::neural;
     }

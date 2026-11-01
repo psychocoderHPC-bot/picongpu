@@ -23,12 +23,10 @@
  * rejected before ``loadTensors()`` is ever called.
  */
 
-#include <alpaka/alpaka.hpp>
-#include <alpaka/nn/onHost/core/binary.hpp>
-
 #include "Features.hpp"
 
-#include <nlohmann/json.hpp>
+#include <alpaka/alpaka.hpp>
+#include <alpaka/nn/onHost/core/binary.hpp>
 
 #include <algorithm>
 #include <array>
@@ -41,10 +39,13 @@
 #include <map>
 #include <numbers>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 namespace picongpu::particles::neuralBunch
 {
@@ -106,6 +107,23 @@ namespace picongpu::particles::neuralBunch
         }
     };
 
+    /** Measured, validated neural domain (MODEL-FORMAT v1 additive extension). */
+    struct ValidatedBand
+    {
+        double dMinCells{};
+        double dMaxCells{};
+        double gammaMin{};
+        double gammaMax{};
+        double aYMin{};
+        double aYMax{};
+        double aZMin{};
+        double aZMax{};
+        double measuredMaxRelRmsE{};
+        double measuredMaxRelRmsCb{};
+        double measuredMinForcePassShare{};
+        std::string source;
+    };
+
     /** Everything the runtime needs besides the tensor payloads. */
     struct ModelMetadata
     {
@@ -158,6 +176,8 @@ namespace picongpu::particles::neuralBunch
         double dMinCells{};
         double dMaxCells{};
         std::string distanceMetric;
+        //! Present only if the artifact carries a measured validated band.
+        std::optional<ValidatedBand> validatedBand;
 
         std::string normalizationLength;
         std::string normalizationCharge;
@@ -348,11 +368,7 @@ namespace picongpu::particles::neuralBunch
             buffers.reserve(m_metadata.tensors.size());
             for(auto const& binding : m_metadata.tensors)
             {
-                alpaka::nn::onHost::TensorSpec spec{
-                    binding.name,
-                    binding.offsetBytes,
-                    binding.count,
-                    binding.shape};
+                alpaka::nn::onHost::TensorSpec spec{binding.name, binding.offsetBytes, binding.count, binding.shape};
                 buffers.push_back(
                     alpaka::nn::onHost::loadBinaryTensor<float>(queue, m_binPath.string(), spec, std::string{}));
             }
@@ -404,7 +420,8 @@ namespace picongpu::particles::neuralBunch
             auto const versionJson = required(root, "version", "root");
             auto const version = asInt(versionJson, "version");
             if(version != 1)
-                throw ModelError{"unsupported artifact version " + std::to_string(version) + " (only 1 is supported)."};
+                throw ModelError{
+                    "unsupported artifact version " + std::to_string(version) + " (only 1 is supported)."};
             m_metadata.version = version;
 
             m_metadata.dtype = asString(required(root, "dtype", "root"), "dtype");
@@ -425,6 +442,7 @@ namespace picongpu::particles::neuralBunch
             parseEncoder(required(root, "encoder", "root"));
             parseDecoder(required(root, "decoder", "root"));
             parseDomain(required(root, "domain", "root"));
+            parseValidation(root);
             parseNormalization(required(root, "normalization", "root"));
             parseTensors(required(root, "tensors", "root"));
             parseArtifact(required(root, "artifact", "root"));
@@ -442,7 +460,8 @@ namespace picongpu::particles::neuralBunch
             if(m_metadata.tileNx != kTileNx || m_metadata.tileNy != kTileNy || m_metadata.tileNz != kTileNz)
                 throw ModelError{
                     "unsupported tile geometry " + std::to_string(m_metadata.tileNx) + "x"
-                    + std::to_string(m_metadata.tileNy) + "x" + std::to_string(m_metadata.tileNz) + " (v1 requires 8x8x4)."};
+                    + std::to_string(m_metadata.tileNy) + "x" + std::to_string(m_metadata.tileNz)
+                    + " (v1 requires 8x8x4)."};
 
             auto const components = required(tile, "components", "tile");
             if(!components.is_array() || components.size() != 6u)
@@ -509,7 +528,8 @@ namespace picongpu::particles::neuralBunch
             {
                 m_metadata.featureInputs.push_back(asString(inputs.at(i), "features.inputs"));
                 if(m_metadata.featureInputs.back() != expectedInputs[i])
-                    throw ModelError{"features.inputs[" + std::to_string(i) + "] must be '" + expectedInputs[i] + "'."};
+                    throw ModelError{
+                        "features.inputs[" + std::to_string(i) + "] must be '" + expectedInputs[i] + "'."};
             }
 
             m_metadata.featureDim = asSize(required(features, "dim", "features"), "features.dim");
@@ -562,8 +582,7 @@ namespace picongpu::particles::neuralBunch
                 throw ModelError{"features.probe.components must list six components."};
             for(std::size_t i = 0; i < 6u; ++i)
             {
-                m_metadata.probeComponents[i]
-                    = detail::asString(components.at(i), "features.probe.components");
+                m_metadata.probeComponents[i] = detail::asString(components.at(i), "features.probe.components");
                 if(m_metadata.probeComponents[i] != expectedComponents[i])
                     throw ModelError{
                         "features.probe.components[" + std::to_string(i) + "] must be '" + expectedComponents[i]
@@ -576,9 +595,7 @@ namespace picongpu::particles::neuralBunch
                 throw ModelError{
                     "features.probe.cell_offsets must contain " + std::to_string(expectedCount) + " entries."};
             auto compiledOffset = [&](std::size_t p, std::size_t c) -> double
-            {
-                return kind == FeatureKind::fourierProbeV1 ? kProbeCellOffsets[p][c] : kDenseCellOffsets[p][c];
-            };
+            { return kind == FeatureKind::fourierProbeV1 ? kProbeCellOffsets[p][c] : kDenseCellOffsets[p][c]; };
             for(std::size_t p = 0; p < expectedCount; ++p)
             {
                 auto const& entry = offsetsJson.at(p);
@@ -587,9 +604,7 @@ namespace picongpu::particles::neuralBunch
                 std::array<double, 3> offset{};
                 for(std::size_t c = 0; c < 3u; ++c)
                 {
-                    offset[c] = asFiniteDouble(
-                        entry.at(c),
-                        "features.probe.cell_offsets[" + std::to_string(p) + "]");
+                    offset[c] = asFiniteDouble(entry.at(c), "features.probe.cell_offsets[" + std::to_string(p) + "]");
                     if(std::abs(offset[c] - compiledOffset(p, c)) > 1e-12)
                         throw ModelError{
                             "features.probe.cell_offsets[" + std::to_string(p)
@@ -621,8 +636,7 @@ namespace picongpu::particles::neuralBunch
             m_metadata.encoderKind = asString(required(encoder, "kind", "encoder"), "encoder.kind");
             if(m_metadata.encoderKind != "mlp")
                 throw ModelError{"unsupported encoder kind '" + m_metadata.encoderKind + "'."};
-            m_metadata.encoderActivation
-                = asString(required(encoder, "activation", "encoder"), "encoder.activation");
+            m_metadata.encoderActivation = asString(required(encoder, "activation", "encoder"), "encoder.activation");
             if(m_metadata.encoderActivation != "silu")
                 throw ModelError{"encoder.activation must be 'silu'."};
             m_metadata.lastLayerActivation
@@ -646,8 +660,8 @@ namespace picongpu::particles::neuralBunch
                 parsed.out = asSize(required(layer, "out", context), context + ".out");
                 if(parsed.in != expectedIn)
                     throw ModelError{
-                        context + ": in=" + std::to_string(parsed.in) + " does not match the previous out="
-                        + std::to_string(expectedIn) + "."};
+                        context + ": in=" + std::to_string(parsed.in)
+                        + " does not match the previous out=" + std::to_string(expectedIn) + "."};
                 if(parsed.out == 0u)
                     throw ModelError{context + ": out must be positive."};
                 m_metadata.layers.push_back(std::move(parsed));
@@ -699,7 +713,8 @@ namespace picongpu::particles::neuralBunch
             for(auto const& entry : bank)
                 m_metadata.bank.push_back(asString(entry, "decoder.bank"));
 
-            auto const entryShape = asShape(required(decoder, "bank_entry_shape", "decoder"), "decoder.bank_entry_shape");
+            auto const entryShape
+                = asShape(required(decoder, "bank_entry_shape", "decoder"), "decoder.bank_entry_shape");
             if(entryShape.size() != 2u)
                 throw ModelError{"decoder.bank_entry_shape must contain two extents."};
             m_metadata.bankEntryShape = {entryShape[0], entryShape[1]};
@@ -764,8 +779,7 @@ namespace picongpu::particles::neuralBunch
             auto const minAnchorZ = m_metadata.aZAnchors.front();
             auto const maxAnchorZ = m_metadata.aZAnchors.back();
             if(std::abs(minAnchorY - m_metadata.aYMin) > 1e-12 || std::abs(maxAnchorY - m_metadata.aYMax) > 1e-12
-               || std::abs(minAnchorZ - m_metadata.aZMin) > 1e-12
-               || std::abs(maxAnchorZ - m_metadata.aZMax) > 1e-12)
+               || std::abs(minAnchorZ - m_metadata.aZMin) > 1e-12 || std::abs(maxAnchorZ - m_metadata.aZMax) > 1e-12)
                 throw ModelError{"decoder axis grids must span the domain a_y/a_z bounds."};
 
             m_metadata.dMinCells = asFiniteDouble(required(domain, "d_min_cells", "domain"), "domain.d_min_cells");
@@ -774,6 +788,74 @@ namespace picongpu::particles::neuralBunch
                 throw ModelError{"domain.d_min_cells/d_max_cells must be finite and satisfy 0 < min < max."};
             m_metadata.distanceMetric
                 = detail::asString(required(domain, "distance_metric", "domain"), "domain.distance_metric");
+        }
+
+        void parseValidation(json const& root)
+        {
+            using detail::asFiniteDouble;
+            using detail::asString;
+
+            if(!root.contains("validation"))
+                return;
+            auto const& validation = root.at("validation");
+            if(!validation.is_object())
+                throw ModelError{"validation must be an object."};
+            if(!validation.contains("validated_band"))
+                return;
+            auto const& bandJson = validation.at("validated_band");
+            if(!bandJson.is_object())
+                throw ModelError{"validation.validated_band must be an object."};
+
+            auto value = [&](char const* key)
+            {
+                auto const context = std::string{"validation.validated_band."} + key;
+                return asFiniteDouble(detail::required(bandJson, key, "validation.validated_band"), context);
+            };
+            ValidatedBand band;
+            band.dMinCells = value("d_min_cells");
+            band.dMaxCells = value("d_max_cells");
+            band.gammaMin = value("gamma_min");
+            band.gammaMax = value("gamma_max");
+            band.aYMin = value("a_y_min");
+            band.aYMax = value("a_y_max");
+            band.aZMin = value("a_z_min");
+            band.aZMax = value("a_z_max");
+            band.measuredMaxRelRmsE = value("measured_max_rel_rms_e");
+            band.measuredMaxRelRmsCb = value("measured_max_rel_rms_cb");
+            band.measuredMinForcePassShare = value("measured_min_force_pass_share");
+            band.source = asString(
+                detail::required(bandJson, "source", "validation.validated_band"),
+                "validation.validated_band.source");
+            if(band.source.empty())
+                throw ModelError{"validation.validated_band.source must not be empty."};
+
+            auto requireInterval = [&](double min, double max, char const* name)
+            {
+                if(!(min < max))
+                    throw ModelError{std::string{"validation.validated_band."} + name + " must satisfy min < max."};
+            };
+            requireInterval(band.dMinCells, band.dMaxCells, "d_min_cells/d_max_cells");
+            requireInterval(band.gammaMin, band.gammaMax, "gamma_min/gamma_max");
+            requireInterval(band.aYMin, band.aYMax, "a_y_min/a_y_max");
+            requireInterval(band.aZMin, band.aZMax, "a_z_min/a_z_max");
+            if(band.dMinCells <= 0.0)
+                throw ModelError{"validation.validated_band.d_min_cells must be positive."};
+            if(band.gammaMin < 1.0)
+                throw ModelError{"validation.validated_band.gamma_min must be at least 1."};
+            if(band.aYMin < 0.1 || band.aYMax > 10.0 || band.aZMin < 0.1 || band.aZMax > 10.0)
+                throw ModelError{
+                    "validation.validated_band aspect bounds must stay inside the trained [0.1, 10] range."};
+            if(band.measuredMaxRelRmsE < 0.0 || band.measuredMaxRelRmsCb < 0.0)
+                throw ModelError{"validation.validated_band measured relative RMS values must be non-negative."};
+            if(band.measuredMinForcePassShare < 0.0 || band.measuredMinForcePassShare > 1.0)
+                throw ModelError{"validation.validated_band.measured_min_force_pass_share must be in [0, 1]."};
+            // A validated band is a subset of the artifact domain.
+            if(band.dMinCells < m_metadata.dMinCells || band.dMaxCells > m_metadata.dMaxCells
+               || band.gammaMin < m_metadata.gammaMin || band.gammaMax > m_metadata.gammaMax
+               || band.aYMin < m_metadata.aYMin || band.aYMax > m_metadata.aYMax || band.aZMin < m_metadata.aZMin
+               || band.aZMax > m_metadata.aZMax)
+                throw ModelError{"validation.validated_band must be contained in the artifact domain bounds."};
+            m_metadata.validatedBand = band;
         }
 
         void parseNormalization(json const& normalization)

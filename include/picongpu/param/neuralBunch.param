@@ -8,9 +8,12 @@
 /** User-facing parameters of the neural bunch initializer (Phase A).
  *
  * Phase B implements the deterministic hybrid policy:
- *  - every (source, tile) pair is routed once by the MODEL-FORMAT domain rules
- *    (gamma, both aspects, d_min_cells/d_max_cells) to either the neural path
- *    or the FP64 reference fallback;
+ *  - the production default is REFERENCE-ONLY. No shipped artifact carries a
+ *    measured ``validation.validated_band``, so the neural path is disabled and
+ *    every (source, tile) pair uses the exact FP64 reference kernel;
+ *  - a pair uses the neural path only when the artifact declares a validated
+ *    band and the pair lies inside it with a safety margin;
+ *  - ``allowUnvalidatedNeural`` is a test-only escape hatch and must stay false;
  *  - ``enableReferenceFallback`` must stay true;
  *  - ``timePolicy`` must stay 0, which means the openPMD source time equals the
  *    injection time (no linear drift is applied);
@@ -49,6 +52,11 @@ namespace picongpu::neuralBunch
         std::uint32_t tileBatch = 1;
         //! Must stay true: the Phase B hybrid policy always uses the reference fallback.
         bool enableReferenceFallback = true;
+        /** TEST-ONLY: ignore the artifact's validation.validated_band and use the
+         * neural path everywhere inside the artifact domain. Never use in production;
+         * the default reference-only policy exists because no artifact carries a
+         * validated 1e-3 band. */
+        bool allowUnvalidatedNeural = false;
         //! Must stay 0: source time equals injection time (no drift applied).
         int timePolicy = 0;
     };

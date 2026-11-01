@@ -82,7 +82,21 @@ A loader MUST verify byte count and SHA-256 before allocating tensor storage.
   "validation": {
     "tolerance_field_rel_rms": 0.001,
     "tolerance_force_rel_rms": 0.01,
-    "report": "validation_report.json"
+    "report": "validation_report.json",
+    "validated_band": {
+      "d_min_cells": 8.0,
+      "d_max_cells": 64.0,
+      "gamma_min": 2.0,
+      "gamma_max": 50.0,
+      "a_y_min": 0.5,
+      "a_y_max": 2.0,
+      "a_z_min": 0.5,
+      "a_z_max": 2.0,
+      "measured_max_rel_rms_e": 0.001,
+      "measured_max_rel_rms_cb": 0.001,
+      "measured_min_force_pass_share": 0.99,
+      "source": "validation/report-id"
+    }
   },
   "tensors": [
     {"name": "enc.0.w", "offset_bytes": 0, "count": 17664, "shape": [69, 256], "order": "row_major_in_out"},
@@ -92,6 +106,13 @@ A loader MUST verify byte count and SHA-256 before allocating tensor storage.
   "license": "MPL-2.0"
 }
 ```
+
+`validation.validated_band` is optional and is a v1 additive extension. When it
+is present the loader requires finite values, a non-empty `source`, strictly
+increasing intervals, non-negative measured errors, a force pass share in
+`[0, 1]`, and a band contained in the `domain` bounds. When it is absent the
+runtime disables the neural path and routes every pair to the reference kernel
+(the production default for current artifacts).
 
 Additional required rules:
 

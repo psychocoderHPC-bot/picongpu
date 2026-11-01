@@ -90,6 +90,7 @@ namespace picongpu
                     std::uint64_t referenceFarPairs = 0;
                     std::uint64_t zeroWeightPairs = 0;
                     std::uint64_t forcedReferencePairs = 0;
+                    std::uint64_t unvalidatedPairs = 0;
                     std::uint64_t synthesizedIds = 0;
                     std::vector<std::uint64_t> localIds;
                     std::uint64_t localParticles = 0;
@@ -375,7 +376,26 @@ namespace picongpu
                         throw std::runtime_error(
                             "neuralBunch: enableReferenceFallback=false is not supported; the Phase B hybrid "
                             "policy always requires the reference fallback.");
-                    if(!tg::aspectCovered(cells, domain))
+                    tg::ValidatedBand validatedBand;
+                    tg::ValidatedBand const* band = nullptr;
+                    if(meta.validatedBand)
+                    {
+                        auto const& source = *meta.validatedBand;
+                        validatedBand.gammaMin = source.gammaMin;
+                        validatedBand.gammaMax = source.gammaMax;
+                        validatedBand.aYMin = source.aYMin;
+                        validatedBand.aYMax = source.aYMax;
+                        validatedBand.aZMin = source.aZMin;
+                        validatedBand.aZMax = source.aZMax;
+                        validatedBand.dMinCells = source.dMinCells;
+                        validatedBand.dMaxCells = source.dMaxCells;
+                        validatedBand.measuredMaxRelRmsE = source.measuredMaxRelRmsE;
+                        validatedBand.measuredMaxRelRmsCb = source.measuredMaxRelRmsCb;
+                        validatedBand.measuredMinForcePassShare = source.measuredMinForcePassShare;
+                        band = &validatedBand;
+                    }
+                    bool const neuralEnabled = params.allowUnvalidatedNeural || (band != nullptr);
+                    if(neuralEnabled && !tg::aspectCovered(cells, domain))
                         throw std::runtime_error(
                             "neuralBunch: simulation cell aspect a_y=" + num(aspectY) + ", a_z=" + num(aspectZ)
                             + " is outside the model domain a_y=[" + num(domain.aYMin) + "," + num(domain.aYMax)
@@ -401,6 +421,26 @@ namespace picongpu
 
                     MPI_Comm const comm = Environment<simDim>::get().GridController().getCommunicator().getMPIComm();
                     int const rank = Environment<simDim>::get().GridController().getGlobalRank();
+
+                    if(params.allowUnvalidatedNeural)
+                        log<picLog::PHYSICS>(
+                            "neuralBunch: WARNING rank=%1% TEST-ONLY allowUnvalidatedNeural=true ignores the "
+                            "validated band; neural results are not production-validated.")
+                            % rank;
+                    else if(band == nullptr)
+                        log<picLog::PHYSICS>(
+                            "neuralBunch: rank=%1% no validation.validated_band in the artifact; neural path "
+                            "DISABLED, all pairs use the FP64 reference. This is the production default.")
+                            % rank;
+                    else
+                        log<picLog::PHYSICS>(
+                            "neuralBunch: rank=%1% validated band d=[%2%,%3%] gamma=[%4%,%5%] "
+                            "a_y=[%6%,%7%] a_z=[%8%,%9%] measured E=%10% cB=%11% forcePass=%12% source='%13%'")
+                            % rank % num(band->dMinCells) % num(band->dMaxCells) % num(band->gammaMin)
+                            % num(band->gammaMax) % num(band->aYMin) % num(band->aYMax) % num(band->aZMin)
+                            % num(band->aZMax) % num(band->measuredMaxRelRmsE) % num(band->measuredMaxRelRmsCb)
+                            % num(band->measuredMinForcePassShare) % meta.validatedBand->source;
+
 
                     // Validation-only switch: force the reference path for every
                     // non-zero-weight pair on every rank (same environment on all ranks).
@@ -485,7 +525,9 @@ namespace picongpu
                                             aspectY,
                                             aspectZ,
                                             distanceCells,
-                                            domain))
+                                            domain,
+                                            band,
+                                            params.allowUnvalidatedNeural))
                                         {
                                         case tg::PairRoute::neural:
                                             neuralSources.push_back(source);
@@ -505,6 +547,10 @@ namespace picongpu
                                         case tg::PairRoute::referenceFar:
                                             referenceSources.push_back(referenceSource);
                                             ++stats.referenceFarPairs;
+                                            break;
+                                        case tg::PairRoute::referenceUnvalidated:
+                                            referenceSources.push_back(referenceSource);
+                                            ++stats.unvalidatedPairs;
                                             break;
                                         case tg::PairRoute::zeroWeight:
                                             ++stats.zeroWeightPairs;
@@ -892,8 +938,8 @@ namespace picongpu
                     unsigned long long totalPairs = neuralPairs + referencePairs + zeroPairs;
                     MPI_Allreduce(MPI_IN_PLACE, &totalPairs, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
                     log<picLog::PHYSICS>("neuralBunch: rank=%1% hybrid reasons near=%2% far=%3% gamma=%4% aspect=%5% "
-                                         "zeroWeight=%6% forced=%7% referenceCoverage=%8%")
-                        % rank % nearPairs % farPairs % gammaPairs % aspectPairs % zeroPairs
+                                         "zeroWeight=%6% unvalidated=%7% forced=%8% referenceCoverage=%9%")
+                        % rank % nearPairs % farPairs % gammaPairs % aspectPairs % zeroPairs % stats.unvalidatedPairs
                         % stats.forcedReferencePairs
                         % num(totalPairs == 0u ? 0.0 : double(referencePairs) / double(totalPairs));
                     log<picLog::PHYSICS>("neuralBunch: rank=%1% referenceMaxAbs=%2% referenceL1=%3% "

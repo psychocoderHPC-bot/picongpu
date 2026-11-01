@@ -11,7 +11,6 @@
 #include "picongpu/particles/neuralBunch/Model.hpp"
 
 #include <alpaka/nn/onHost/core/binary.hpp>
-#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -21,6 +20,8 @@
 #include <iostream>
 #include <string>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 namespace fs = std::filesystem;
 namespace nb = picongpu::particles::neuralBunch;
@@ -59,14 +60,16 @@ namespace
         metadata["endianness"] = "little";
         metadata["created_utc"] = "2026-01-01T00:00:00Z";
         metadata["code_sha"] = std::string(40, 'a');
-        metadata["tile"] = {
-            {"nx", 8}, {"ny", 8}, {"nz", 4},
-            {"components", {"Ex", "Ey", "Ez", "Bx", "By", "Bz"}},
-            {"flatten", "c + 6*(i + nx*(j + ny*k))"}};
-        json features = {
-            {"kind", kindName(kind)},
-            {"inputs", {"r_x", "r_y", "r_z", "u_x", "u_y", "u_z", "gamma", "a_y", "a_z"}},
-            {"dim", dim}};
+        metadata["tile"]
+            = {{"nx", 8},
+               {"ny", 8},
+               {"nz", 4},
+               {"components", {"Ex", "Ey", "Ez", "Bx", "By", "Bz"}},
+               {"flatten", "c + 6*(i + nx*(j + ny*k))"}};
+        json features
+            = {{"kind", kindName(kind)},
+               {"inputs", {"r_x", "r_y", "r_z", "u_x", "u_y", "u_z", "gamma", "a_y", "a_z"}},
+               {"dim", dim}};
         if(kind == nb::FeatureKind::fourierV1)
             features["octaves"] = {-3, 6};
         else if(kind == nb::FeatureKind::fourierProbeV1)
@@ -96,44 +99,51 @@ namespace
                 }
                 offsets.push_back({offset[0], offset[1], offset[2]});
             }
-            features["probe"] = {
-                {"components", {"Ex", "Ey", "Ez", "Bx", "By", "Bz"}},
-                {"cell_offsets", offsets},
-                {"grid",
-                 kind == nb::FeatureKind::fourierProbeV1
-                     ? "4x4x2 tile cell centres: x=2i+0.5 (i=0..3), y=(2j+0.5)*a_y (j=0..3), z=(2k+0."
-                       "5)*a_z (k=0..1)"
-                     : "one probe at every tile cell centre: x=i+0.5 (i=0..7), y=(j+0.5)*a_y (j=0..7), z=("
-                       "k+0.5)*a_z (k=0..3), i fastest then j then k"},
-                {"field",
-                 "per unit q/e: E_n=4*pi*eps0*dx^2*E/q, B_n=4*pi*eps0*c*dx^2*B/q; stable uniform-motion "
-                 "decomposition (1/gamma^2 direct, static branch)"}};
+            features["probe"]
+                = {{"components", {"Ex", "Ey", "Ez", "Bx", "By", "Bz"}},
+                   {"cell_offsets", offsets},
+                   {"grid",
+                    kind == nb::FeatureKind::fourierProbeV1
+                        ? "4x4x2 tile cell centres: x=2i+0.5 (i=0..3), y=(2j+0.5)*a_y (j=0..3), z=(2k+0."
+                          "5)*a_z (k=0..1)"
+                        : "one probe at every tile cell centre: x=i+0.5 (i=0..7), y=(j+0.5)*a_y (j=0..7), z=("
+                          "k+0.5)*a_z (k=0..3), i fastest then j then k"},
+                   {"field",
+                    "per unit q/e: E_n=4*pi*eps0*dx^2*E/q, B_n=4*pi*eps0*c*dx^2*B/q; stable uniform-motion "
+                    "decomposition (1/gamma^2 direct, static branch)"}};
             features["ordering"]
                 = kind == nb::FeatureKind::fourierProbeV1
                       ? "9 base, 32 probes x [Ex,Ey,Ez,Bx,By,Bz], 3 axes x octaves -3..1 x (sin,cos)"
                       : "9 base, 256 probes x [Ex,Ey,Ez,Bx,By,Bz] in i-fastest cell order; no Fourier terms";
         }
         metadata["features"] = features;
-        metadata["encoder"] = {
-            {"kind", "mlp"}, {"activation", "silu"}, {"last_layer_activation", "none"},
-            {"layers", {{{"weight", "enc.0.w"}, {"bias", "enc.0.b"}, {"in", dim}, {"out", 1}}}},
-            {"output_dim", 1}};
-        metadata["decoder"] = {
-            {"kind", "geometry_bank_bilinear"},
-            {"interpolation", "bilinear in log10(a), clamped at the outer anchors"},
-            {"axes", {{"a_y", {0.1, 10.0}}, {"a_z", {0.1, 10.0}}}},
-            {"matrix_shape", {1, 1536}}, {"bias", false},
-            {"bank", {"dec.0.0.w", "dec.0.1.w", "dec.0.2.w", "dec.0.3.w"}},
-            {"bank_entry_shape", {1, 1536}}};
-        metadata["domain"] = {
-            {"gamma", {1.0, 100.0}}, {"a_y", {0.1, 10.0}}, {"a_z", {0.1, 10.0}},
-            {"d_min_cells", 4.0}, {"d_max_cells", 512.0},
-            {"distance_metric", "minimum over the 1536 staggered output points of |x_out - x_source| / dx"}};
-        metadata["normalization"] = {
-            {"length", "dx"}, {"charge", "q_i/e = -w_i"},
-            {"field_E", "E = e/(4*pi*eps0*L^2) * E_tilde"},
-            {"field_B", "B = e/(4*pi*eps0*c*L^2) * B_tilde"},
-            {"latent", "none"}};
+        metadata["encoder"]
+            = {{"kind", "mlp"},
+               {"activation", "silu"},
+               {"last_layer_activation", "none"},
+               {"layers", {{{"weight", "enc.0.w"}, {"bias", "enc.0.b"}, {"in", dim}, {"out", 1}}}},
+               {"output_dim", 1}};
+        metadata["decoder"]
+            = {{"kind", "geometry_bank_bilinear"},
+               {"interpolation", "bilinear in log10(a), clamped at the outer anchors"},
+               {"axes", {{"a_y", {0.1, 10.0}}, {"a_z", {0.1, 10.0}}}},
+               {"matrix_shape", {1, 1536}},
+               {"bias", false},
+               {"bank", {"dec.0.0.w", "dec.0.1.w", "dec.0.2.w", "dec.0.3.w"}},
+               {"bank_entry_shape", {1, 1536}}};
+        metadata["domain"]
+            = {{"gamma", {1.0, 100.0}},
+               {"a_y", {0.1, 10.0}},
+               {"a_z", {0.1, 10.0}},
+               {"d_min_cells", 4.0},
+               {"d_max_cells", 512.0},
+               {"distance_metric", "minimum over the 1536 staggered output points of |x_out - x_source| / dx"}};
+        metadata["normalization"]
+            = {{"length", "dx"},
+               {"charge", "q_i/e = -w_i"},
+               {"field_E", "E = e/(4*pi*eps0*L^2) * E_tilde"},
+               {"field_B", "B = e/(4*pi*eps0*c*L^2) * B_tilde"},
+               {"latent", "none"}};
 
         std::size_t offset = 0;
         json tensors = json::array();
@@ -143,9 +153,12 @@ namespace
             for(auto extent : shape)
                 count *= extent;
             offset = align64(offset);
-            tensors.push_back({
-                {"name", name}, {"offset_bytes", offset}, {"count", count},
-                {"shape", shape}, {"order", "row_major_in_out"}});
+            tensors.push_back(
+                {{"name", name},
+                 {"offset_bytes", offset},
+                 {"count", count},
+                 {"shape", shape},
+                 {"order", "row_major_in_out"}});
             offset += count * 4u;
         };
         addTensor("enc.0.w", {dim, 1});
@@ -153,8 +166,7 @@ namespace
         for(int i = 0; i < 4; ++i)
             addTensor("dec.0." + std::to_string(i) + ".w", {1, 1536});
         metadata["tensors"] = tensors;
-        metadata["artifact"] = {
-            {"file", "model.bin"}, {"bytes", offset}, {"sha256", std::string(64, '0')}};
+        metadata["artifact"] = {{"file", "model.bin"}, {"bytes", offset}, {"sha256", std::string(64, '0')}};
         metadata["license"] = "MPL-2.0";
 
         fs::create_directories(directory);
@@ -224,9 +236,14 @@ namespace
 
     std::vector<float> expectedFeatures(
         nb::FeatureKind kind,
-        double rX, double rY, double rZ,
-        double uX, double uY, double uZ,
-        double aY, double aZ)
+        double rX,
+        double rY,
+        double rZ,
+        double uX,
+        double uY,
+        double uZ,
+        double aY,
+        double aZ)
     {
         std::vector<float> out(nb::featureDimension(kind));
         double const gamma = std::sqrt(1.0 + uX * uX + uY * uY + uZ * uZ);
@@ -295,10 +312,26 @@ namespace
     {
         double const values[8]{0.25, -0.4, 1.75, 0.3, -0.2, 0.1, 2.0, 0.5};
         auto const expected = expectedFeatures(
-            kind, values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7]);
+            kind,
+            values[0],
+            values[1],
+            values[2],
+            values[3],
+            values[4],
+            values[5],
+            values[6],
+            values[7]);
         std::vector<float> actual(nb::featureDimension(kind));
         nb::featuresHost(
-            kind, actual.data(), values[0], values[1], values[2], values[3], values[4], values[5], values[6],
+            kind,
+            actual.data(),
+            values[0],
+            values[1],
+            values[2],
+            values[3],
+            values[4],
+            values[5],
+            values[6],
             values[7]);
         check(actual.size() == expected.size(), kindName(kind) + ": dimension");
         double maxDiff = 0.0;
@@ -342,12 +375,58 @@ int main()
             badOrder["features"]["ordering"] = "reversed";
             rejects(badOrder, directory, kindName(kind) + " bad ordering");
             auto badOctaves = metadata;
-            badOctaves["features"]["octaves"] = (kind == nb::FeatureKind::probeDenseV1)
-                                                    ? json::array({-3, 1})
-                                                    : json::array({-3, 6});
+            badOctaves["features"]["octaves"]
+                = (kind == nb::FeatureKind::probeDenseV1) ? json::array({-3, 1}) : json::array({-3, 6});
             rejects(badOctaves, directory, kindName(kind) + " bad octaves");
         }
     }
+    // Validated-band metadata: accepted when consistent, rejected when not.
+    {
+        nb::FeatureKind const kind = nb::FeatureKind::fourierV1;
+        auto const directory = root / "validated_band";
+        auto metadata = makeArtifact(kind, directory);
+        auto addBand = [](json& root_)
+        {
+            root_["validation"]
+                = {{"validated_band",
+                    {{"d_min_cells", 8.0},
+                     {"d_max_cells", 64.0},
+                     {"gamma_min", 2.0},
+                     {"gamma_max", 50.0},
+                     {"a_y_min", 0.5},
+                     {"a_y_max", 2.0},
+                     {"a_z_min", 0.5},
+                     {"a_z_max", 2.0},
+                     {"measured_max_rel_rms_e", 1.0e-3},
+                     {"measured_max_rel_rms_cb", 2.0e-3},
+                     {"measured_min_force_pass_share", 0.99},
+                     {"source", "unit-test"}}}};
+        };
+        addBand(metadata);
+        rewrite(metadata, directory);
+        auto const model = nb::Model::load(directory / "model.json");
+        check(model.metadata().validatedBand.has_value(), "validated band accepted");
+        if(model.metadata().validatedBand)
+        {
+            auto const& band = *model.metadata().validatedBand;
+            check(band.dMinCells == 8.0 && band.dMaxCells == 64.0, "validated band distance");
+            check(band.gammaMin == 2.0 && band.gammaMax == 50.0, "validated band gamma");
+            check(band.measuredMaxRelRmsE == 1.0e-3, "validated band E metric");
+        }
+        auto badOrdering = metadata;
+        badOrdering["validation"]["validated_band"]["d_min_cells"] = 100.0;
+        rejects(badOrdering, directory, "validated band d ordering");
+        auto outsideDomain = metadata;
+        outsideDomain["validation"]["validated_band"]["a_y_min"] = 0.05;
+        rejects(outsideDomain, directory, "validated band outside domain");
+        auto negativeMetric = metadata;
+        negativeMetric["validation"]["validated_band"]["measured_max_rel_rms_e"] = -1.0;
+        rejects(negativeMetric, directory, "validated band negative metric");
+        auto badShare = metadata;
+        badShare["validation"]["validated_band"]["measured_min_force_pass_share"] = 1.5;
+        rejects(badShare, directory, "validated band force share");
+    }
+
     fs::remove_all(root);
     if(failures != 0)
     {
