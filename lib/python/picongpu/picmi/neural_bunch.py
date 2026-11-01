@@ -39,9 +39,10 @@ class NeuralBunchInitializer(BaseModel):
 
     ``field_initializer`` selects the field policy:
 
-    * ``"neural"`` (default): the trained model handles pairs inside the
-      artifact domain; the reference handles the rest when
-      ``enable_reference_fallback`` is true.
+    * unset (default): resolves to ``"banded"``, the analytic point field for
+      mid/far and the exact reference for near.
+    * ``"neural"``: the trained model handles pairs inside the artifact
+      domain; kept for compatibility.
     * ``"validatedNeural"``: the model is used only inside a measured
       ``validation.validated_band``.
     * ``"referenceOnly"``: the exact FP64 reference is used and no model
@@ -89,7 +90,7 @@ class NeuralBunchInitializer(BaseModel):
         if self.field_initializer in ("neural", "validatedNeural") and not self.model_path:
             raise ValueError(
                 f"model_path is required for field_initializer={self.field_initializer!r}; "
-                "use field_initializer='referenceOnly' to read the exact reference without an artifact."
+                "use field_initializer='referenceOnly' or 'banded' to run without an artifact."
             )
         if not self._is_electron(self.species):
             raise ValueError(
@@ -149,6 +150,7 @@ class NeuralBunchInitializer(BaseModel):
             )
 
         return PyPIConGPUNeuralBunchInit(
+            enabled=True,
             filename=self.filename,
             iteration=self.iteration,
             source_species=self.source_species,
@@ -165,7 +167,7 @@ class NeuralBunchInitializer(BaseModel):
                 "filename": self.filename,
                 "model_path": self.model_path or "",
                 "destination_species": self.species.name,
-                "field_initializer": self.field_initializer,
+                "field_initializer": self.field_initializer or "auto",
             },
         )
 

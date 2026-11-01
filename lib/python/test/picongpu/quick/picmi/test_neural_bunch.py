@@ -101,8 +101,20 @@ class TestNeuralBunchInitializer:
         assert "std::uint64_t chunkSize = 4096;" in rendered
         assert "std::uint32_t tileBatch = 2;" in rendered
         assert "bool enableReferenceFallback = true;" in rendered
-        assert "FieldInitializer fieldInitializer = FieldInitializer::referenceOnly;" in rendered
+        assert "bool enabled = true;" in rendered
+        assert "std::optional<FieldInitializer> fieldInitializer = FieldInitializer::referenceOnly;" in rendered
         assert "int timePolicy = 0;" in rendered
+
+    def test_unset_policy_renders_the_banded_default(self, tmp_path):
+        sim, _ = make_simulation(tmp_path, field_initializer=None)
+        rendered = render_neural_bunch(sim)
+        assert "bool enabled = true;" in rendered
+        assert "std::optional<FieldInitializer> fieldInitializer = std::nullopt;" in rendered
+
+    def test_banded_policy_does_not_require_an_artifact(self, tmp_path):
+        initializer, _ = make_initializer(tmp_path, model_path=None, field_initializer="banded")
+        assert initializer.field_initializer == "banded"
+        assert initializer.model_path is None
 
     def test_bool_false_renders_cpp_false(self, tmp_path):
         sim, _ = make_simulation(tmp_path, enable_reference_fallback=False)
@@ -166,7 +178,8 @@ class TestNeuralBunchInitializer:
         rendered = Renderer.get_rendered_template(Renderer.get_context_preprocessed(context), TEMPLATE.read_text())
         assert "bool enabled = false;" in rendered
         assert "using Species = species_electrons;" in rendered
-        assert "FieldInitializer::referenceOnly" in rendered
+        assert "bool enabled = false;" in rendered
+        assert "std::optional<FieldInitializer> fieldInitializer{};" in rendered
 
 
 class TestNeuralBunchValidation:

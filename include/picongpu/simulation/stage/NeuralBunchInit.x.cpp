@@ -337,6 +337,8 @@ namespace picongpu
                 Statistics run(NeuralBunchParam const& params, uint32_t const step, MappingDesc const& cellDescription)
                 {
                     Statistics stats;
+                    if(!params.enabled)
+                        return stats;
 
                     auto const& subGrid = Environment<simDim>::get().SubGrid();
                     DataSpace<simDim> const localDomainOffset
@@ -365,7 +367,8 @@ namespace picongpu
                     using TensorBuffers
                         = decltype(std::declval<Model const&>().loadTensors(std::declval<decltype(queue)&>()));
 
-                    auto const paramPolicy = params.fieldInitializer;
+                    auto const paramPolicy
+                        = params.fieldInitializer.value_or(NeuralBunchParam::FieldInitializer::banded);
                     auto const policy = paramPolicy == NeuralBunchParam::FieldInitializer::neural
                                             ? tg::FieldInitializer::neural
                                             : (paramPolicy == NeuralBunchParam::FieldInitializer::validatedNeural
@@ -517,6 +520,11 @@ namespace picongpu
                             "field has measured held-out mean ~2.5%% and p50 ~0.75%% (not 1e-3) in 4..48 cells; it "
                             "is exact only beyond the measured thresholds (aspect<=2 ~32-256 cells, aspect~10 "
                             ">512 cells).")
+                            % rank;
+                        log<picLog::PHYSICS>(
+                            "neuralBunch: rank=%1% policy=banded is the enabled default: the analytic point field "
+                            "beats the full model in the mid band (mean ~2.5%% vs ~15%%) and the learned correction "
+                            "(~4%%), at roughly 300x lower cost per pair. neural remains selectable.")
                             % rank;
                         log<picLog::PHYSICS>(
                             "neuralBunch: WARNING rank=%1% policy=banded: the far-band analytic point-field-only "

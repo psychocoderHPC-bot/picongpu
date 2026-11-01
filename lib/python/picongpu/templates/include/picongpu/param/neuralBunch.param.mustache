@@ -42,7 +42,7 @@ namespace picongpu::neuralBunch
             referenceOnly,
             banded
         };
-        FieldInitializer fieldInitializer = FieldInitializer::{{{neural_bunch.fieldInitializer}}};
+        std::optional<FieldInitializer> fieldInitializer = FieldInitializer::{{{neural_bunch.fieldInitializer}}};
         double bandedNearMaxCells = 4.0;
         double bandedFarMinCells = 48.0;
         bool useModelForNear = false;
@@ -77,7 +77,7 @@ namespace picongpu::neuralBunch
             referenceOnly,
             banded
         };
-        FieldInitializer fieldInitializer = FieldInitializer::referenceOnly;
+        std::optional<FieldInitializer> fieldInitializer{};
         double bandedNearMaxCells = 4.0;
         double bandedFarMinCells = 48.0;
         bool useModelForNear = false;

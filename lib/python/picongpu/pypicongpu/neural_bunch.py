@@ -11,7 +11,7 @@ import hashlib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, PlainSerializer, field_validator, model_validator
+from pydantic import BaseModel, Field, PlainSerializer, computed_field, field_validator, model_validator
 from typing import Annotated
 
 from .grid import serialise_vec3
@@ -39,15 +39,19 @@ class NeuralBunchInit(BaseModel):
     field names so the rendering context and the generated param file use the
     same vocabulary.
 
-    ``fieldInitializer`` is the policy discriminator: ``neural`` (default),
-    ``validatedNeural`` (only inside a measured validation band),
-    ``referenceOnly`` (exact FP64 reference, no model artifact required) or
-    ``banded`` (near/mid/far composition of reference, learned heads and the
+    ``fieldInitializer`` is the policy discriminator: unset (default) resolves
+    to ``banded`` when the initializer is enabled, ``neural`` (kept for
+    compatibility), ``validatedNeural`` (only inside a measured validation
+    band), ``referenceOnly`` (exact FP64 reference, no model artifact required)
+    or ``banded`` (near/mid/far composition of reference, learned heads and the
     analytic point field).
     """
 
     type_neuralbunch: Literal[True] = True
     """discriminator of the external-bunch initializer union"""
+
+    enabled: bool = False
+    """master switch; false renders an inert parameter set"""
 
     filename: str = ""
     """openPMD series path (resolved at render time)"""
@@ -68,7 +72,7 @@ class NeuralBunchInit(BaseModel):
     """tiles per inference batch"""
 
     fieldInitializer: FieldInitializerName = "banded"
-    """field-initializer policy"""
+    """field-initializer policy; banded is the enabled default"""
 
     enableReferenceFallback: bool = True
     """use the exact reference outside the model domain instead of failing"""
@@ -112,16 +116,18 @@ class NeuralBunchInit(BaseModel):
             raise ValueError("source_species must not be empty.")
         if not self.filename:
             raise ValueError("filename must not be empty.")
-        if self.fieldInitializer in ("neural", "validatedNeural") and not self.modelPath:
+        if self.enabled and self.fieldInitializer in ("neural", "validatedNeural") and not self.modelPath:
             raise ValueError(
                 f"modelPath is required for fieldInitializer={self.fieldInitializer!r}; "
-                "use field_initializer='referenceOnly' to run without an artifact."
+                "use field_initializer='referenceOnly' or 'banded' to run without an artifact."
             )
         return self
 
     @property
     def needs_model(self) -> bool:
-        return self.fieldInitializer in ("neural", "validatedNeural")
+        if self.fieldInitializer in ("neural", "validatedNeural"):
+            return True
+        return bool(self.modelPath)
 
     @property
     def model_json(self) -> str:
@@ -130,6 +136,13 @@ class NeuralBunchInit(BaseModel):
     @property
     def model_binary(self) -> str:
         return self.modelPath + ".bin"
+
+    @computed_field
+    @property
+    def fieldInitializerDeclaration(self) -> str:
+        """C++ declaration used by the template; unset stays std::nullopt."""
+        expression = "std::nullopt" if self.fieldInitializer is None else f"FieldInitializer::{self.fieldInitializer}"
+        return f"std::optional<FieldInitializer> fieldInitializer = {expression};"
 
     @staticmethod
     def _resolve(raw: str, setup_dir: Path) -> Path:
@@ -186,7 +199,7 @@ class NeuralBunchInit(BaseModel):
             "resolved_model_path": resolved_model_path,
             "source_species": self.source_species,
             "destination_species": self.destination_species,
-            "field_initializer": self.fieldInitializer,
+            "field_initializer": self.fieldInitializer or "auto",
         }
         if self.needs_model:
             self.provenance["model_json_sha256"] = _sha256(Path(self.model_json))

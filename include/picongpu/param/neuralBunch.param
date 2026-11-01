@@ -8,10 +8,10 @@
 /** User-facing parameters of the neural bunch initializer (Phase A).
  *
  * Phase B implements the deterministic hybrid policy:
- *  - the DEFAULT policy is ``neural``: the trained model handles every pair
- *    inside the artifact's declared domain, the exact FP64 reference handles the
- *    rest. No shipped artifact carries a ``validation.validated_band``, so the
- *    neural output is NOT production-validated; the stage warns once per rank;
+ *  - when enabled without an explicit policy the DEFAULT is ``banded``: the
+ *    analytic point field handles mid/far, the exact reference handles near.
+ *    ``neural`` remains selectable for compatibility, but the point field is
+ *    both more accurate in the mid band and about 300x cheaper per pair;
  *  - ``validatedNeural`` uses the neural path only inside a measured band;
  *  - ``referenceOnly`` uses the exact reference and requires no model artifact;
  *  - ``banded`` routes by distance: near uses the exact reference unless
@@ -84,7 +84,9 @@ namespace picongpu::neuralBunch
             referenceOnly,
             banded
         };
-        FieldInitializer fieldInitializer = FieldInitializer::banded;
+        //! Unset means: use ``banded`` when enabled, which is the production default. ``neural`` remains
+        //! selectable for compatibility but is not the default.
+        std::optional<FieldInitializer> fieldInitializer{};
         //! ``banded``: distances below this many cells use the exact reference (or ``near_model``).
         double bandedNearMaxCells = 4.0;
         //! ``banded``: distances above this many cells use the analytic far field (with ``far_multipole``).
