@@ -36,8 +36,7 @@ def print_report(path: str, result: dict, summary: dict, problems: list, rows: i
         "beta_mean={beta_mean:.6g}".format(**momentum)
     )
     print(
-        f"  physical position (m): min={summary['physical_position_min_SI']} "
-        f"max={summary['physical_position_max_SI']}"
+        f"  physical position (m): min={summary['physical_position_min_SI']} max={summary['physical_position_max_SI']}"
     )
     print(
         f"  charge per macro: {summary['charge_per_macro_SI']!r} C  "
@@ -56,9 +55,7 @@ def print_report(path: str, result: dict, summary: dict, problems: list, rows: i
         meta = result["meta"].get(record)
         if meta is None:
             continue
-        units = ", ".join(
-            f"{name}={value:g}" for name, value in sorted(meta["unitSI"].items())
-        )
+        units = ", ".join(f"{name}={value:g}" for name, value in sorted(meta["unitSI"].items()))
         dims = [float(value) for value in meta["unit_dimension"]]
         constant = f" constant={meta['constant']}" if meta["constant"] else ""
         print(
@@ -101,14 +98,14 @@ def print_report(path: str, result: dict, summary: dict, problems: list, rows: i
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("series", help="series file (.h5) or directory (.bp5)")
     parser.add_argument("--iteration", type=int, default=0)
     parser.add_argument("--species", default=common.DEFAULT_SPECIES)
     parser.add_argument("--compare", default=None, help="second series to compare arrays with")
-    parser.add_argument("--manifest", default=None, help="manifest to verify (default: <series>.manifest.json if present)")
+    parser.add_argument(
+        "--manifest", default=None, help="manifest to verify (default: <series>.manifest.json if present)"
+    )
     parser.add_argument("--no-manifest", action="store_true", help="skip manifest verification")
     parser.add_argument("--sidecar", default=None, help="sidecar npz (default: <series>.physical.npz)")
     parser.add_argument("--no-sidecar", action="store_true", help="skip sidecar verification")
@@ -126,18 +123,14 @@ def main(argv=None) -> int:
         problems.append(f"count {summary['count']} != expected {args.expect_n}")
     if args.expect_total_weight is not None:
         if not np.isclose(summary["total_weight"], args.expect_total_weight, rtol=1e-12):
-            problems.append(
-                f"total weight {summary['total_weight']} != expected {args.expect_total_weight}"
-            )
+            problems.append(f"total weight {summary['total_weight']} != expected {args.expect_total_weight}")
     if args.expect_gamma is not None:
         gamma = summary["momentum"]
         if not (
             np.isclose(gamma["gamma_min"], args.expect_gamma, rtol=1e-9)
             and np.isclose(gamma["gamma_max"], args.expect_gamma, rtol=1e-9)
         ):
-            problems.append(
-                f"gamma [{gamma['gamma_min']}, {gamma['gamma_max']}] != expected {args.expect_gamma}"
-            )
+            problems.append(f"gamma [{gamma['gamma_min']}, {gamma['gamma_max']}] != expected {args.expect_gamma}")
 
     manifest = None
     if not args.no_manifest:
@@ -147,13 +140,9 @@ def main(argv=None) -> int:
                 manifest = common.load_manifest(manifest_path)
                 problems.extend(common.check_manifest(manifest, args.series, result["data"]))
                 expected_backend = manifest.get("backend")
-                expected_format = {"hdf5": "hdf5", "adios2": "bp5"}.get(
-                    expected_backend, expected_backend
-                )
+                expected_format = {"hdf5": "hdf5", "adios2": "bp5"}.get(expected_backend, expected_backend)
                 if expected_backend and expected_format != result["format"]:
-                    problems.append(
-                        f"manifest backend {expected_backend} != read backend {result['format']}"
-                    )
+                    problems.append(f"manifest backend {expected_backend} != read backend {result['format']}")
             except Exception as error:  # pragma: no cover - malformed manifest
                 problems.append(f"manifest error: {error}")
         elif args.manifest:

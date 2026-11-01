@@ -49,9 +49,7 @@ def _read_tile(path: Path):
             x_tile = tuple(float(v) for v in parts[1:4])
         elif tag == "src":
             vals = [float(v) for v in parts[1:8]]
-            sources.append(
-                {"x": np.array(vals[0:3]), "u": np.array(vals[3:6]), "w": vals[6]}
-            )
+            sources.append({"x": np.array(vals[0:3]), "u": np.array(vals[3:6]), "w": vals[6]})
         elif tag == "order":
             settings["order"] = int(parts[1])
         elif tag == "tol":
@@ -109,9 +107,7 @@ def main(argv=None):
                     **settings,
                 )
             )
-            py_rel = float(
-                np.linalg.norm(got - py_tile) / max(np.linalg.norm(py_tile), 1e-300)
-            )
+            py_rel = float(np.linalg.norm(got - py_tile) / max(np.linalg.norm(py_tile), 1e-300))
             worst_py = max(worst_py, py_rel)
         worst = max(worst, rel)
         rows.append(
@@ -129,8 +125,7 @@ def main(argv=None):
         "max_rel_vs_live_python": worst_py if pyref is not None else None,
         "limit": float(args.limit),
         "python_reference_available": pyref is not None,
-        "passed": worst <= float(args.limit)
-        and (pyref is None or worst_py <= float(args.limit)),
+        "passed": worst <= float(args.limit) and (pyref is None or worst_py <= float(args.limit)),
     }
     print(json.dumps(result, indent=2))
     if args.out:

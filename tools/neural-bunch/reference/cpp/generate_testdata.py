@@ -103,9 +103,7 @@ def main():
     for case in CASES:
         x_tile = case["x_tile"]
         dx, dy, dz = case["cells"]
-        particles = [
-            {"x": x, "u": u, "w": w} for (x, u, w) in case["sources"]
-        ]
+        particles = [{"x": x, "u": u, "w": w} for (x, u, w) in case["sources"]]
         tile = ck.tile_field(
             x_tile,
             particles,
@@ -125,10 +123,7 @@ def main():
             f"nsrc {len(case['sources'])}",
         ]
         for x, u, w in case["sources"]:
-            lines.append(
-                "src "
-                + " ".join(repr(float(v)) for v in (*x, *u, float(w)))
-            )
+            lines.append("src " + " ".join(repr(float(v)) for v in (*x, *u, float(w))))
         lines += [
             f"order {SETTINGS['order']}",
             f"tol {SETTINGS['tol']!r}",
@@ -143,24 +138,15 @@ def main():
 
     # Shared aspect-corner shape_field vectors for the C++ test.
     aspects = [0.1, 0.5, 1.0, 2.0, 10.0]
-    pairs = (
-        [(a, a) for a in aspects]
-        + [(a, 1.0) for a in aspects]
-        + [(1.0, a) for a in aspects]
-    )
+    pairs = [(a, a) for a in aspects] + [(a, 1.0) for a in aspects] + [(1.0, a) for a in aspects]
     lines = ["# dx dy dz x y z ux uy uz Ex Ey Ez Bx By Bz"]
     for dy, dz in pairs:
         for d in (4.0, 8.0, 32.0, 128.0, 512.0):
             for gamma in (1.0, 10.0, 100.0):
                 cells = np.array([1.0, dy, dz])
                 R0 = np.array([d, 0.3, -0.2]) * cells
-                u = np.array(
-                    [0.0 if gamma == 1.0 else math.sqrt(gamma * gamma - 1.0),
-                     0.0, 0.0]
-                )
-                E, B = ck.shape_field(
-                    R0, np.zeros(3), u, *cells, order=4
-                )
+                u = np.array([0.0 if gamma == 1.0 else math.sqrt(gamma * gamma - 1.0), 0.0, 0.0])
+                E, B = ck.shape_field(R0, np.zeros(3), u, *cells, order=4)
                 values = [*cells, *R0, *u, *E, *B]
                 lines.append(" ".join(repr(float(v)) for v in values))
     aspect_path = out_dir / "aspect_cases.txt"

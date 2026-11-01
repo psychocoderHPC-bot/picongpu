@@ -74,10 +74,7 @@ namespace picongpu::particles::neuralBunch::reference
 
     inline Vec3 cross(Vec3 const& a, Vec3 const& b)
     {
-        return {
-            a.y * b.z - a.z * b.y,
-            a.z * b.x - a.x * b.z,
-            a.x * b.y - a.y * b.x};
+        return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
     }
 
     struct Settings
@@ -311,10 +308,7 @@ namespace picongpu::particles::neuralBunch::reference
                     {
                         double const sz = rules[2].nodes[iz];
                         double const w = wxy * rules[2].weights[iz];
-                        Vec3 const R{
-                            R0.x - sx * cells.x,
-                            R0.y - sy * cells.y,
-                            R0.z - sz * cells.z};
+                        Vec3 const R{R0.x - sx * cells.x, R0.y - sy * cells.y, R0.z - sz * cells.z};
                         Vec3 E, B;
                         point_field(R, u, E, B);
                         acc[0] += w * E.x;
@@ -384,7 +378,8 @@ namespace picongpu::particles::neuralBunch::reference
             gauss_legendre(ng, xg, wg);
             std::array<double, 6> acc{};
 
-            auto accumulate = [&](Vec3 const& s, double w) {
+            auto accumulate = [&](Vec3 const& s, double w)
+            {
                 double const W = tsc_shape(s.x) * tsc_shape(s.y) * tsc_shape(s.z);
                 if(W == 0.0)
                     return;
@@ -404,10 +399,8 @@ namespace picongpu::particles::neuralBunch::reference
                 for(int iy = 0; iy < 3; ++iy)
                     for(int iz = 0; iz < 3; ++iz)
                     {
-                        double const lo[3] = {
-                            box_lo[0] + ix, box_lo[1] + iy, box_lo[2] + iz};
-                        double const hi[3] = {
-                            lo[0] + 1.0, lo[1] + 1.0, lo[2] + 1.0};
+                        double const lo[3] = {box_lo[0] + ix, box_lo[1] + iy, box_lo[2] + iz};
+                        double const hi[3] = {lo[0] + 1.0, lo[1] + 1.0, lo[2] + 1.0};
                         bool contains = true;
                         for(int a = 0; a < 3; ++a)
                             contains = contains && lo[a] <= tb[a] && tb[a] <= hi[a];
@@ -416,18 +409,15 @@ namespace picongpu::particles::neuralBunch::reference
                         {
                             for(int a0 = 0; a0 < ng; ++a0)
                             {
-                                double const s0 = 0.5 * (lo[0] + hi[0])
-                                    + 0.5 * (hi[0] - lo[0]) * xg[a0];
+                                double const s0 = 0.5 * (lo[0] + hi[0]) + 0.5 * (hi[0] - lo[0]) * xg[a0];
                                 double const w0 = 0.5 * (hi[0] - lo[0]) * wg[a0];
                                 for(int a1 = 0; a1 < ng; ++a1)
                                 {
-                                    double const s1 = 0.5 * (lo[1] + hi[1])
-                                        + 0.5 * (hi[1] - lo[1]) * xg[a1];
+                                    double const s1 = 0.5 * (lo[1] + hi[1]) + 0.5 * (hi[1] - lo[1]) * xg[a1];
                                     double const w1 = 0.5 * (hi[1] - lo[1]) * wg[a1];
                                     for(int a2 = 0; a2 < ng; ++a2)
                                     {
-                                        double const s2 = 0.5 * (lo[2] + hi[2])
-                                            + 0.5 * (hi[2] - lo[2]) * xg[a2];
+                                        double const s2 = 0.5 * (lo[2] + hi[2]) + 0.5 * (hi[2] - lo[2]) * xg[a2];
                                         double const w2 = 0.5 * (hi[2] - lo[2]) * wg[a2];
                                         accumulate({s0, s1, s2}, w0 * w1 * w2);
                                     }
@@ -478,18 +468,13 @@ namespace picongpu::particles::neuralBunch::reference
                                                 for(int ir = 0; ir < nr; ++ir)
                                                 {
                                                     double const r = 0.5 * (xr[ir] + 1.0);
-                                                    double const w =
-                                                        0.5 * wr[ir] * wu * wv * V * r * r;
-                                                    Vec3 const s{
-                                                        t.x + r * q[0],
-                                                        t.y + r * q[1],
-                                                        t.z + r * q[2]};
+                                                    double const w = 0.5 * wr[ir] * wu * wv * V * r * r;
+                                                    Vec3 const s{t.x + r * q[0], t.y + r * q[1], t.z + r * q[2]};
                                                     Vec3 const R{
                                                         -r * q[0] * cells.x,
                                                         -r * q[1] * cells.y,
                                                         -r * q[2] * cells.z};
-                                                    double const W = tsc_shape(s.x)
-                                                        * tsc_shape(s.y) * tsc_shape(s.z);
+                                                    double const W = tsc_shape(s.x) * tsc_shape(s.y) * tsc_shape(s.z);
                                                     if(W == 0.0)
                                                         continue;
                                                     Vec3 E, B;
@@ -513,10 +498,7 @@ namespace picongpu::particles::neuralBunch::reference
 
         inline std::array<std::vector<Panel>, 3> panels_for(Vec3 const& target, int level)
         {
-            return {
-                graded_panels(target.x, level),
-                graded_panels(target.y, level),
-                graded_panels(target.z, level)};
+            return {graded_panels(target.x, level), graded_panels(target.y, level), graded_panels(target.z, level)};
         }
     } // namespace detail
 
@@ -551,19 +533,16 @@ namespace picongpu::particles::neuralBunch::reference
             int nang = settings.sphere_n;
             int ng = 8;
             Vec3 E1, B1, E2, B2;
-            detail::box_support_integral(
-                R0, u, cells, nang, settings.sphere_radial_order, ng, E1, B1);
+            detail::box_support_integral(R0, u, cells, nang, settings.sphere_radial_order, ng, E1, B1);
             for(;;)
             {
                 int const nang2 = std::min(nang + 4, settings.sphere_max_n);
                 int const ng2 = std::min(ng + 2, 16);
-                detail::box_support_integral(
-                    R0, u, cells, nang2, settings.sphere_radial_order, ng2, E2, B2);
+                detail::box_support_integral(R0, u, cells, nang2, settings.sphere_radial_order, ng2, E2, B2);
                 std::array<double, 6> a{E1.x, E1.y, E1.z, B1.x, B1.y, B1.z};
                 std::array<double, 6> b{E2.x, E2.y, E2.z, B2.x, B2.y, B2.z};
                 err = detail::richardson_error(a, b);
-                if(err <= settings.tol
-                   || (nang2 >= settings.sphere_max_n && ng2 >= 16))
+                if(err <= settings.tol || (nang2 >= settings.sphere_max_n && ng2 >= 16))
                 {
                     converged = err <= settings.tol;
                     E = E2;
@@ -644,7 +623,7 @@ namespace picongpu::particles::neuralBunch::reference
         std::vector<unsigned char> conv(total, 1);
         std::vector<unsigned char> isnear(total, 0);
 
-#pragma omp parallel for schedule(dynamic,16)
+#pragma omp parallel for schedule(dynamic, 16)
         for(std::size_t idx = 0; idx < total; ++idx)
         {
             std::size_t const si = idx / nslots;
@@ -659,10 +638,10 @@ namespace picongpu::particles::neuralBunch::reference
             int const j = static_cast<int>(r % 8);
             int const k = static_cast<int>(r / 8);
             Vec3 const pos = x_tile
-                + Vec3{
-                    (i + offsets()[c].x) * cells.x,
-                    (j + offsets()[c].y) * cells.y,
-                    (k + offsets()[c].z) * cells.z};
+                             + Vec3{
+                                 (i + offsets()[c].x) * cells.x,
+                                 (j + offsets()[c].y) * cells.y,
+                                 (k + offsets()[c].z) * cells.z};
             Vec3 E, B;
             ShapeResult sr;
             shape_field(pos, src.x, src.u, dx, dy, dz, settings, E, B, &sr);

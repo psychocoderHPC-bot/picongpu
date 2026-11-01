@@ -65,12 +65,16 @@ namespace picongpu::particles::neuralBunch::tileGeometry
         for(int k = 0; k < grid.count[2]; ++k)
             for(int j = 0; j < grid.count[1]; ++j)
                 for(int i = 0; i < grid.count[0]; ++i)
-                    grid.tiles.push_back(Tile{{offset[0] + i * tileNx, offset[1] + j * tileNy, offset[2] + k * tileNz}});
+                    grid.tiles.push_back(
+                        Tile{{offset[0] + i * tileNx, offset[1] + j * tileNy, offset[2] + k * tileNz}});
         return grid;
     }
 
     /** Half-open ownership test in the rank's total-domain coordinates. */
-    inline bool insideLocalDomain(std::array<int, 3> const& cell, std::array<int, 3> const& offset, std::array<int, 3> const& size)
+    inline bool insideLocalDomain(
+        std::array<int, 3> const& cell,
+        std::array<int, 3> const& offset,
+        std::array<int, 3> const& size)
     {
         for(int axis = 0; axis < 3; ++axis)
             if(cell[axis] < offset[axis] || cell[axis] >= offset[axis] + size[axis])
@@ -258,8 +262,8 @@ namespace picongpu::particles::neuralBunch::tileGeometry
             for(int axis = 0; axis < 3; ++axis)
             {
                 double const sourceCells = (source[axis] - tileOrigin[axis]) / cell[axis];
-                double const diff
-                    = std::abs(detail::minimumAxisDistance(sourceCells, componentOffsets[component][axis], count[axis]));
+                double const diff = std::abs(
+                    detail::minimumAxisDistance(sourceCells, componentOffsets[component][axis], count[axis]));
                 double const excess = std::max(diff - 1.5, 0.0) * cell[axis] / cells.dx;
                 sum2 += excess * excess;
             }
@@ -281,8 +285,7 @@ namespace picongpu::particles::neuralBunch::tileGeometry
             return PairRoute::zeroWeight;
         if(gamma < domain.gammaMin || gamma > domain.gammaMax)
             return PairRoute::referenceGamma;
-        if(aspectY < domain.aYMin || aspectY > domain.aYMax || aspectZ < domain.aZMin
-           || aspectZ > domain.aZMax)
+        if(aspectY < domain.aYMin || aspectY > domain.aYMax || aspectZ < domain.aZMin || aspectZ > domain.aZMax)
             return PairRoute::referenceAspect;
         if(distanceCells < domain.dMinCells)
             return PairRoute::referenceNear;
@@ -293,7 +296,7 @@ namespace picongpu::particles::neuralBunch::tileGeometry
 
     inline bool aspectCovered(CellSizes const& cells, DomainBounds const& domain)
     {
-        return cells.aspectY() >= domain.aYMin && cells.aspectY() <= domain.aYMax
-               && cells.aspectZ() >= domain.aZMin && cells.aspectZ() <= domain.aZMax;
+        return cells.aspectY() >= domain.aYMin && cells.aspectY() <= domain.aYMax && cells.aspectZ() >= domain.aZMin
+               && cells.aspectZ() <= domain.aZMax;
     }
 } // namespace picongpu::particles::neuralBunch::tileGeometry

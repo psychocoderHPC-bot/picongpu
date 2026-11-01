@@ -6,21 +6,21 @@ dependency.  All arithmetic is `double`.
 
 ## Files
 
-- `neural_reference.hpp` — the whole implementation:
+- `neural_reference.hpp` - the whole implementation:
   `point_field`, `shape_field`, `tile_field`, `tsc_shape`, `offsets`,
   `Settings` (`order`, `tol`, `max_level`, `max_order`), `ShapeResult`,
   `TileReport`.
-- `test_reference.cpp` — plain-main test runner.
-- `benchmark.cpp` — tile benchmark mirroring `../benchmark_tile.py`.
-- `tile_bench.cpp` — CLI: one source/tile, 1536 tile values plus timing and
+- `test_reference.cpp` - plain-main test runner.
+- `benchmark.cpp` - tile benchmark mirroring `../benchmark_tile.py`.
+- `tile_bench.cpp` - CLI: one source/tile, 1536 tile values plus timing and
   per-output convergence statistics.
-- `generate_testdata.py` — regenerates the golden tiles from the Python
+- `generate_testdata.py` - regenerates the golden tiles from the Python
   reference (only needed when the reference changes; not needed to run tests).
-- `testdata/*.tile` — checked-in golden tiles, 1536 values each in
+- `testdata/*.tile` - checked-in golden tiles, 1536 values each in
   `c + 6*(i + 8*(j + 8*k))` order.
-- `testdata/aspect_cases.txt` — 225 Python shape-field vectors over the aspect
+- `testdata/aspect_cases.txt` - 225 Python shape-field vectors over the aspect
   grid (header documents the 15 columns).
-- `testdata/near_cases.txt` — 24 Python shape-field vectors just outside the
+- `testdata/near_cases.txt` - 24 Python shape-field vectors just outside the
   support, for the <=1e-9 cross-check.
 
 ## Build and run

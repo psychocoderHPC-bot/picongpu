@@ -26,8 +26,6 @@
 #include <alpaka/alpaka.hpp>
 #include <alpaka/nn/onHost/core/binary.hpp>
 
-#include <nlohmann/json.hpp>
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -43,6 +41,8 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 namespace picongpu::particles::neuralBunch
 {
@@ -341,11 +341,7 @@ namespace picongpu::particles::neuralBunch
             buffers.reserve(m_metadata.tensors.size());
             for(auto const& binding : m_metadata.tensors)
             {
-                alpaka::nn::onHost::TensorSpec spec{
-                    binding.name,
-                    binding.offsetBytes,
-                    binding.count,
-                    binding.shape};
+                alpaka::nn::onHost::TensorSpec spec{binding.name, binding.offsetBytes, binding.count, binding.shape};
                 buffers.push_back(
                     alpaka::nn::onHost::loadBinaryTensor<float>(queue, m_binPath.string(), spec, std::string{}));
             }
@@ -397,7 +393,8 @@ namespace picongpu::particles::neuralBunch
             auto const versionJson = required(root, "version", "root");
             auto const version = asInt(versionJson, "version");
             if(version != 1)
-                throw ModelError{"unsupported artifact version " + std::to_string(version) + " (only 1 is supported)."};
+                throw ModelError{
+                    "unsupported artifact version " + std::to_string(version) + " (only 1 is supported)."};
             m_metadata.version = version;
 
             m_metadata.dtype = asString(required(root, "dtype", "root"), "dtype");
@@ -435,7 +432,8 @@ namespace picongpu::particles::neuralBunch
             if(m_metadata.tileNx != kTileNx || m_metadata.tileNy != kTileNy || m_metadata.tileNz != kTileNz)
                 throw ModelError{
                     "unsupported tile geometry " + std::to_string(m_metadata.tileNx) + "x"
-                    + std::to_string(m_metadata.tileNy) + "x" + std::to_string(m_metadata.tileNz) + " (v1 requires 8x8x4)."};
+                    + std::to_string(m_metadata.tileNy) + "x" + std::to_string(m_metadata.tileNz)
+                    + " (v1 requires 8x8x4)."};
 
             auto const components = required(tile, "components", "tile");
             if(!components.is_array() || components.size() != 6u)
@@ -475,23 +473,16 @@ namespace picongpu::particles::neuralBunch
             auto const inputs = required(features, "inputs", "features");
             if(!inputs.is_array())
                 throw ModelError{"features.inputs must be an array."};
-            std::vector<std::string> const expectedInputs{
-                "r_x",
-                "r_y",
-                "r_z",
-                "u_x",
-                "u_y",
-                "u_z",
-                "gamma",
-                "a_y",
-                "a_z"};
+            std::vector<std::string> const
+                expectedInputs{"r_x", "r_y", "r_z", "u_x", "u_y", "u_z", "gamma", "a_y", "a_z"};
             if(inputs.size() != expectedInputs.size())
                 throw ModelError{"features.inputs must list the nine fourier_v1 base inputs."};
             for(std::size_t i = 0; i < expectedInputs.size(); ++i)
             {
                 m_metadata.featureInputs.push_back(asString(inputs.at(i), "features.inputs"));
                 if(m_metadata.featureInputs.back() != expectedInputs[i])
-                    throw ModelError{"features.inputs[" + std::to_string(i) + "] must be '" + expectedInputs[i] + "'."};
+                    throw ModelError{
+                        "features.inputs[" + std::to_string(i) + "] must be '" + expectedInputs[i] + "'."};
             }
 
             m_metadata.featureDim = asSize(required(features, "dim", "features"), "features.dim");
@@ -511,8 +502,7 @@ namespace picongpu::particles::neuralBunch
             m_metadata.encoderKind = asString(required(encoder, "kind", "encoder"), "encoder.kind");
             if(m_metadata.encoderKind != "mlp")
                 throw ModelError{"unsupported encoder kind '" + m_metadata.encoderKind + "'."};
-            m_metadata.encoderActivation
-                = asString(required(encoder, "activation", "encoder"), "encoder.activation");
+            m_metadata.encoderActivation = asString(required(encoder, "activation", "encoder"), "encoder.activation");
             if(m_metadata.encoderActivation != "silu")
                 throw ModelError{"encoder.activation must be 'silu'."};
             m_metadata.lastLayerActivation
@@ -536,8 +526,8 @@ namespace picongpu::particles::neuralBunch
                 parsed.out = asSize(required(layer, "out", context), context + ".out");
                 if(parsed.in != expectedIn)
                     throw ModelError{
-                        context + ": in=" + std::to_string(parsed.in) + " does not match the previous out="
-                        + std::to_string(expectedIn) + "."};
+                        context + ": in=" + std::to_string(parsed.in)
+                        + " does not match the previous out=" + std::to_string(expectedIn) + "."};
                 if(parsed.out == 0u)
                     throw ModelError{context + ": out must be positive."};
                 m_metadata.layers.push_back(std::move(parsed));
@@ -589,7 +579,8 @@ namespace picongpu::particles::neuralBunch
             for(auto const& entry : bank)
                 m_metadata.bank.push_back(asString(entry, "decoder.bank"));
 
-            auto const entryShape = asShape(required(decoder, "bank_entry_shape", "decoder"), "decoder.bank_entry_shape");
+            auto const entryShape
+                = asShape(required(decoder, "bank_entry_shape", "decoder"), "decoder.bank_entry_shape");
             if(entryShape.size() != 2u)
                 throw ModelError{"decoder.bank_entry_shape must contain two extents."};
             m_metadata.bankEntryShape = {entryShape[0], entryShape[1]};
@@ -654,8 +645,7 @@ namespace picongpu::particles::neuralBunch
             auto const minAnchorZ = m_metadata.aZAnchors.front();
             auto const maxAnchorZ = m_metadata.aZAnchors.back();
             if(std::abs(minAnchorY - m_metadata.aYMin) > 1e-12 || std::abs(maxAnchorY - m_metadata.aYMax) > 1e-12
-               || std::abs(minAnchorZ - m_metadata.aZMin) > 1e-12
-               || std::abs(maxAnchorZ - m_metadata.aZMax) > 1e-12)
+               || std::abs(minAnchorZ - m_metadata.aZMin) > 1e-12 || std::abs(maxAnchorZ - m_metadata.aZMax) > 1e-12)
                 throw ModelError{"decoder axis grids must span the domain a_y/a_z bounds."};
 
             m_metadata.dMinCells = asFiniteDouble(required(domain, "d_min_cells", "domain"), "domain.d_min_cells");

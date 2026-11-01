@@ -143,7 +143,7 @@ def point_field(R, u):
         B_moving = np.cross(beta, E_moving)
 
         r2 = np.sum(R * R, axis=-1)
-        E_static = R / (r2 ** 1.5)[..., None]
+        E_static = R / (r2**1.5)[..., None]
 
     E = np.where(is_static[..., None], E_static, E_moving)
     B = np.where(is_static[..., None], np.zeros_like(E_static), B_moving)
@@ -202,11 +202,7 @@ def _graded_panels(target, level, base=BASE_PANELS):
                 points.add(max(a, b - h * (0.5**k)))
 
         ordered = sorted(points)
-        out.extend(
-            (ordered[i], ordered[i + 1])
-            for i in range(len(ordered) - 1)
-            if ordered[i + 1] > ordered[i]
-        )
+        out.extend((ordered[i], ordered[i + 1]) for i in range(len(ordered) - 1) if ordered[i + 1] > ordered[i])
     return out
 
 
@@ -293,9 +289,7 @@ def _adaptive_integral(R0, cells, u, order, tol, max_level, max_order, chunk):
                 return e_hi, b_hi, err, level, False
             order_lo += 2
             e_lo, b_lo = e_hi, b_hi
-        e_hi, b_hi = _integral_on_panels(
-            panels, order_lo + 2, R0, cells, u, chunk
-        )
+        e_hi, b_hi = _integral_on_panels(panels, order_lo + 2, R0, cells, u, chunk)
 
 
 def _flat_panels(target, level):
@@ -406,9 +400,7 @@ def shape_field(
         }
         return (e, b, info) if return_info else (e, b)
 
-    e, b, err, lvl, converged = _adaptive_integral(
-        R0, cells, u, order, tol, max_level, max_order, chunk
-    )
+    e, b, err, lvl, converged = _adaptive_integral(R0, cells, u, order, tol, max_level, max_order, chunk)
     info = {
         "error": err,
         "level": lvl,
@@ -446,9 +438,7 @@ def _base_integrals_many(R0, u, cells, order, chunk):
         ww.append(w * tsc_shape(n))
     grid = np.stack(np.meshgrid(nodes[0], nodes[1], nodes[2], indexing="ij"), axis=-1)
     grid = grid.reshape(-1, 3) * cells[None, :]
-    weight = (
-        ww[0][:, None, None] * ww[1][None, :, None] * ww[2][None, None, :]
-    ).reshape(-1)
+    weight = (ww[0][:, None, None] * ww[1][None, :, None] * ww[2][None, None, :]).reshape(-1)
 
     npts = R0.shape[0]
     E = np.empty((npts, 3), dtype=np.float64)
@@ -487,7 +477,6 @@ def _shape_many(
     """
     pos = _as_f64(pos)
     R0 = pos - _as_f64(x_src)
-    npts = R0.shape[0]
 
     if not adaptive:
         return _base_integrals_many(R0, u, cells, order, chunk)
@@ -496,8 +485,7 @@ def _shape_many(
     E_lo, B_lo = _base_integrals_many(R0, u, cells, lo, chunk)
     E_hi, B_hi = _base_integrals_many(R0, u, cells, lo + 2, chunk)
 
-    diff = np.maximum(np.max(np.abs(E_lo - E_hi), axis=1),
-                      np.max(np.abs(B_lo - B_hi), axis=1))
+    diff = np.maximum(np.max(np.abs(E_lo - E_hi), axis=1), np.max(np.abs(B_lo - B_hi), axis=1))
     scale = 1.0 + np.maximum(
         np.maximum(np.max(np.abs(E_lo), axis=1), np.max(np.abs(E_hi), axis=1)),
         np.maximum(np.max(np.abs(B_lo), axis=1), np.max(np.abs(B_hi), axis=1)),

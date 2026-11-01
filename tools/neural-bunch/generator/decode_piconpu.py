@@ -38,14 +38,11 @@ def main(argv=None) -> int:
     print(f"series: {args.series}")
     print(f"  backend={result['backend']} species={args.species} particles={summary['count']}")
     print(f"  cellSizeSI={summary['cellSizeSI']} grid={summary['grid']}")
-    print(
-        "  physical position (m): "
-        f"min={physical.min(axis=0).tolist()} max={physical.max(axis=0).tolist()}"
-    )
+    print(f"  physical position (m): min={physical.min(axis=0).tolist()} max={physical.max(axis=0).tolist()}")
     print(
         f"  u: min={float(umag.min()):.6g} max={float(umag.max()):.6g} "
-        f"mean={float(umag.mean()):.6g} gamma_min={float(np.sqrt(1+umag.min()**2)):.6g} "
-        f"gamma_max={float(np.sqrt(1+umag.max()**2)):.6g}"
+        f"mean={float(umag.mean()):.6g} gamma_min={float(np.sqrt(1 + umag.min() ** 2)):.6g} "
+        f"gamma_max={float(np.sqrt(1 + umag.max() ** 2)):.6g}"
     )
     print(f"  total_weight={summary['total_weight']!r} total_charge={summary['total_charge_C']!r} C")
     print("  first rows: frac(x,y,z) offset(x,y,z) physical(x,y,z) p_raw(x,y,z) w u(x,y,z)")

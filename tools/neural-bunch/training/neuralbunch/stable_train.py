@@ -27,15 +27,12 @@ import numpy as np
 import torch
 
 from . import __version__
-from .model import NeuralBunchModel, interp_indices_weights
 from .reference_data import load_split
 from .train import (
     Batcher,
     TrainConfig,
     _groups,
     build_model_from_config,
-    load_checkpoint,
-    lp2,
     save_checkpoint,
 )
 
@@ -61,7 +58,7 @@ def calibrate_bank(model, data, cfg, device, seed=0, n_tiles=256):
     num = 0.0
     den = 0.0
     for s in range(0, len(ids), 64):
-        tl = ids[s:s + 64]
+        tl = ids[s : s + 64]
         feats, w, ti, di, dw, tgt, s0, T = b.batch(tl, cfg.model_config())
         pred = model(feats, w, ti, di, dw, T)
         num += float(torch.sum(pred * pred))
@@ -98,8 +95,7 @@ def composite_loss(pred, target, s0, floor, w_pat=1.0, w_log=0.1, log_delta=2.0)
         pat = torch.where(strong, pat, torch.zeros_like(pat))
         dlog = torch.log(pn + EPS) - torch.log(tn + EPS)
         ad = torch.abs(dlog)
-        logl = torch.where(ad < log_delta, dlog * dlog,
-                           2.0 * log_delta * ad - log_delta * log_delta)
+        logl = torch.where(ad < log_delta, dlog * dlog, 2.0 * log_delta * ad - log_delta * log_delta)
         # tiles with (numerically) zero field: relative amplitude/direction are
         # undefined (0/0).  Mask them from log/pattern and add a bounded
         # absolute shrink term so the exported field is small there.
@@ -109,8 +105,8 @@ def composite_loss(pred, target, s0, floor, w_pat=1.0, w_log=0.1, log_delta=2.0)
         pzero = torch.where(zero, (pn / 1e-3) ** 2, torch.zeros_like(pn))
         total = total + rel.mean() + w_pat * pat.mean() + w_log * logl.mean() + 0.02 * pzero.mean()
         parts[name] = float(rel.mean())
-        parts[name+'_pat'] = float(pat.mean())
-        parts[name+'_log'] = float(logl.mean())
+        parts[name + "_pat"] = float(pat.mean())
+        parts[name + "_log"] = float(logl.mean())
     return total, parts
 
 
@@ -132,7 +128,7 @@ def quick_metric(model, data, cfg, device, ids, bs=128):
     b = Batcher(data, device)
     re_all, rb_all, rn_all, bn_all, s0e, s0b = [], [], [], [], [], []
     for s in range(0, len(ids), bs):
-        tl = np.sort(ids[s:s + bs])
+        tl = np.sort(ids[s : s + bs])
         feats, w, ti, di, dw, tgt, s0, T = b.batch(tl, cfg.model_config())
         pred = model(feats, w, ti, di, dw, T).double()
         pe, pb = _groups(pred)
@@ -143,27 +139,48 @@ def quick_metric(model, data, cfg, device, ids, bs=128):
             den = torch.clamp(torch.maximum(ref, sc.double()), min=EPS)
             out_re.extend((err / den).cpu().numpy().tolist())
             out_rn.extend(ref.cpu().numpy().tolist())
-        s0e.extend(s0[:, 0].cpu().numpy().tolist()); s0b.extend(s0[:, 1].cpu().numpy().tolist())
+        s0e.extend(s0[:, 0].cpu().numpy().tolist())
+        s0b.extend(s0[:, 1].cpu().numpy().tolist())
     out = {}
     for name, rel, ref, sc in (("E", re_all, rn_all, s0e), ("B", rb_all, bn_all, s0b)):
-        rel = np.asarray(rel); ref = np.asarray(ref); sc = np.asarray(sc)
-        den = np.maximum(ref, sc); zero = ref / np.maximum(den, EPS)
+        rel = np.asarray(rel)
+        ref = np.asarray(ref)
+        sc = np.asarray(sc)
+        den = np.maximum(ref, sc)
+        zero = ref / np.maximum(den, EPS)
         out[name] = {
-            "mean": float(rel.mean()), "p50": float(np.percentile(rel, 50)),
-            "p90": float(np.percentile(rel, 90)), "p99": float(np.percentile(rel, 99)),
+            "mean": float(rel.mean()),
+            "p50": float(np.percentile(rel, 50)),
+            "p90": float(np.percentile(rel, 90)),
+            "p99": float(np.percentile(rel, 99)),
             "max": float(rel.max()),
             "weighted": float(np.sum(den * rel) / np.sum(den)),
             "absnorm_share": float(np.mean(ref < sc)),
-            "zero_mean": float(zero.mean()), "zero_weighted": float(np.sum(den * zero) / np.sum(den)),
+            "zero_mean": float(zero.mean()),
+            "zero_weighted": float(np.sum(den * zero) / np.sum(den)),
         }
     model.train()
     return out
 
 
-def train_stable(cfg: TrainConfig, data_root, out_dir, device, val_subset=768,
-                 time_budget_s=7500.0, max_steps=60000, eval_every=2000,
-                 floor=5e-2, w_pat=0.5, w_log=0.1, lr=1e-3, warmup=500,
-                 seed=0, val_ids=None, feature_kind=None):
+def train_stable(
+    cfg: TrainConfig,
+    data_root,
+    out_dir,
+    device,
+    val_subset=768,
+    time_budget_s=7500.0,
+    max_steps=60000,
+    eval_every=2000,
+    floor=5e-2,
+    w_pat=0.5,
+    w_log=0.1,
+    lr=1e-3,
+    warmup=500,
+    seed=0,
+    val_ids=None,
+    feature_kind=None,
+):
     np.random.seed(seed)
     torch.manual_seed(seed)
     feature_kind = feature_kind or getattr(cfg, "feature_kind", "fourier_v1")
@@ -178,10 +195,9 @@ def train_stable(cfg: TrainConfig, data_root, out_dir, device, val_subset=768,
     init_ratio = calibrate_bank(model, train_data, cfg, device, seed=seed)
     bank_norm0 = float(torch.linalg.norm(model.decoder.bank.detach()).cpu())
     opt = torch.optim.AdamW(
-        [
-            p for p in model.parameters() if p.requires_grad
-        ],
-        lr=lr, weight_decay=0.0,
+        [p for p in model.parameters() if p.requires_grad],
+        lr=lr,
+        weight_decay=0.0,
     )
 
     def factor(step):
@@ -208,14 +224,29 @@ def train_stable(cfg: TrainConfig, data_root, out_dir, device, val_subset=768,
     step = 0
     t0 = time.time()
     mon = (out / "monitor.jsonl").open("w", encoding="utf-8")
-    print(json.dumps({"event": "start", "init_ratio": init_ratio, "n_train": train_data.n_tiles,
-                      "n_val_subset": int(len(val_ids)), "cfg": asdict(cfg),
-                      "floor": floor, "w_pat": w_pat, "w_log": w_log, "bank_norm0": bank_norm0} ), flush=True)
+    print(
+        json.dumps(
+            {
+                "event": "start",
+                "init_ratio": init_ratio,
+                "n_train": train_data.n_tiles,
+                "n_val_subset": int(len(val_ids)),
+                "cfg": asdict(cfg),
+                "floor": floor,
+                "w_pat": w_pat,
+                "w_log": w_log,
+                "bank_norm0": bank_norm0,
+            }
+        ),
+        flush=True,
+    )
     while step < max_steps and (time.time() - t0) < time_budget_s:
         if step < curriculum_steps:
             if pos_s + cfg.batch_tiles > len(perm_s):
-                perm_s = batcher.rng.permutation(strong_ids); pos_s = 0
-            ids = np.sort(perm_s[pos_s:pos_s + cfg.batch_tiles]); pos_s += cfg.batch_tiles
+                perm_s = batcher.rng.permutation(strong_ids)
+                pos_s = 0
+            ids = np.sort(perm_s[pos_s : pos_s + cfg.batch_tiles])
+            pos_s += cfg.batch_tiles
         else:
             ids = batcher.next_tiles(min(cfg.batch_tiles, train_data.n_tiles))
         feats, w, ti, di, dw, tgt, s0, T = batcher.batch(ids, cfg.model_config())
@@ -224,8 +255,7 @@ def train_stable(cfg: TrainConfig, data_root, out_dir, device, val_subset=768,
         loss, parts = composite_loss(pred, tgt, s0, floor, w_pat=w_pat, w_log=w_log)
         opt.zero_grad(set_to_none=True)
         loss.backward()
-        gnorm = float(torch.nn.utils.clip_grad_norm_(
-            [p for p in model.parameters() if p.requires_grad], 5.0))
+        gnorm = float(torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 5.0))
         opt.step()
         # fix the unidentifiable z<->D scale gauge: keep ||D|| constant so the
         # encoder (source dependent) carries the amplitude; the exported bank
@@ -242,37 +272,64 @@ def train_stable(cfg: TrainConfig, data_root, out_dir, device, val_subset=768,
                 tn = float(torch.linalg.norm(tgt, dim=1).mean())
                 zn, hn = z_stats(model, feats, w, ti, T)
             rec = {
-                "step": step, "t": time.time() - t0, "loss": float(loss.detach()),
-                "rel_E": parts["E"], "rel_B": parts["B"], "pat_E": parts["E_pat"], "pat_B": parts["B_pat"], "log_E": parts["E_log"], "log_B": parts["B_log"], "grad_norm": gnorm,
+                "step": step,
+                "t": time.time() - t0,
+                "loss": float(loss.detach()),
+                "rel_E": parts["E"],
+                "rel_B": parts["B"],
+                "pat_E": parts["E_pat"],
+                "pat_B": parts["B_pat"],
+                "log_E": parts["E_log"],
+                "log_B": parts["B_log"],
+                "grad_norm": gnorm,
                 "lr": float(opt.param_groups[0]["lr"]),
-                "z_rms": zn, "h_rms": hn,
+                "z_rms": zn,
+                "h_rms": hn,
                 "bank_norm": float(torch.linalg.norm(model.decoder.bank.detach())),
                 "gate_norm": float(torch.linalg.norm(model.encoder.feature_gate.detach())),
                 "pred_target": pn / max(tn, EPS),
             }
-            mon.write(json.dumps(rec) + "\n"); mon.flush()
+            mon.write(json.dumps(rec) + "\n")
+            mon.flush()
             if step % 500 == 0:
                 print(json.dumps(rec), flush=True)
         if step % eval_every == 0 or step == max_steps:
             qm = quick_metric(model, val_data, cfg, device, val_ids)
             vl, vparts = evaluate_loss(model, val_data, cfg, device, val_ids, floor, w_pat, w_log)
-            rec = {"event": "eval", "step": step, "t": time.time() - t0,
-                   "val_loss": vl, "val_rel_E": vparts["E"], "val_rel_B": vparts["B"],
-                   "val_metric": qm, "lr": float(opt.param_groups[0]["lr"])}
+            rec = {
+                "event": "eval",
+                "step": step,
+                "t": time.time() - t0,
+                "val_loss": vl,
+                "val_rel_E": vparts["E"],
+                "val_rel_B": vparts["B"],
+                "val_metric": qm,
+                "lr": float(opt.param_groups[0]["lr"]),
+            }
             hist.append(rec)
-            mon.write(json.dumps(rec) + "\n"); mon.flush()
+            mon.write(json.dumps(rec) + "\n")
+            mon.flush()
             print(json.dumps(rec), flush=True)
             save_checkpoint(out / "last.pt", model, opt, cfg, step, hist, seed, best)
             if vl < best:
-                best = vl; best_step = step
+                best = vl
+                best_step = step
                 save_checkpoint(out / "best.pt", model, opt, cfg, step, hist, seed, best)
     mon.close()
     report = {
-        "format": "neuralbunch-stable-training-report", "version": 1,
-        "package_version": __version__, "device": str(device),
-        "init_ratio": init_ratio, "steps": step, "elapsed_s": time.time() - t0,
-        "best_val_loss": best, "best_step": best_step,
-        "train_config": asdict(cfg), "floor": floor, "w_pat": w_pat, "w_log": w_log,
+        "format": "neuralbunch-stable-training-report",
+        "version": 1,
+        "package_version": __version__,
+        "device": str(device),
+        "init_ratio": init_ratio,
+        "steps": step,
+        "elapsed_s": time.time() - t0,
+        "best_val_loss": best,
+        "best_step": best_step,
+        "train_config": asdict(cfg),
+        "floor": floor,
+        "w_pat": w_pat,
+        "w_log": w_log,
         "history": hist,
         "note": "loss floor/pattern/log terms are training-only; artifact metric uses preregistered S0",
     }
@@ -284,19 +341,25 @@ def train_stable(cfg: TrainConfig, data_root, out_dir, device, val_subset=768,
 def evaluate_loss(model, data, cfg, device, ids, floor, w_pat, w_log, bs=128):
     model.eval()
     b = Batcher(data, device)
-    tot = 0.0; n = 0; pe_sum = 0.0; pb_sum = 0.0
+    tot = 0.0
+    n = 0
+    pe_sum = 0.0
+    pb_sum = 0.0
     for s in range(0, len(ids), bs):
-        tl = np.sort(ids[s:s + bs])
+        tl = np.sort(ids[s : s + bs])
         feats, w, ti, di, dw, tgt, s0, T = b.batch(tl, cfg.model_config())
         pred = model(feats, w, ti, di, dw, T)
         loss, parts = composite_loss(pred, tgt, s0, floor, w_pat=w_pat, w_log=w_log)
-        tot += float(loss) * len(tl); n += len(tl)
-        pe_sum += parts["E"] * len(tl); pb_sum += parts["B"] * len(tl)
+        tot += float(loss) * len(tl)
+        n += len(tl)
+        pe_sum += parts["E"] * len(tl)
+        pb_sum += parts["B"] * len(tl)
     model.train()
     return tot / max(n, 1), {"E": pe_sum / max(n, 1), "B": pb_sum / max(n, 1)}
 
 
 def export_best(run_dir, prefix):
     from .train import export_from_checkpoint
+
     meta = export_from_checkpoint(str(Path(run_dir) / "best.pt"), str(prefix))
     return meta

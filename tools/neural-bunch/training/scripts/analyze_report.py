@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Per-distance / per-gamma breakdowns and coverage for a validation report."""
-import argparse, json, math
+
+import argparse
+import json
 from pathlib import Path
 import numpy as np
 
@@ -31,12 +33,12 @@ def group(meta, keyfn, label):
     for k in sorted(groups, key=str):
         rows = groups[k]
         out[str(k)] = {
-            "E": stats([r["rel_E"] for r in rows],
-                       [r["absolute_normalized_E"] for r in rows]),
-            "cB": stats([r["rel_B"] for r in rows],
-                        [r["absolute_normalized_B"] for r in rows]),
-            "force": stats([r.get("rel_force", float("nan")) for r in rows],
-                           [r.get("absolute_normalized_force", False) for r in rows]),
+            "E": stats([r["rel_E"] for r in rows], [r["absolute_normalized_E"] for r in rows]),
+            "cB": stats([r["rel_B"] for r in rows], [r["absolute_normalized_B"] for r in rows]),
+            "force": stats(
+                [r.get("rel_force", float("nan")) for r in rows],
+                [r.get("absolute_normalized_force", False) for r in rows],
+            ),
         }
     return out
 
@@ -62,7 +64,8 @@ def main(argv=None):
         "n_cases": len(meta),
         "n_within_domain_4_512": int(sum(4.0 <= x <= 512.0 for x in d)),
         "neural_fraction": float(np.mean([4.0 <= x <= 512.0 for x in d])),
-        "d_min_min": float(min(d)), "d_min_median": float(np.median(d)),
+        "d_min_min": float(min(d)),
+        "d_min_median": float(np.median(d)),
         "d_min_max": float(max(d)),
         "distance_histogram": {},
         "gamma_values": sorted({m.get("gamma_name") for m in meta}),
@@ -76,7 +79,9 @@ def main(argv=None):
     result = {
         "split": args.split,
         "overall": {
-            "E": block["E"], "cB": block["cB"], "force": block["force"],
+            "E": block["E"],
+            "cB": block["cB"],
+            "force": block["force"],
             "overall_rel_rms": block["overall_rel_rms"],
             "n_cases": block["n_cases"],
         },

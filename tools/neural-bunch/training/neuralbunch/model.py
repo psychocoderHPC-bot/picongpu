@@ -13,13 +13,12 @@ Architecture (fixed by the orchestrator):
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import List, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Sequence, Tuple
 
 import numpy as np
 
-from .features import (DEFAULT_OCTAVES, DENSE_KIND, PROBE_KIND, PROBE_OCTAVES,
-                       feature_dim, feature_scale)
+from .features import DEFAULT_OCTAVES, DENSE_KIND, PROBE_KIND, PROBE_OCTAVES, feature_dim, feature_scale
 
 TILE = (8, 8, 4)
 COMPONENTS = ("Ex", "Ey", "Ez", "Bx", "By", "Bz")
@@ -62,9 +61,7 @@ class ModelConfig:
     def validate(self):
         if self.feature_kind == "fourier_v1":
             if tuple(self.octaves) != DEFAULT_OCTAVES:
-                raise ValueError(
-                    "artifact format v1 fixes features.kind=fourier_v1 with octaves [-3, 6]"
-                )
+                raise ValueError("artifact format v1 fixes features.kind=fourier_v1 with octaves [-3, 6]")
             if self.feature_dim != 69:
                 raise ValueError(f"feature_dim must be 69, got {self.feature_dim}")
         elif self.feature_kind == PROBE_KIND:
@@ -155,11 +152,9 @@ if torch is not None:
         def __init__(self, cfg: ModelConfig):
             super().__init__()
             dims = [cfg.feature_dim, *list(cfg.hidden), cfg.latent]
-            self.linears = nn.ModuleList(
-                [nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)]
-            )
+            self.linears = nn.ModuleList([nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)])
             for lin in self.linears:
-                nn.init.kaiming_uniform_(lin.weight, a=5 ** 0.5)
+                nn.init.kaiming_uniform_(lin.weight, a=5**0.5)
                 fan_in = lin.in_features
                 bound = 1.0 / np.sqrt(fan_in)
                 nn.init.uniform_(lin.bias, -bound, bound)
@@ -167,7 +162,8 @@ if torch is not None:
             nn.init.normal_(self.linears[-1].weight, std=1e-2)
             nn.init.zeros_(self.linears[-1].bias)
             self.register_buffer(
-                "input_scale", torch.tensor(1.0 / feature_scale(cfg.feature_kind), dtype=torch.float64),
+                "input_scale",
+                torch.tensor(1.0 / feature_scale(cfg.feature_kind), dtype=torch.float64),
                 persistent=False,
             )
             # Learnable per-feature gate.  It can suppress the high-frequency
@@ -180,7 +176,7 @@ if torch is not None:
                 gate[:9] = 1.0
                 for axis in range(3):
                     base = 9 + axis * 20
-                    gate[base:base + 10] = 1.0  # octaves -3..1, sin+cos
+                    gate[base : base + 10] = 1.0  # octaves -3..1, sin+cos
             self.feature_gate = nn.Parameter(gate)
             self.act = nn.SiLU()
 
@@ -215,18 +211,18 @@ if torch is not None:
             self.bank = nn.Parameter(torch.empty(nz * ny, cfg.latent, OUT_DIM))
             nn.init.normal_(self.bank, std=1.0 / np.sqrt(max(cfg.latent, 1)))
             self.register_buffer(
-                "ay_anchors", torch.tensor(cfg.a_y_anchors, dtype=torch.float64),
+                "ay_anchors",
+                torch.tensor(cfg.a_y_anchors, dtype=torch.float64),
                 persistent=False,
             )
             self.register_buffer(
-                "az_anchors", torch.tensor(cfg.a_z_anchors, dtype=torch.float64),
+                "az_anchors",
+                torch.tensor(cfg.a_z_anchors, dtype=torch.float64),
                 persistent=False,
             )
 
         def weights(self, a_y, a_z):
-            idx, w = interp_indices_weights(
-                a_y, a_z, self.cfg.a_y_anchors, self.cfg.a_z_anchors
-            )
+            idx, w = interp_indices_weights(a_y, a_z, self.cfg.a_y_anchors, self.cfg.a_z_anchors)
             idx = torch.as_tensor(idx, dtype=torch.long, device=self.bank.device)
             w = torch.as_tensor(w, dtype=self.bank.dtype, device=self.bank.device)
             wmat = (self.bank[idx] * w[:, :, None, None]).sum(dim=1)
@@ -259,9 +255,7 @@ if torch is not None:
                 tile_index = tile_index[keep]
                 h = self.encoder(feats)
                 hw = h * src_w.to(h.dtype).unsqueeze(-1)
-            z = torch.zeros(
-                (n_tiles, self.cfg.latent), dtype=hw.dtype, device=hw.device
-            )
+            z = torch.zeros((n_tiles, self.cfg.latent), dtype=hw.dtype, device=hw.device)
             if hw.shape[0]:
                 z = z.index_add(0, tile_index, hw)
             # Accumulate the four bilinear bank corners one at a time.  This is
@@ -276,9 +270,7 @@ if torch is not None:
         def forward_tile(self, feats, src_w, a_y, a_z):
             feats = torch.as_tensor(feats)
             src_w = torch.as_tensor(src_w, dtype=feats.dtype, device=feats.device)
-            idx, w = interp_indices_weights(
-                a_y, a_z, self.cfg.a_y_anchors, self.cfg.a_z_anchors
-            )
+            idx, w = interp_indices_weights(a_y, a_z, self.cfg.a_y_anchors, self.cfg.a_z_anchors)
             idx = torch.as_tensor(idx, dtype=torch.long, device=feats.device).view(1, 4)
             w = torch.as_tensor(w, dtype=feats.dtype, device=feats.device).view(1, 4)
             ti = torch.zeros(feats.shape[0], dtype=torch.long, device=feats.device)
@@ -301,9 +293,7 @@ if torch is not None:
             nz, ny = len(self.cfg.a_z_anchors), len(self.cfg.a_y_anchors)
             for iz in range(nz):
                 for iy in range(ny):
-                    tensors.append(
-                        (f"dec.{iz}.{iy}.w", bank[iz * ny + iy].astype(np.float64))
-                    )
+                    tensors.append((f"dec.{iz}.{iy}.w", bank[iz * ny + iy].astype(np.float64)))
             return tensors
 
 

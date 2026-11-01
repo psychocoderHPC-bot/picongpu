@@ -16,9 +16,7 @@ def test_preregistered_normalization_and_absolute_cases():
     pred[0, 3:6] = 0.02
     pred[1, :768] += 0.001
     s0 = torch.tensor([[0.5, 0.5], [0.001, 0.001]], dtype=torch.float64)
-    rel, denom, absn, refn, summary = _metric_block(
-        pred.reshape(2, 256, 6), target.reshape(2, 256, 6), s0[:, 0], "E"
-    )
+    rel, denom, absn, refn, summary = _metric_block(pred.reshape(2, 256, 6), target.reshape(2, 256, 6), s0[:, 0], "E")
     assert absn[0] and not absn[1]
     assert denom[0] == pytest.approx(0.5)
     assert denom[1] == pytest.approx(np.sqrt(768) * 0.1)
@@ -34,7 +32,7 @@ def test_loss_uses_the_same_preregistered_scale():
     pred.reshape(1, 256, 6)[..., :3] = 0.25  # E only
     s0 = torch.tensor([[0.5, 0.5]])
     loss, le, lb = loss_and_terms(pred, target, s0)
-    expected_e = float(768 * 0.25 ** 2 / 0.25)
+    expected_e = float(768 * 0.25**2 / 0.25)
     assert le == pytest.approx(expected_e, rel=1e-5)
     assert lb == pytest.approx(0.0, abs=1e-12)
     assert loss == pytest.approx(expected_e, rel=1e-5)

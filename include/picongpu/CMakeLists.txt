@@ -324,8 +324,7 @@ endif()
 # the project policy above so that unused parameters and the CUDA-only `#pragma
 # unroll` directives do not fail the build when alpaka enables -Werror.
 if(CMAKE_CUDA_COMPILER)
-    set(CMAKE_CUDA_FLAGS
-        "${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-unused-parameter -Xcompiler -Wno-unknown-pragmas")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-unused-parameter -Xcompiler -Wno-unknown-pragmas")
 endif()
 
 # The HIP device pass is compiled by clang with its own warning set. alpaka's
@@ -338,12 +337,12 @@ if(CMAKE_HIP_COMPILER AND NOT CMAKE_CUDA_COMPILER)
     target_compile_options(
         picongpu_warning_policy
         INTERFACE
-        -Wno-unused-parameter
-        -Wno-unknown-pragmas
-        -Wno-unused-local-typedefs
-        # clang-only diagnostics for pre-existing upstream code that GCC does not emit
-        -Wno-deprecated-copy
-        -Wno-delete-non-abstract-non-virtual-dtor
+            -Wno-unused-parameter
+            -Wno-unknown-pragmas
+            -Wno-unused-local-typedefs
+            # clang-only diagnostics for pre-existing upstream code that GCC does not emit
+            -Wno-deprecated-copy
+            -Wno-delete-non-abstract-non-virtual-dtor
     )
 endif()
 
@@ -472,7 +471,6 @@ endif()
 if(NOT PIC_ENABLE_NEURAL_BUNCH)
     add_definitions(-DPIC_ENABLE_NEURAL_BUNCH=0)
 endif()
-
 
 ################################################################################
 # JSON
@@ -667,14 +665,9 @@ target_link_libraries(picongpu-hostonly PUBLIC ${HOST_LIBS})
 # needs the alpaka include path. Add the directories directly instead of linking
 # the alpaka targets, which would require alpaka_finalize() and enable language
 # separation for this host-only target.
-target_include_directories(
-    picongpu-hostonly
-    PRIVATE $<TARGET_PROPERTY:alpaka::alpaka,INTERFACE_INCLUDE_DIRECTORIES>
-)
+target_include_directories(picongpu-hostonly PRIVATE $<TARGET_PROPERTY:alpaka::alpaka,INTERFACE_INCLUDE_DIRECTORIES>)
 
-add_executable(picongpu
-     ${ACCSRCFILES}
-)
+add_executable(picongpu ${ACCSRCFILES})
 target_include_directories(picongpu PRIVATE ${PIC_SOURCE_DIRS})
 
 target_link_libraries(picongpu PUBLIC ${LIBS} ${HOST_LIBS} picongpu-hostonly)
@@ -699,10 +692,7 @@ endif(PIC_HAVE_neuralBunch)
 
 if(PIC_HAVE_neuralBunch)
     enable_testing()
-    add_subdirectory(
-        "${PIConGPUapp_SOURCE_DIR}/../../test/neuralBunch"
-        "${CMAKE_BINARY_DIR}/test_neuralBunch"
-    )
+    add_subdirectory("${PIConGPUapp_SOURCE_DIR}/../../test/neuralBunch" "${CMAKE_BINARY_DIR}/test_neuralBunch")
 endif(PIC_HAVE_neuralBunch)
 
 # Including <nlohmann/json.hpp> will throw loads of warnings. Quiet them.

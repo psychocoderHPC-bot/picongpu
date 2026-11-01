@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import numpy as np
 
@@ -13,10 +12,10 @@ from .model import ModelConfig, NeuralBunchModel, NumpyArtifactModel
 
 def config_from_metadata(meta) -> ModelConfig:
     layers = meta["encoder"]["layers"]
-    hidden = [int(l["out"]) for l in layers[:-1]]
+    hidden = [int(layer["out"]) for layer in layers[:-1]]
     latent = int(layers[-1]["out"])
-    kind=meta["features"].get("kind", "fourier_v1")
-    oct=tuple(meta["features"].get("octaves", (-3, 6)))
+    kind = meta["features"].get("kind", "fourier_v1")
+    oct = tuple(meta["features"].get("octaves", (-3, 6)))
     return ModelConfig(
         hidden=hidden,
         latent=latent,
@@ -35,19 +34,11 @@ def torch_model_from_artifact(meta, tensors):
     model = NeuralBunchModel(cfg)
     sd = {}
     for i, layer in enumerate(meta["encoder"]["layers"]):
-        sd[f"encoder.linears.{i}.weight"] = torch.tensor(
-            np.asarray(tensors[layer["weight"]]).T, dtype=torch.float32
-        )
-        sd[f"encoder.linears.{i}.bias"] = torch.tensor(
-            np.asarray(tensors[layer["bias"]]), dtype=torch.float32
-        )
-    bank = np.stack(
-        [np.asarray(tensors[name]) for name in meta["decoder"]["bank"]], axis=0
-    )
+        sd[f"encoder.linears.{i}.weight"] = torch.tensor(np.asarray(tensors[layer["weight"]]).T, dtype=torch.float32)
+        sd[f"encoder.linears.{i}.bias"] = torch.tensor(np.asarray(tensors[layer["bias"]]), dtype=torch.float32)
+    bank = np.stack([np.asarray(tensors[name]) for name in meta["decoder"]["bank"]], axis=0)
     sd["decoder.bank"] = torch.tensor(bank, dtype=torch.float32)
-    sd["encoder.feature_gate"] = torch.ones(
-        int(meta["features"]["dim"]), dtype=torch.float32
-    )
+    sd["encoder.feature_gate"] = torch.ones(int(meta["features"]["dim"]), dtype=torch.float32)
     model.load_state_dict(sd)
     # exported encoder weights already contain the fixed input conditioning and
     # the learned feature gate
@@ -73,12 +64,16 @@ def compare_artifact(prefix, n_particles=257, n_trials=3, seed=1234):
         a_z = float(10 ** rng.uniform(-1, 1))
         np_out = np_model.forward_tile(feats, src_w, a_y, a_z)
         with __import__("torch").no_grad():
-            t_out = t_model.forward_tile(
-                __import__("torch").tensor(feats, dtype=__import__("torch").float32),
-                __import__("torch").tensor(src_w, dtype=__import__("torch").float32),
-                a_y,
-                a_z,
-            ).double().numpy()
+            t_out = (
+                t_model.forward_tile(
+                    __import__("torch").tensor(feats, dtype=__import__("torch").float32),
+                    __import__("torch").tensor(src_w, dtype=__import__("torch").float32),
+                    a_y,
+                    a_z,
+                )
+                .double()
+                .numpy()
+            )
         rel = float(np.linalg.norm(t_out - np_out) / max(np.linalg.norm(np_out), 1e-12))
         per_trial.append(rel)
         worst = max(worst, rel)

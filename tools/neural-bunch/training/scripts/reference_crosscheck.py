@@ -19,7 +19,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from neuralbunch import sampling  # noqa: E402
-from neuralbunch.reference_data import (_sample_quadrature, preregistered_scales)  # noqa: E402
+from neuralbunch.reference_data import _sample_quadrature, preregistered_scales  # noqa: E402
 from neuralbunch.reference_loader import (  # noqa: E402
     call_tile_field,
     load_module,
@@ -41,14 +41,12 @@ def main(argv=None):
     ar = tuple(float(x) for x in args.aspect_range.split(","))
     mod = load_module(args.reference)
     ref_path = Path(args.reference) if args.reference else DEFAULT_REFERENCE
-    rng = np.random.default_rng(12345)
     rows = []
     for i in range(args.samples):
         gname = sampling.GAMMA_SPECS[i % len(sampling.GAMMA_SPECS)][0]
         mode = sampling.POSITION_MODES[i % len(sampling.POSITION_MODES)]
         direction = sampling.DIRECTIONS[(i * 3) % len(sampling.DIRECTIONS)]
-        sample = sampling.make_sample("train", i, gname, direction, mode, i,
-                                      aspect_range=ar)
+        sample = sampling.make_sample("train", i, gname, direction, mode, i, aspect_range=ar)
         q = _sample_quadrature(sample, None)
         t0 = time.time()
         fast = call_tile_field(mod, sample, q)

@@ -1,6 +1,5 @@
 import json
 import shutil
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -86,6 +85,7 @@ def test_inspect_rejects_schema_and_size(tmp_path):
 def test_export_refuses_wrong_geometry(tmp_path):
     class Bad:
         cfg = ModelConfig(hidden=(8,), latent=5)
+
         def artifact_tensors(self):
             m = make_model()
             return m.artifact_tensors()

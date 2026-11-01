@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 
 import numpy as np
 
@@ -20,9 +18,7 @@ def inspect_artifact(prefix) -> dict:
         "code_sha": meta["code_sha"],
         "features_dim": meta["features"]["dim"],
         "tile": [meta["tile"]["nx"], meta["tile"]["ny"], meta["tile"]["nz"]],
-        "encoder_layers": [
-            [l["in"], l["out"]] for l in meta["encoder"]["layers"]
-        ],
+        "encoder_layers": [[layer["in"], layer["out"]] for layer in meta["encoder"]["layers"]],
         "latent": meta["encoder"]["output_dim"],
         "decoder_matrix_shape": meta["decoder"]["matrix_shape"],
         "bank_entries": len(meta["decoder"]["bank"]),

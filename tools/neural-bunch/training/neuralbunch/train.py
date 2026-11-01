@@ -10,13 +10,12 @@ divergences on the tile) are reported but never replace runtime checks.
 from __future__ import annotations
 
 import json
-import os
 import platform
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import List, Sequence
 
 import numpy as np
 
@@ -25,7 +24,6 @@ from .export import compute_code_sha, write_artifact
 from .features import DEFAULT_OCTAVES
 from .model import (
     DEFAULT_AXES,
-    OUT_DIM,
     TILE,
     ModelConfig,
     NeuralBunchModel,
@@ -95,7 +93,7 @@ class Batcher:
         order = np.argsort(data.tile_index, kind="stable")
         ti = data.tile_index[order]
         bounds = np.searchsorted(ti, np.arange(self.n_tiles + 1))
-        self.groups = [order[bounds[t]:bounds[t + 1]] for t in range(self.n_tiles)]
+        self.groups = [order[bounds[t] : bounds[t + 1]] for t in range(self.n_tiles)]
         self.rng = np.random.default_rng(0)
         self._perm = np.empty(0, dtype=np.int64)
 
@@ -195,7 +193,7 @@ def _metric_block(pred, target, s0, name):
     rel = (err_norm / denom).cpu().numpy()
     den = denom.cpu().numpy()
     refn = ref_norm.cpu().numpy()
-    absn = (refn < s0v.cpu().numpy())
+    absn = refn < s0v.cpu().numpy()
     finite = rel[np.isfinite(rel)]
     summary = {
         "mean_rel_rms": float(np.mean(finite)) if finite.size else float("nan"),
@@ -223,22 +221,34 @@ def constraint_diagnostics(pred, targets, a_y, a_z):
         spacing = (1.0, float(a_y[t]), float(a_z[t]))
         Ex, Ey, Ez = arr[t, 0], arr[t, 1], arr[t, 2]
         Bx, By, Bz = arr[t, 3], arr[t, 4], arr[t, 5]
-        divE = (np.gradient(Ex, spacing[0], axis=0) + np.gradient(Ey, spacing[1], axis=1)
-                + np.gradient(Ez, spacing[2], axis=2))
-        divB = (np.gradient(Bx, spacing[0], axis=0) + np.gradient(By, spacing[1], axis=1)
-                + np.gradient(Bz, spacing[2], axis=2))
-        rms = np.sqrt(np.mean(Ex ** 2 + Ey ** 2 + Ez ** 2 + Bx ** 2 + By ** 2 + Bz ** 2)) + EPS
-        d.append([float(np.sqrt(np.mean(divE ** 2)) / rms), float(np.sqrt(np.mean(divB ** 2)) / rms)])
+        divE = (
+            np.gradient(Ex, spacing[0], axis=0)
+            + np.gradient(Ey, spacing[1], axis=1)
+            + np.gradient(Ez, spacing[2], axis=2)
+        )
+        divB = (
+            np.gradient(Bx, spacing[0], axis=0)
+            + np.gradient(By, spacing[1], axis=1)
+            + np.gradient(Bz, spacing[2], axis=2)
+        )
+        rms = np.sqrt(np.mean(Ex**2 + Ey**2 + Ez**2 + Bx**2 + By**2 + Bz**2)) + EPS
+        d.append([float(np.sqrt(np.mean(divE**2)) / rms), float(np.sqrt(np.mean(divB**2)) / rms)])
     d = np.asarray(d)
-    return {"mean_abs_divE_over_rms": float(d[:, 0].mean()),
-            "mean_abs_divB_over_rms": float(d[:, 1].mean())}
+    return {"mean_abs_divE_over_rms": float(d[:, 0].mean()), "mean_abs_divB_over_rms": float(d[:, 1].mean())}
 
 
 #: Yee offsets in cell units, matching reference/convkernel.py
-_YEE_OFFSETS = np.array([
-    (0.5, 0.0, 0.0), (0.0, 0.5, 0.0), (0.0, 0.0, 0.5),
-    (0.0, 0.5, 0.5), (0.5, 0.0, 0.5), (0.5, 0.5, 0.0),
-], dtype=np.float64)
+_YEE_OFFSETS = np.array(
+    [
+        (0.5, 0.0, 0.0),
+        (0.0, 0.5, 0.0),
+        (0.0, 0.0, 0.5),
+        (0.0, 0.5, 0.5),
+        (0.5, 0.0, 0.5),
+        (0.5, 0.5, 0.0),
+    ],
+    dtype=np.float64,
+)
 
 
 def _tile_components(F):
@@ -283,16 +293,17 @@ def trilinear_forces(F, data, tile_ids):
         u = data.u[m]
         if len(pos) == 0:
             g_all.append(np.zeros((0, 3)))
-            beta_all.append(0.0); e_all.append(0.0); vxb_all.append(0.0)
+            beta_all.append(0.0)
+            e_all.append(0.0)
+            vxb_all.append(0.0)
             continue
         beta = u / np.sqrt(1.0 + np.sum(u * u, axis=1, keepdims=True))
         E = np.zeros_like(beta)
         B = np.zeros_like(beta)
         for c in range(6):
-            vals = np.array([
-                _trilinear(comps[local], c, p, data.origin[t], data.dx[t],
-                           data.a_y[t], data.a_z[t]) for p in pos
-            ])
+            vals = np.array(
+                [_trilinear(comps[local], c, p, data.origin[t], data.dx[t], data.a_y[t], data.a_z[t]) for p in pos]
+            )
             if c < 3:
                 E[:, c] = vals
             else:
@@ -320,7 +331,9 @@ def force_metric(F_pred, F_ref, data, tile_ids, s0):
         refn.append(r)
         absn.append(r < s0g)
         cancel.append(E_ref[i] / max(vxb_ref[i], EPS))
-    rel = np.asarray(rel); den = np.asarray(den); absn = np.asarray(absn)
+    rel = np.asarray(rel)
+    den = np.asarray(den)
+    absn = np.asarray(absn)
     cancel = np.asarray(cancel)
     return {
         "definition": "trilinear interpolation of the six staggered components to each source, g = E_tilde + beta x cB_tilde; denom = max(||g_ref||, S0_E + beta*S0_B)",
@@ -378,25 +391,30 @@ def evaluate(model, data, cfg, device, force_weight=0.0, batch=64):
         else:
             gname, direction = d.get("gamma_name"), d.get("direction")
             abucket, pmode = d.get("aspect_bucket"), d.get("position_mode")
-        meta.append({
-            "gamma_name": gname,
-            "direction": direction,
-            "position_mode": pmode,
-            "aspect_bucket": abucket,
-            "kind": d.get("kind"),
-            "bunch_kind": d.get("bunch_kind"),
-            "gamma": d.get("gamma"),
-            "d_min_cells": float(data.d_min_cells[t]) if getattr(data, "d_min_cells", None) is not None else None,
-            "a_y": float(data.a_y[t]), "a_z": float(data.a_z[t]),
-            "s0_E": float(s0[i, 0]), "s0_B": float(s0[i, 1]),
-            "ref_norm_E": float(refn_e[i]), "ref_norm_B": float(refn_b[i]),
-            "rel_E": float(re_[i]), "rel_B": float(rb_[i]),
-            "absolute_normalized_E": bool(abs_e[i]), "absolute_normalized_B": bool(abs_b[i]),
-            "rel_force": float(force.get("per_case_rel_rms", [float("nan")] * len(ids))[i]),
-            "absolute_normalized_force": bool(
-                force.get("per_case_absolute_normalized", [False] * len(ids))[i]
-            ),
-        })
+        meta.append(
+            {
+                "gamma_name": gname,
+                "direction": direction,
+                "position_mode": pmode,
+                "aspect_bucket": abucket,
+                "kind": d.get("kind"),
+                "bunch_kind": d.get("bunch_kind"),
+                "gamma": d.get("gamma"),
+                "d_min_cells": float(data.d_min_cells[t]) if getattr(data, "d_min_cells", None) is not None else None,
+                "a_y": float(data.a_y[t]),
+                "a_z": float(data.a_z[t]),
+                "s0_E": float(s0[i, 0]),
+                "s0_B": float(s0[i, 1]),
+                "ref_norm_E": float(refn_e[i]),
+                "ref_norm_B": float(refn_b[i]),
+                "rel_E": float(re_[i]),
+                "rel_B": float(rb_[i]),
+                "absolute_normalized_E": bool(abs_e[i]),
+                "absolute_normalized_B": bool(abs_b[i]),
+                "rel_force": float(force.get("per_case_rel_rms", [float("nan")] * len(ids))[i]),
+                "absolute_normalized_force": bool(force.get("per_case_absolute_normalized", [False] * len(ids))[i]),
+            }
+        )
     return {
         "n_cases": int(data.n_tiles),
         "reference_kind": data.reference_kind,
@@ -470,10 +488,9 @@ def make_optimizer(model, cfg: TrainConfig):
     raise ValueError(f"unknown optimizer {cfg.optimizer!r}")
 
 
-def train_one(cfg: TrainConfig, data, val_data, device, out_dir=None, resume=None,
-              extra_meta=None):
+def train_one(cfg: TrainConfig, data, val_data, device, out_dir=None, resume=None, extra_meta=None):
     seed = int(cfg.seed)
-    np.random.seed(seed % (2 ** 32))
+    np.random.seed(seed % (2**32))
     torch.manual_seed(seed)
     model = build_model_from_config(cfg).to(device)
     opt = make_optimizer(model, cfg)
@@ -553,8 +570,7 @@ def train_one(cfg: TrainConfig, data, val_data, device, out_dir=None, resume=Non
     return model, history, best_val
 
 
-def run_training(data_root, out_dir, cfg: TrainConfig, resume=False,
-                 splits=("train", "val", "test"), device=None):
+def run_training(data_root, out_dir, cfg: TrainConfig, resume=False, splits=("train", "val", "test"), device=None):
     from .reference_data import available_splits, load_split
 
     torch_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -577,7 +593,11 @@ def run_training(data_root, out_dir, cfg: TrainConfig, resume=False,
         trial_dir = out_dir if trials == 1 else out_dir / f"trial_{t}"
         print(f"[trial {t}] seed={trial_cfg.seed} steps={trial_cfg.max_steps}", flush=True)
         model, history, best_val = train_one(
-            trial_cfg, train_data, val_data, torch_device, trial_dir,
+            trial_cfg,
+            train_data,
+            val_data,
+            torch_device,
+            trial_dir,
             resume=resume_path if t == 0 else None,
         )
         eval_splits = {}
@@ -585,8 +605,7 @@ def run_training(data_root, out_dir, cfg: TrainConfig, resume=False,
             if sp not in avail:
                 continue
             d = train_data if sp == "train" else load_split(data_root, sp)
-            eval_splits[sp] = evaluate(model, d, trial_cfg.model_config(), torch_device,
-                                       trial_cfg.force_weight)
+            eval_splits[sp] = evaluate(model, d, trial_cfg.model_config(), torch_device, trial_cfg.force_weight)
         result = {
             "trial": t,
             "seed": trial_cfg.seed,
@@ -613,9 +632,16 @@ def run_training(data_root, out_dir, cfg: TrainConfig, resume=False,
                 best_model, d, best_cfg.model_config(), torch_device, best_cfg.force_weight
             )
     # always write the winning checkpoint explicitly
-    save_checkpoint(out_dir / "best.pt", best_model, None, best_cfg,
-                    best_result.get("selected_step", best_cfg.max_steps),
-                    best_result["history"], best_cfg.seed, best_val)
+    save_checkpoint(
+        out_dir / "best.pt",
+        best_model,
+        None,
+        best_cfg,
+        best_result.get("selected_step", best_cfg.max_steps),
+        best_result["history"],
+        best_cfg.seed,
+        best_val,
+    )
     report = {
         "format": "neuralbunch-training-report",
         "version": 1,
@@ -641,8 +667,7 @@ def export_from_checkpoint(checkpoint, out_prefix):
     return meta
 
 
-def validate_artifact_on_data(artifact, data_root, splits=("train", "val", "test"),
-                              out_report=None, device=None):
+def validate_artifact_on_data(artifact, data_root, splits=("train", "val", "test"), out_report=None, device=None):
     from .parity import torch_model_from_artifact
     from .reference_data import available_splits, load_split
 
@@ -667,9 +692,7 @@ def validate_artifact_on_data(artifact, data_root, splits=("train", "val", "test
             continue
         d = load_split(data_root, sp, feature_kind=meta["features"].get("kind", "fourier_v1"))
         report["splits"][sp] = evaluate(model, d, cfg, dev)
-    report["reference_kind"] = {
-        sp: report["splits"][sp].get("reference_kind") for sp in report["splits"]
-    }
+    report["reference_kind"] = {sp: report["splits"][sp].get("reference_kind") for sp in report["splits"]}
     if out_report:
         Path(out_report).parent.mkdir(parents=True, exist_ok=True)
         Path(out_report).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

@@ -67,11 +67,11 @@ def fourier_v1(r, u, a_y, a_z, octaves=DEFAULT_OCTAVES) -> np.ndarray:
     pieces = [base]
     r = np.asarray(r, dtype=np.float64)
     for axis in range(3):
-        ra = r[..., axis:axis + 1]
+        ra = r[..., axis : axis + 1]
         col_sin = []
         col_cos = []
         for j in octave_list(octaves):
-            phase = np.pi * (2.0 ** j) * ra
+            phase = np.pi * (2.0**j) * ra
             col_sin.append(np.sin(phase))
             col_cos.append(np.cos(phase))
         # octave-major interleave: sin_j0, cos_j0, sin_j1, cos_j1, ...
@@ -94,10 +94,7 @@ def fourier_v1_single(r, u, a_y, a_z, octaves=DEFAULT_OCTAVES) -> np.ndarray:
 #: 4x4x2 probe grid at tile cell centres (cell units along x, y, z).
 PROBE_OCTAVES = (-3, 1)
 PROBE_CELL_OFFSETS = tuple(
-    (2 * i + 0.5, 2 * j + 0.5, 2 * k + 0.5)
-    for k in range(2)
-    for j in range(4)
-    for i in range(4)
+    (2 * i + 0.5, 2 * j + 0.5, 2 * k + 0.5) for k in range(2) for j in range(4) for i in range(4)
 )
 PROBE_COMPONENTS = ("Ex", "Ey", "Ez", "Bx", "By", "Bz")
 PROBE_KIND = "fourier_probe_v1"
@@ -138,7 +135,7 @@ def point_field_dx(R, u):
         E_mov = (inv_g2[..., None] * R) / denom[..., None]
         B_mov = np.cross(beta, E_mov)
         r2 = np.sum(R * R, axis=-1)
-        E_st = R / (r2 ** 1.5)[..., None]
+        E_st = R / (r2**1.5)[..., None]
     E = np.where(static[..., None], E_st, E_mov)
     B = np.where(static[..., None], np.zeros_like(E_st), B_mov)
     return E, B
@@ -160,13 +157,13 @@ def probe_v1(r, u, a_y, a_z, octaves=PROBE_OCTAVES) -> np.ndarray:
         az = np.full(r.shape[0], float(az))
     ay = np.broadcast_to(ay, (r.shape[0],))
     az = np.broadcast_to(az, (r.shape[0],))
-    probes = _probe_grid(ay, az)                    # [N,P,3]
-    R = probes - r[:, None, :]                      # x_obs - x_source
+    probes = _probe_grid(ay, az)  # [N,P,3]
+    R = probes - r[:, None, :]  # x_obs - x_source
     u_rep = np.broadcast_to(u[:, None, :], R.shape)
-    E, B = point_field_dx(R, u_rep)                 # [N,P,3] each
-    eb = np.concatenate([E, B], axis=-1)            # [N,P,6]
-    base = _base(r, u, ay, az)                      # [N,9]
-    fourier = _fourier_terms(r, octaves)            # [N,30]
+    E, B = point_field_dx(R, u_rep)  # [N,P,3] each
+    eb = np.concatenate([E, B], axis=-1)  # [N,P,6]
+    base = _base(r, u, ay, az)  # [N,9]
+    fourier = _fourier_terms(r, octaves)  # [N,30]
     return np.concatenate([base, eb.reshape(r.shape[0], -1), fourier], axis=-1)
 
 
@@ -176,9 +173,9 @@ def _fourier_terms(r, octaves):
         r = r[None, :]
     pieces = []
     for axis in range(3):
-        ra = r[:, axis:axis + 1]
+        ra = r[:, axis : axis + 1]
         for j in octave_list(octaves):
-            ph = np.pi * (2.0 ** j) * ra
+            ph = np.pi * (2.0**j) * ra
             pieces.append(np.sin(ph))
             pieces.append(np.cos(ph))
     return np.concatenate(pieces, axis=-1)
@@ -197,9 +194,7 @@ def compute_features(kind, r, u, a_y, a_z):
 def feature_scale(kind):
     """Fixed per-feature divisor used only to condition the first MLP layer."""
     if kind == "fourier_v1":
-        return np.array(
-            [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 2.0, 2.0]
-            + [1.0] * 60, dtype=np.float64)
+        return np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 2.0, 2.0] + [1.0] * 60, dtype=np.float64)
     if kind == PROBE_KIND:
         base = [64.0, 64.0, 64.0, 10.0, 10.0, 10.0, 100.0, 1.0, 1.0]
         probe = [0.05] * (len(PROBE_CELL_OFFSETS) * 6)
@@ -220,7 +215,7 @@ DENSE_CELL_OFFSETS = tuple(
     (i + 0.5, j + 0.5, k + 0.5)
     for k in range(4)
     for j in range(8)
-    for i in range(8)   # i fastest, then j, then k
+    for i in range(8)  # i fastest, then j, then k
 )
 DENSE_DIM = len(BASE_INPUTS) + len(DENSE_CELL_OFFSETS) * 6
 

@@ -11,8 +11,8 @@ def test_feature_shape_and_ordering():
     assert f.shape == (1, 69) == (1, feature_dim())
     np.testing.assert_allclose(f[0, :9], [0.1, 0.2, 0.3, 0.0, 0.0, 1.0, np.sqrt(2), 1.0, 2.0])
     # first periodic feature: axis x, octave -3, sin
-    assert np.isclose(f[0, 9], np.sin(0.1 * np.pi * 2 ** -3))
-    assert np.isclose(f[0, 10], np.cos(0.1 * np.pi * 2 ** -3))
+    assert np.isclose(f[0, 9], np.sin(0.1 * np.pi * 2**-3))
+    assert np.isclose(f[0, 10], np.cos(0.1 * np.pi * 2**-3))
 
 
 def test_sampling_determinism():
@@ -57,9 +57,7 @@ def test_sample_chunk_preserves_total():
     s = sampling.sample_bunch("unequal_weights", seed=4, n_particles=40)
     chunks = s.chunk((1, 17, 1024, 5))
     assert sum(c.n for c in chunks) == s.n
-    np.testing.assert_allclose(
-        np.concatenate([c.particles["w"] for c in chunks]), s.particles["w"]
-    )
+    np.testing.assert_allclose(np.concatenate([c.particles["w"] for c in chunks]), s.particles["w"])
 
 
 def test_bunch_kinds():

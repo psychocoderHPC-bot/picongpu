@@ -37,9 +37,6 @@ def main(argv=None):
         summary = {}
         for sp in splits:
             d = scaled.descriptors_for_split(sp)
-            n_src = sum(1 for x in d if x["kind"] == "scenario") + sum(
-                x.get("n_particles", 0) for x in d if x["kind"] == "bunch"
-            )
             # chunks do not store n_particles before packing; approximate with 32
             summary[sp] = {
                 "tiles": len(d),
@@ -48,8 +45,11 @@ def main(argv=None):
                 "estimated_MiB": len(d) * 1536 * 8 / 2**20,
             }
             total += len(d)
-        print(json.dumps({"splits": summary, "total_tiles": total,
-                          "estimated_total_MiB": total * 1536 * 8 / 2**20}, indent=2))
+        print(
+            json.dumps(
+                {"splits": summary, "total_tiles": total, "estimated_total_MiB": total * 1536 * 8 / 2**20}, indent=2
+            )
+        )
         return 0
 
     out = scaled.generate_all(

@@ -124,9 +124,8 @@ def norm_ppf(probability):
 
     if np.any(low):
         q = np.sqrt(-2.0 * np.log(p[low]))
-        out[low] = (
-            (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
-            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
+        out[low] = (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0
         )
     if np.any(high):
         q = np.sqrt(-2.0 * np.log(1.0 - p[high]))
@@ -138,7 +137,8 @@ def norm_ppf(probability):
         q = p[middle] - 0.5
         r = q * q
         out[middle] = (
-            (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q
+            (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5])
+            * q
             / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0)
         )
     return out
@@ -232,10 +232,7 @@ def sample_positions(args, rng: np.random.Generator) -> tuple[np.ndarray, np.nda
                 normals = rng.standard_normal(bad)
             position_cells[outside, axis] = centroid[axis] + sigma[axis] * normals
     else:  # pragma: no cover - only with absurd parameters
-        raise SystemExit(
-            "could not truncate the Gaussian bunch inside the domain; "
-            "reduce sigma or move the centroid"
-        )
+        raise SystemExit("could not truncate the Gaussian bunch inside the domain; reduce sigma or move the centroid")
 
     return position_cells, grid
 
@@ -326,7 +323,6 @@ def build(args) -> tuple[dict, dict]:
     rng_velocity = np.random.Generator(np.random.PCG64(velocity_stream))
 
     position_cells, grid = sample_positions(args, rng_position)
-    cell_size = np.asarray(args.cell_size, dtype=np.float64)
     # PIConGPU-compatible layout: position is the in-cell fraction in [0,1),
     # positionOffset the integer cell index; physical = (both) * cellSize.
     position_offset = np.floor(position_cells).astype(np.float64)
@@ -386,9 +382,7 @@ def validate_before_write(data: dict, params: dict, args) -> dict:
 
     total_weight = float(data["weighting"].sum())
     if not math.isclose(total_weight, params["expected_total_weight"], rel_tol=1e-12):
-        problems.append(
-            f"total weight {total_weight!r} != expected {params['expected_total_weight']!r}"
-        )
+        problems.append(f"total weight {total_weight!r} != expected {params['expected_total_weight']!r}")
     total_charge = Q_E * total_weight
 
     grid = np.asarray(params["grid"], dtype=np.float64)
@@ -419,22 +413,16 @@ def validate_before_write(data: dict, params: dict, args) -> dict:
     if model == "gamma" and args.u_sigma == 0.0:
         target = params["momentum"]["gamma_target"]
         if not np.allclose(gamma, target, rtol=1e-12, atol=0.0):
-            problems.append(
-                f"gamma model: realized gamma [{gamma.min()}, {gamma.max()}] != {target}"
-            )
+            problems.append(f"gamma model: realized gamma [{gamma.min()}, {gamma.max()}] != {target}")
     if model == "drift" and args.u_sigma == 0.0:
         target = params["momentum"]["gamma_target"]
         if not np.allclose(gamma, target, rtol=1e-12, atol=0.0):
-            problems.append(
-                f"drift model: realized gamma [{gamma.min()}, {gamma.max()}] != {target}"
-            )
+            problems.append(f"drift model: realized gamma [{gamma.min()}, {gamma.max()}] != {target}")
     if model == "counterstreaming" and args.u_sigma == 0.0:
         n_plus, n_minus = params["momentum"]["lobes"]
         plus = umag[:n_plus]
         minus = umag[n_plus : n_plus + n_minus]
-        if not np.allclose(plus, plus[0], rtol=1e-12) or not np.allclose(
-            minus, minus[0], rtol=1e-12
-        ):
+        if not np.allclose(plus, plus[0], rtol=1e-12) or not np.allclose(minus, minus[0], rtol=1e-12):
             problems.append("counterstreaming lobes are not monoenergetic")
 
     if problems:
@@ -480,10 +468,7 @@ def resolve_output(args) -> tuple[str, str]:
 
 
 def unit_dimension_map(values: dict) -> dict:
-    return {
-        getattr(io.Unit_Dimension, DIMENSION_ENUM[name]): float(value)
-        for name, value in values.items()
-    }
+    return {getattr(io.Unit_Dimension, DIMENSION_ENUM[name]): float(value) for name, value in values.items()}
 
 
 def write_record(species, record_name: str, array: np.ndarray, args, keep: list) -> None:
@@ -601,13 +586,9 @@ def write_series(output: str, data: dict, params: dict, args) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--output", required=True, help="series path (suffix added if missing)")
-    parser.add_argument(
-        "--backend", choices=("hdf5", "adios2"), default="hdf5", help="storage backend"
-    )
+    parser.add_argument("--backend", choices=("hdf5", "adios2"), default="hdf5", help="storage backend")
     parser.add_argument("--iteration", type=int, default=0)
     parser.add_argument("--species", default=common.DEFAULT_SPECIES)
     parser.add_argument(
@@ -619,11 +600,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n", type=int, default=4096, help="particle count")
     parser.add_argument("--grid", type=int, nargs=3, default=(64, 64, 64), metavar=("NX", "NY", "NZ"))
     parser.add_argument(
-        "--cell-size", type=float, nargs=3, default=(1e-7, 1e-7, 1e-7), metavar=("DX", "DY", "DZ"),
+        "--cell-size",
+        type=float,
+        nargs=3,
+        default=(1e-7, 1e-7, 1e-7),
+        metavar=("DX", "DY", "DZ"),
         help="cell size in metres",
     )
-    parser.add_argument("--centroid", type=float, nargs=3, default=(32.0, 32.0, 32.0), metavar=("CX", "CY", "CZ"), help="centroid in cells")
-    parser.add_argument("--sigma", type=float, nargs=3, default=(6.0, 6.0, 6.0), metavar=("SX", "SY", "SZ"), help="Gaussian sigma in cells")
+    parser.add_argument(
+        "--centroid",
+        type=float,
+        nargs=3,
+        default=(32.0, 32.0, 32.0),
+        metavar=("CX", "CY", "CZ"),
+        help="centroid in cells",
+    )
+    parser.add_argument(
+        "--sigma",
+        type=float,
+        nargs=3,
+        default=(6.0, 6.0, 6.0),
+        metavar=("SX", "SY", "SZ"),
+        help="Gaussian sigma in cells",
+    )
     parser.add_argument("--quiet", action="store_true", help="stratified/Latin-hypercube sampling")
     parser.add_argument("--beta", type=float, default=0.1, help="drift/counterstreaming beta")
     parser.add_argument("--direction", default="x", help="drift direction: x|y|z or 'dx,dy,dz'")
@@ -676,9 +675,7 @@ def main(argv=None) -> int:
     physical = (data["position"] + data["positionOffset"]) * cell
     u = data["momentum"] / data["weighting"][:, None]
     sidecar_file = common.sidecar_path(output)
-    sidecar = common.write_sidecar(
-        sidecar_file, physical, u, data["weighting"], data["id"]
-    )
+    sidecar = common.write_sidecar(sidecar_file, physical, u, data["weighting"], data["id"])
 
     manifest_path = args.manifest or (output + ".manifest.json")
     files = common.file_manifest(output)
@@ -732,15 +729,8 @@ def main(argv=None) -> int:
         handle.write("\n")
 
     print(f"wrote {output} ({args.backend}, {args.n} particles, {args.chunks} chunk(s))")
-    print(
-        f"  total_weight={summary['total_weight']!r} "
-        f"total_charge={summary['total_charge_C']!r} C"
-    )
-    print(
-        "  gamma: min={gamma_min:.6g} max={gamma_max:.6g} mean={gamma_mean:.6g}".format(
-            **summary["momentum"]
-        )
-    )
+    print(f"  total_weight={summary['total_weight']!r} total_charge={summary['total_charge_C']!r} C")
+    print("  gamma: min={gamma_min:.6g} max={gamma_max:.6g} mean={gamma_mean:.6g}".format(**summary["momentum"]))
     print(f"  manifest: {manifest_path}")
     print(f"  sidecar: {sidecar_file} (sha256 {sidecar['sha256'][:16]}...)")
     print(f"  bytes: {manifest['file_bytes_total']}")

@@ -9,30 +9,30 @@
 
 #if defined(PIC_ENABLE_NEURAL_BUNCH) && PIC_ENABLE_NEURAL_BUNCH
 
-#    include "picongpu/particles/param.hpp"
-#    include "picongpu/param/neuralBunch.param"
 #    include "picongpu/fields/FieldB.hpp"
 #    include "picongpu/fields/FieldE.hpp"
+#    include "picongpu/param/neuralBunch.param"
 #    include "picongpu/particles/neuralBunch/Inference.hpp"
 #    include "picongpu/particles/neuralBunch/Model.hpp"
 #    include "picongpu/particles/neuralBunch/ReferenceKernel.hpp"
 #    include "picongpu/particles/neuralBunch/ReferenceTile.hpp"
 #    include "picongpu/particles/neuralBunch/SourceFile.hpp"
 #    include "picongpu/particles/neuralBunch/TileGeometry.hpp"
+#    include "picongpu/particles/param.hpp"
 #    include "picongpu/plugins/output/WriteSpeciesCommon.hpp"
 
+#    include <pmacc/Environment.hpp>
 #    include <pmacc/alpakaHelper/Device.hpp>
 #    include <pmacc/alpakaHelper/acc.hpp>
 #    include <pmacc/dataManagement/DataConnector.hpp>
-#    include <pmacc/Environment.hpp>
 #    include <pmacc/mappings/simulation/SubGrid.hpp>
 #    include <pmacc/meta/ForEach.hpp>
 #    include <pmacc/meta/conversion/MakeSeq.hpp>
 #    include <pmacc/meta/conversion/RemoveFromSeq.hpp>
-#    include <pmacc/particles/meta/FindByNameOrType.hpp>
 #    include <pmacc/particles/IdProvider.hpp>
-#    include <pmacc/particles/operations/splitIntoListOfFrames.kernel>
 #    include <pmacc/particles/ParticleDescription.hpp>
+#    include <pmacc/particles/meta/FindByNameOrType.hpp>
+#    include <pmacc/particles/operations/splitIntoListOfFrames.kernel>
 #    include <pmacc/traits/HasIdentifier.hpp>
 #    include <pmacc/traits/Resolve.hpp>
 
@@ -126,11 +126,11 @@ namespace picongpu
                     using ParticleAttributeList = typename FrameType::ValueTypeSeq;
 
                     using TypesToDelete = pmacc::mp_list<multiMask, localCellIdx>;
-                    using ParticleCleanedAttributeList
-                        = typename RemoveFromSeq<ParticleAttributeList, TypesToDelete>::type;
+                    using ParticleCleanedAttributeList =
+                        typename RemoveFromSeq<ParticleAttributeList, TypesToDelete>::type;
                     using ParticleNewAttributeList = MakeSeq_t<ParticleCleanedAttributeList, totalCellIdx>;
-                    using NewParticleDescription
-                        = typename ReplaceValueTypeSeq<ParticleDescription, ParticleNewAttributeList>::type;
+                    using NewParticleDescription =
+                        typename ReplaceValueTypeSeq<ParticleDescription, ParticleNewAttributeList>::type;
 
                     using LoadFrame = Frame<OperatorCreateVectorBox, NewParticleDescription>;
                     using LoadBuffer = Frame<OperatorCreateAlpakaBuffer, NewParticleDescription>;
@@ -162,8 +162,7 @@ namespace picongpu
                             bool inside = true;
                             for(int axis = 0; axis < 3; ++axis)
                             {
-                                double const cellIndex = std::floor(
-                                    chunk.position[3 * i + axis] / cellSizeSI[axis]);
+                                double const cellIndex = std::floor(chunk.position[3 * i + axis] / cellSizeSI[axis]);
                                 if(!std::isfinite(cellIndex)
                                    || cellIndex < static_cast<double>(std::numeric_limits<int>::min())
                                    || cellIndex > static_cast<double>(std::numeric_limits<int>::max())
@@ -185,10 +184,9 @@ namespace picongpu
 
                         LoadBuffer buffers;
                         LoadFrame frame;
-                        pmacc::meta::ForEach<
-                            typename NewParticleDescription::ValueTypeSeq,
-                            MallocMappedMemory<boost::mpl::_1>>
-                            mallocMem;
+                        pmacc::meta::
+                            ForEach<typename NewParticleDescription::ValueTypeSeq, MallocMappedMemory<boost::mpl::_1>>
+                                mallocMem;
                         mallocMem(buffers, frame, accepted);
 
                         auto* positionPtr = frame.getIdentifier(PositionKey{}).getPointer();
@@ -218,8 +216,7 @@ namespace picongpu
                                     break;
                                 }
                                 cell[axis] = static_cast<int>(cellIndex);
-                                if(cell[axis] < localOffset[axis]
-                                   || cell[axis] >= localOffset[axis] + localSize[axis])
+                                if(cell[axis] < localOffset[axis] || cell[axis] >= localOffset[axis] + localSize[axis])
                                     inside = false;
                             }
                             if(!inside)
@@ -229,8 +226,7 @@ namespace picongpu
                             for(int axis = 0; axis < 3; ++axis)
                             {
                                 double const positionSI = chunk.position[3 * i + axis];
-                                double fraction
-                                    = positionSI / cellSizeSI[axis] - static_cast<double>(cell[axis]);
+                                double fraction = positionSI / cellSizeSI[axis] - static_cast<double>(cell[axis]);
                                 if(fraction >= 1.0)
                                     fraction = 0.0;
                                 if(fraction < 0.0)
@@ -267,8 +263,7 @@ namespace picongpu
                         }
 
                         if(target != accepted)
-                            throw std::runtime_error(
-                                "neuralBunch: accepted particle count changed between passes.");
+                            throw std::runtime_error("neuralBunch: accepted particle count changed between passes.");
 
                         pmacc::particles::operations::splitIntoListOfFrames(
                             *species,
@@ -287,8 +282,7 @@ namespace picongpu
                             bool inside = true;
                             for(int axis = 0; axis < 3; ++axis)
                             {
-                                double const cellIndex = std::floor(
-                                    chunk.position[3 * i + axis] / cellSizeSI[axis]);
+                                double const cellIndex = std::floor(chunk.position[3 * i + axis] / cellSizeSI[axis]);
                                 if(static_cast<int>(cellIndex) < localOffset[axis]
                                    || static_cast<int>(cellIndex) >= localOffset[axis] + localSize[axis])
                                     inside = false;
@@ -331,16 +325,12 @@ namespace picongpu
                                 stats);
                         },
                         chunkSize);
-                    stats.particleSeconds += std::chrono::duration<double>(
-                                                 std::chrono::steady_clock::now() - start)
-                                                 .count();
+                    stats.particleSeconds
+                        += std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
                 }
 
                 template<typename T_Species>
-                Statistics run(
-                    NeuralBunchParam const& params,
-                    uint32_t const step,
-                    MappingDesc const& cellDescription)
+                Statistics run(NeuralBunchParam const& params, uint32_t const step, MappingDesc const& cellDescription)
                 {
                     Statistics stats;
 
@@ -388,8 +378,8 @@ namespace picongpu
                     if(!tg::aspectCovered(cells, domain))
                         throw std::runtime_error(
                             "neuralBunch: simulation cell aspect a_y=" + num(aspectY) + ", a_z=" + num(aspectZ)
-                            + " is outside the model domain a_y=[" + num(domain.aYMin) + ","
-                            + num(domain.aYMax) + "], a_z=[" + num(domain.aZMin) + "," + num(domain.aZMax)
+                            + " is outside the model domain a_y=[" + num(domain.aYMin) + "," + num(domain.aYMax)
+                            + "], a_z=[" + num(domain.aZMin) + "," + num(domain.aZMax)
                             + "]. Refusing to clamp the model domain.");
 
                     auto& device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
@@ -398,9 +388,7 @@ namespace picongpu
                     auto const tensors = model.loadTensors(queue);
 
                     auto const grid = tg::enumerateTiles(offset, size);
-                    std::vector<std::vector<double>> latents(
-                        grid.tiles.size(),
-                        std::vector<double>(meta.latent, 0.0));
+                    std::vector<std::vector<double>> latents(grid.tiles.size(), std::vector<double>(meta.latent, 0.0));
                     std::vector<std::vector<double>> referenceTiles(
                         grid.tiles.size(),
                         std::vector<double>(tg::outputDimension, 0.0));
@@ -411,8 +399,7 @@ namespace picongpu
                     auto hostE = fieldE->getHostDataBox().shift(fieldE->getGridBuffer().getGridLayout().guardSizeND());
                     auto hostB = fieldB->getHostDataBox().shift(fieldB->getGridBuffer().getGridLayout().guardSizeND());
 
-                    MPI_Comm const comm
-                        = Environment<simDim>::get().GridController().getCommunicator().getMPIComm();
+                    MPI_Comm const comm = Environment<simDim>::get().GridController().getCommunicator().getMPIComm();
                     int const rank = Environment<simDim>::get().GridController().getGlobalRank();
 
                     // Validation-only switch: force the reference path for every
@@ -467,8 +454,7 @@ namespace picongpu
                                         for(int axis = 0; axis < 3; ++axis)
                                         {
                                             position[axis] = chunk.position[3 * i + axis];
-                                            source.r[axis] = (position[axis] - tileOriginPhysical[axis])
-                                                             / cells.dx;
+                                            source.r[axis] = (position[axis] - tileOriginPhysical[axis]) / cells.dx;
                                             source.u[axis] = chunk.u[3 * i + axis];
                                         }
                                         source.weight = chunk.weight[i];
@@ -482,14 +468,11 @@ namespace picongpu
                                         referenceSource.w = source.weight;
                                         allReferenceSources.push_back(referenceSource);
 
-                                        double const gamma
-                                            = std::sqrt(1.0 + source.u[0] * source.u[0]
-                                                        + source.u[1] * source.u[1]
-                                                        + source.u[2] * source.u[2]);
-                                        double const distanceCells = tg::minimumStaggeredDistanceCells(
-                                            position,
-                                            tileOriginPhysical,
-                                            cells);
+                                        double const gamma = std::sqrt(
+                                            1.0 + source.u[0] * source.u[0] + source.u[1] * source.u[1]
+                                            + source.u[2] * source.u[2]);
+                                        double const distanceCells
+                                            = tg::minimumStaggeredDistanceCells(position, tileOriginPhysical, cells);
                                         if(forceReference && source.weight != 0.0)
                                         {
                                             referenceSources.push_back(referenceSource);
@@ -532,11 +515,9 @@ namespace picongpu
                                     if(!neuralSources.empty())
                                     {
                                         auto const encodeStart = std::chrono::steady_clock::now();
-                                        auto hidden
-                                            = runEncoder(queue, exec, meta, tensors, neuralSources);
+                                        auto hidden = runEncoder(queue, exec, meta, tensors, neuralSources);
                                         stats.inferenceSeconds += std::chrono::duration<double>(
-                                                                      std::chrono::steady_clock::now()
-                                                                      - encodeStart)
+                                                                      std::chrono::steady_clock::now() - encodeStart)
                                                                       .count();
                                         auto& latent = latents[tileIndex];
                                         for(std::size_t i = 0; i < neuralSources.size(); ++i)
@@ -546,8 +527,7 @@ namespace picongpu
                                                     = -neuralSources[i].weight
                                                       * static_cast<double>(hidden[i * meta.latent + k]);
                                                 latent[k] += contribution;
-                                                stats.maxLatent
-                                                    = std::max(stats.maxLatent, std::abs(latent[k]));
+                                                stats.maxLatent = std::max(stats.maxLatent, std::abs(latent[k]));
                                             }
                                         stats.neuralPairs += neuralSources.size();
                                     }
@@ -569,7 +549,8 @@ namespace picongpu
                                         diagnosticChosen = true;
                                         diagnosticTile = tileIndex;
                                         diagnosticOrigin = tileOriginPhysical;
-                                        std::size_t const neuralCount = std::min<std::size_t>(4u, neuralSources.size());
+                                        std::size_t const neuralCount
+                                            = std::min<std::size_t>(4u, neuralSources.size());
                                         std::size_t const referenceCount
                                             = std::min<std::size_t>(4u, referenceWork[tileIndex].size());
                                         for(std::size_t k = 0; k < neuralCount; ++k)
@@ -578,8 +559,7 @@ namespace picongpu
                                             for(int axis = 0; axis < 3; ++axis)
                                             {
                                                 (&reference.x.x)[axis]
-                                                    = neuralSources[k].r[axis] * cells.dx
-                                                      + tileOriginPhysical[axis];
+                                                    = neuralSources[k].r[axis] * cells.dx + tileOriginPhysical[axis];
                                                 (&reference.u.x)[axis] = neuralSources[k].u[axis];
                                             }
                                             reference.w = neuralSources[k].weight;
@@ -594,8 +574,7 @@ namespace picongpu
                                             for(int axis = 0; axis < 3; ++axis)
                                             {
                                                 source.r[axis]
-                                                    = ((&reference.x.x)[axis] - tileOriginPhysical[axis])
-                                                      / cells.dx;
+                                                    = ((&reference.x.x)[axis] - tileOriginPhysical[axis]) / cells.dx;
                                                 source.u[axis] = (&reference.u.x)[axis];
                                             }
                                             source.weight = reference.w;
@@ -636,10 +615,9 @@ namespace picongpu
                                         localMax = std::max(localMax, std::abs(referenceValues[k]));
                                         localL1 += std::abs(referenceValues[k]);
                                     }
-#pragma omp critical(neuralBunchReferenceStats)
+#    pragma omp critical(neuralBunchReferenceStats)
                                     {
-                                        stats.referenceMaxAbs
-                                            = std::max(stats.referenceMaxAbs, localMax);
+                                        stats.referenceMaxAbs = std::max(stats.referenceMaxAbs, localMax);
                                         stats.referenceL1 += localL1;
                                         if(!report.all_converged)
                                         {
@@ -652,9 +630,9 @@ namespace picongpu
                                     }
                                     referenceWork[tileIndex].clear();
                                 }
-                                stats.referenceSeconds += std::chrono::duration<double>(
-                                                              std::chrono::steady_clock::now() - referenceStart)
-                                                              .count();
+                                stats.referenceSeconds
+                                    += std::chrono::duration<double>(std::chrono::steady_clock::now() - referenceStart)
+                                           .count();
                                 if(referenceMaxErrors != 0)
                                     log<picLog::PHYSICS>(
                                         "neuralBunch: rank=%1% reference quadrature not converged for %2% "
@@ -662,9 +640,8 @@ namespace picongpu
                                         % rank % referenceMaxErrors;
                             },
                             params.chunkSize);
-                        stats.ioSeconds += std::chrono::duration<double>(
-                                               std::chrono::steady_clock::now() - ioStart)
-                                               .count();
+                        stats.ioSeconds
+                            += std::chrono::duration<double>(std::chrono::steady_clock::now() - ioStart).count();
                         stats.globalParticles = sourceMeta.globalCount;
                     }
 
@@ -674,8 +651,8 @@ namespace picongpu
                             "neuralBunch: pair partition is not exhaustive: neural "
                             + std::to_string(stats.neuralPairs) + " + reference "
                             + std::to_string(stats.referencePairs) + " + zero-weight "
-                            + std::to_string(stats.zeroWeightPairs) + " != "
-                            + std::to_string(stats.globalParticles * grid.tiles.size()) + " pairs.");
+                            + std::to_string(stats.zeroWeightPairs)
+                            + " != " + std::to_string(stats.globalParticles * grid.tiles.size()) + " pairs.");
 
                     // Hybrid-vs-forced comparison for one small tile where both routes occur.
                     if(diagnosticChosen)
@@ -688,19 +665,16 @@ namespace picongpu
                             cells.dz);
                         std::vector<double> referenceAllSI(tg::outputDimension, 0.0);
                         for(std::size_t k = 0; k < referenceAllSI.size(); ++k)
-                            referenceAllSI[k] = (k % 6) < 3
-                                                    ? tg::normalizedEToSI(referenceAll[k], cells.dx)
-                                                    : tg::normalizedBToSI(referenceAll[k], cells.dx);
+                            referenceAllSI[k] = (k % 6) < 3 ? tg::normalizedEToSI(referenceAll[k], cells.dx)
+                                                            : tg::normalizedBToSI(referenceAll[k], cells.dx);
 
                         auto hidden = runEncoder(queue, exec, meta, tensors, diagnosticSources);
                         std::vector<double> neuralAllLatent(meta.latent, 0.0);
                         for(std::size_t i = 0; i < diagnosticSources.size(); ++i)
                             for(std::size_t k = 0; k < meta.latent; ++k)
-                                neuralAllLatent[k] -= diagnosticSources[i].weight
-                                                      * static_cast<double>(hidden[i * meta.latent + k]);
-                        std::vector<float> const neuralAllFloat(
-                            neuralAllLatent.begin(),
-                            neuralAllLatent.end());
+                                neuralAllLatent[k]
+                                    -= diagnosticSources[i].weight * static_cast<double>(hidden[i * meta.latent + k]);
+                        std::vector<float> const neuralAllFloat(neuralAllLatent.begin(), neuralAllLatent.end());
                         auto const neuralAll = decodeFromLatent(
                             queue,
                             exec,
@@ -729,19 +703,16 @@ namespace picongpu
                         double scale = 0.0;
                         for(std::size_t k = 0; k < tg::outputDimension; ++k)
                         {
-                            double const referenceSubSI = (k % 6) < 3
-                                                              ? tg::normalizedEToSI(
-                                                                    referenceTiles[diagnosticTile][k],
-                                                                    cells.dx)
-                                                              : tg::normalizedBToSI(
-                                                                    referenceTiles[diagnosticTile][k],
-                                                                    cells.dx);
+                            double const referenceSubSI
+                                = (k % 6) < 3 ? tg::normalizedEToSI(referenceTiles[diagnosticTile][k], cells.dx)
+                                              : tg::normalizedBToSI(referenceTiles[diagnosticTile][k], cells.dx);
                             double const hybrid = static_cast<double>(neuralSub[k]) + referenceSubSI;
-                            hybridVsReference
-                                = std::max(hybridVsReference, std::abs(hybrid - referenceAllSI[k]));
+                            hybridVsReference = std::max(hybridVsReference, std::abs(hybrid - referenceAllSI[k]));
                             hybridVsNeural
                                 = std::max(hybridVsNeural, std::abs(hybrid - static_cast<double>(neuralAll[k])));
-                            scale = std::max(scale, std::max(std::abs(referenceAllSI[k]), std::abs(static_cast<double>(neuralAll[k]))));
+                            scale = std::max(
+                                scale,
+                                std::max(std::abs(referenceAllSI[k]), std::abs(static_cast<double>(neuralAll[k]))));
                         }
                         stats.diagHybridVsReference = hybridVsReference / std::max(scale, 1e-300);
                         stats.diagHybridVsNeural = hybridVsNeural / std::max(scale, 1e-300);
@@ -753,9 +724,7 @@ namespace picongpu
                     for(std::size_t tileIndex = 0; tileIndex < grid.tiles.size(); ++tileIndex)
                     {
                         auto const& tile = grid.tiles[tileIndex];
-                        std::vector<float> const latentFloat(
-                            latents[tileIndex].begin(),
-                            latents[tileIndex].end());
+                        std::vector<float> const latentFloat(latents[tileIndex].begin(), latents[tileIndex].end());
                         auto const values = decodeFromLatent(
                             queue,
                             exec,
@@ -786,13 +755,9 @@ namespace picongpu
                                         std::size_t const index = tg::outputIndex(i, j, k, component);
                                         std::size_t const indexB = tg::outputIndex(i, j, k, component + 3);
                                         double const eSI = static_cast<double>(values[index])
-                                                           + tg::normalizedEToSI(
-                                                               referenceTile[index],
-                                                               cells.dx);
+                                                           + tg::normalizedEToSI(referenceTile[index], cells.dx);
                                         double const bSI = static_cast<double>(values[indexB])
-                                                           + tg::normalizedBToSI(
-                                                               referenceTile[indexB],
-                                                               cells.dx);
+                                                           + tg::normalizedBToSI(referenceTile[indexB], cells.dx);
                                         e[component] += static_cast<float_X>(eSI / unitE);
                                         b[component] += static_cast<float_X>(bSI / unitB);
                                     }
@@ -800,9 +765,8 @@ namespace picongpu
                     }
                     fieldE->syncToDevice();
                     fieldB->syncToDevice();
-                    stats.fieldStoreSeconds += std::chrono::duration<double>(
-                                                   std::chrono::steady_clock::now() - storeStart)
-                                                   .count();
+                    stats.fieldStoreSeconds
+                        += std::chrono::duration<double>(std::chrono::steady_clock::now() - storeStart).count();
 
                     // Local field diagnostics over owned cells only.
                     for(int k = 0; k < size[2]; ++k)
@@ -838,9 +802,8 @@ namespace picongpu
                             cellSizeSI,
                             cellDescription,
                             stats);
-                        stats.ioSeconds += std::chrono::duration<double>(
-                                               std::chrono::steady_clock::now() - start)
-                                               .count();
+                        stats.ioSeconds
+                            += std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
                     }
 
                     log<picLog::PHYSICS>(
@@ -870,8 +833,8 @@ namespace picongpu
                         MPI_Allreduce(&localIds, &totalIds, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
                         if(totalIds != totalCount)
                             throw std::runtime_error(
-                                "neuralBunch: materialized " + std::to_string(totalIds)
-                                + " particle IDs but inserted " + std::to_string(totalCount) + " particles.");
+                                "neuralBunch: materialized " + std::to_string(totalIds) + " particle IDs but inserted "
+                                + std::to_string(totalCount) + " particles.");
                         int localCount = static_cast<int>(stats.localIds.size());
                         std::vector<int> counts;
                         if(rank == 0)
@@ -881,8 +844,7 @@ namespace picongpu
                         if(rank == 0)
                             for(std::size_t i = 1; i < counts.size(); ++i)
                                 displacements[i] = displacements[i - 1] + counts[i - 1];
-                        std::vector<std::uint64_t> allIds(
-                            rank == 0 ? static_cast<std::size_t>(totalIds) : 0u);
+                        std::vector<std::uint64_t> allIds(rank == 0 ? static_cast<std::size_t>(totalIds) : 0u);
                         MPI_Gatherv(
                             stats.localIds.data(),
                             localCount,
@@ -897,8 +859,8 @@ namespace picongpu
                         if(rank == 0)
                         {
                             std::sort(allIds.begin(), allIds.end());
-                            duplicates = static_cast<int>(
-                                std::adjacent_find(allIds.begin(), allIds.end()) != allIds.end());
+                            duplicates
+                                = static_cast<int>(std::adjacent_find(allIds.begin(), allIds.end()) != allIds.end());
                         }
                         MPI_Bcast(&duplicates, 1, MPI_INT, 0, comm);
                         stats.idUnique = duplicates == 0;
@@ -906,25 +868,20 @@ namespace picongpu
 
                     double const chargePerWeight = -1.602176634e-19;
                     double const globalCharge = chargePerWeight * stats.globalWeight;
-                    log<picLog::PHYSICS>(
-                        "neuralBunch: rank=%1% step=%2% tiles=%3% neuralPairs=%4% referencePairs=%5% "
-                        "globalParticles=%6% localInserted=%7% totalInserted=%8% globalWeight=%9%")
+                    log<picLog::PHYSICS>("neuralBunch: rank=%1% step=%2% tiles=%3% neuralPairs=%4% referencePairs=%5% "
+                                         "globalParticles=%6% localInserted=%7% totalInserted=%8% globalWeight=%9%")
                         % rank % step % grid.tiles.size() % stats.neuralPairs % stats.referencePairs
                         % stats.globalParticles % stats.localParticles % totalCount % num(stats.globalWeight);
-                    log<picLog::PHYSICS>(
-                        "neuralBunch: rank=%1% totalInsertedWeight=%2% globalCharge=%3% "
-                        "fieldSums=[%4% %5% %6% %7% %8% %9%]")
+                    log<picLog::PHYSICS>("neuralBunch: rank=%1% totalInsertedWeight=%2% globalCharge=%3% "
+                                         "fieldSums=[%4% %5% %6% %7% %8% %9%]")
                         % rank % num(totalWeight) % num(globalCharge) % num(fieldSums[0]) % num(fieldSums[1])
                         % num(fieldSums[2]) % num(fieldSums[3]) % num(fieldSums[4]) % num(fieldSums[5]);
-                    log<picLog::PHYSICS>(
-                        "neuralBunch: rank=%1% nonFiniteFields=%2% maxLatent=%3%")
-                        % rank % totalNonFinite % num(stats.maxLatent);
-                    log<picLog::PHYSICS>(
-                        "neuralBunch: rank=%1% decodedBytes=%2% ioSeconds=%3% inferenceSeconds=%4% "
-                        "referenceSeconds=%5% fieldStoreSeconds=%6% particleSeconds=%7%")
+                    log<picLog::PHYSICS>("neuralBunch: rank=%1% nonFiniteFields=%2% maxLatent=%3%") % rank
+                        % totalNonFinite % num(stats.maxLatent);
+                    log<picLog::PHYSICS>("neuralBunch: rank=%1% decodedBytes=%2% ioSeconds=%3% inferenceSeconds=%4% "
+                                         "referenceSeconds=%5% fieldStoreSeconds=%6% particleSeconds=%7%")
                         % rank % num(stats.decodedBytes) % num(stats.ioSeconds) % num(stats.inferenceSeconds)
-                        % num(stats.referenceSeconds) % num(stats.fieldStoreSeconds)
-                        % num(stats.particleSeconds);
+                        % num(stats.referenceSeconds) % num(stats.fieldStoreSeconds) % num(stats.particleSeconds);
                     unsigned long long neuralPairs = stats.neuralPairs;
                     unsigned long long referencePairs = stats.referencePairs;
                     unsigned long long nearPairs = stats.referenceNearPairs;
@@ -934,35 +891,34 @@ namespace picongpu
                     unsigned long long zeroPairs = stats.zeroWeightPairs;
                     unsigned long long totalPairs = neuralPairs + referencePairs + zeroPairs;
                     MPI_Allreduce(MPI_IN_PLACE, &totalPairs, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
-                    log<picLog::PHYSICS>(
-                        "neuralBunch: rank=%1% hybrid reasons near=%2% far=%3% gamma=%4% aspect=%5% "
-                        "zeroWeight=%6% forced=%7% referenceCoverage=%8%")
+                    log<picLog::PHYSICS>("neuralBunch: rank=%1% hybrid reasons near=%2% far=%3% gamma=%4% aspect=%5% "
+                                         "zeroWeight=%6% forced=%7% referenceCoverage=%8%")
                         % rank % nearPairs % farPairs % gammaPairs % aspectPairs % zeroPairs
                         % stats.forcedReferencePairs
                         % num(totalPairs == 0u ? 0.0 : double(referencePairs) / double(totalPairs));
-                    log<picLog::PHYSICS>(
-                        "neuralBunch: rank=%1% referenceMaxAbs=%2% referenceL1=%3% "
-                        "hybridVsReference=%4% hybridVsNeural=%5% diagScale=%6% diagAvailable=%7%")
-                        % rank % num(stats.referenceMaxAbs) % num(stats.referenceL1)
-                        % num(stats.diagHybridVsReference) % num(stats.diagHybridVsNeural)
-                        % num(stats.diagReferenceScale) % (stats.diagAvailable ? 1 : 0);
-                    log<picLog::PHYSICS>(
-                        "neuralBunch: rank=%1% ids=%2% unique=%3% synthesized=%4%")
-                        % rank % stats.idMode % (stats.idUnique ? 1 : 0) % stats.synthesizedIds;
+                    log<picLog::PHYSICS>("neuralBunch: rank=%1% referenceMaxAbs=%2% referenceL1=%3% "
+                                         "hybridVsReference=%4% hybridVsNeural=%5% diagScale=%6% diagAvailable=%7%")
+                        % rank % num(stats.referenceMaxAbs) % num(stats.referenceL1) % num(stats.diagHybridVsReference)
+                        % num(stats.diagHybridVsNeural) % num(stats.diagReferenceScale)
+                        % (stats.diagAvailable ? 1 : 0);
+                    log<picLog::PHYSICS>("neuralBunch: rank=%1% ids=%2% unique=%3% synthesized=%4%") % rank
+                        % stats.idMode % (stats.idUnique ? 1 : 0) % stats.synthesizedIds;
 
                     if(totalCount != stats.globalParticles)
                         throw std::runtime_error(
-                            "neuralBunch: inserted " + std::to_string(totalCount) + " particles but the source "
-                            "file contains " + std::to_string(stats.globalParticles) + ".");
-                    double const weightTolerance
-                        = 1.0e-9 * std::max(1.0, std::abs(stats.globalWeight));
+                            "neuralBunch: inserted " + std::to_string(totalCount)
+                            + " particles but the source "
+                              "file contains "
+                            + std::to_string(stats.globalParticles) + ".");
+                    double const weightTolerance = 1.0e-9 * std::max(1.0, std::abs(stats.globalWeight));
                     if(std::abs(totalWeight - stats.globalWeight) > weightTolerance)
                         throw std::runtime_error(
-                            "neuralBunch: inserted weight sum " + num(totalWeight) + " differs from the source "
-                            "sum " + num(stats.globalWeight) + ".");
+                            "neuralBunch: inserted weight sum " + num(totalWeight)
+                            + " differs from the source "
+                              "sum "
+                            + num(stats.globalWeight) + ".");
                     if(totalNonFinite != 0)
-                        throw std::runtime_error(
-                            "neuralBunch: non-finite field values detected after injection.");
+                        throw std::runtime_error("neuralBunch: non-finite field values detected after injection.");
                     if(!stats.idUnique)
                         throw std::runtime_error("neuralBunch: duplicate particle IDs after insertion.");
                     return stats;
@@ -971,8 +927,7 @@ namespace picongpu
 
             void NeuralBunchInit::operator()(uint32_t const step, MappingDesc const& cellDescription) const
             {
-                using SpeciesType
-                    = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, neuralBunch::Species>;
+                using SpeciesType = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, neuralBunch::Species>;
                 neuralBunchDetail::run<SpeciesType>(neuralBunch::neuralBunchParam, step, cellDescription);
             }
         } // namespace stage

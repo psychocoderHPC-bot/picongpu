@@ -11,9 +11,17 @@ from pathlib import Path
 
 import numpy as np
 
-from .features import (BASE_INPUTS, DEFAULT_OCTAVES, DENSE_CELL_OFFSETS, DENSE_KIND,
-                       PROBE_CELL_OFFSETS, PROBE_COMPONENTS, PROBE_KIND, PROBE_OCTAVES,
-                       feature_dim)
+from .features import (
+    BASE_INPUTS,
+    DEFAULT_OCTAVES,
+    DENSE_CELL_OFFSETS,
+    DENSE_KIND,
+    PROBE_CELL_OFFSETS,
+    PROBE_COMPONENTS,
+    PROBE_KIND,
+    PROBE_OCTAVES,
+    feature_dim,
+)
 from .model import COMPONENTS, OUT_DIM, TILE
 
 FORMAT = "picongpu-neural-bunch"
@@ -27,9 +35,11 @@ def compute_code_sha() -> str:
         return env
     training_dir = Path(__file__).resolve().parent.parent
     try:
-        sha = subprocess.check_output(
-            ["git", "-C", str(training_dir), "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
-        ).decode().strip()
+        sha = (
+            subprocess.check_output(["git", "-C", str(training_dir), "rev-parse", "HEAD"], stderr=subprocess.DEVNULL)
+            .decode()
+            .strip()
+        )
         if len(sha) == 40:
             return sha
     except Exception:
@@ -70,9 +80,7 @@ def _check_model(cfg, tensors):
             raise ValueError(f"missing encoder tensor enc.{i}")
         out = cfg.hidden[i] if i < len(cfg.hidden) else cfg.latent
         if w.shape != (expect_out, out) or b.shape != (out,):
-            raise ValueError(
-                f"encoder layer {i} shape mismatch: weight {w.shape} expected {(expect_out, out)}"
-            )
+            raise ValueError(f"encoder layer {i} shape mismatch: weight {w.shape} expected {(expect_out, out)}")
         expect_out = out
     nz, ny = len(cfg.a_z_anchors), len(cfg.a_y_anchors)
     for iz in range(nz):
@@ -82,12 +90,12 @@ def _check_model(cfg, tensors):
             if t is None:
                 raise ValueError(f"missing decoder bank tensor {name}")
             if t.shape != (cfg.latent, OUT_DIM):
-                raise ValueError(
-                    f"{name} shape {t.shape} expected {(cfg.latent, OUT_DIM)}"
-                )
-    extra = set(by_name) - {
-        f"enc.{i}.{k}" for i in range(n_layers) for k in ("w", "b")
-    } - {f"dec.{iz}.{iy}.w" for iz in range(nz) for iy in range(ny)}
+                raise ValueError(f"{name} shape {t.shape} expected {(cfg.latent, OUT_DIM)}")
+    extra = (
+        set(by_name)
+        - {f"enc.{i}.{k}" for i in range(n_layers) for k in ("w", "b")}
+        - {f"dec.{iz}.{iy}.w" for iz in range(nz) for iy in range(ny)}
+    )
     if extra:
         raise ValueError(f"unexpected tensors: {sorted(extra)}")
 
@@ -129,8 +137,7 @@ def _features_metadata(cfg):
     }
 
 
-def build_metadata(cfg, tensor_specs, file_name, nbytes, sha256, code_sha,
-                   reference=None, description=None):
+def build_metadata(cfg, tensor_specs, file_name, nbytes, sha256, code_sha, reference=None, description=None):
     n_y, n_z = len(cfg.a_y_anchors), len(cfg.a_z_anchors)
     shape_map = {name: shape for name, _off, shape in tensor_specs}
     meta = {
@@ -141,7 +148,9 @@ def build_metadata(cfg, tensor_specs, file_name, nbytes, sha256, code_sha,
         "created_utc": _now(),
         "code_sha": code_sha,
         "tile": {
-            "nx": TILE[0], "ny": TILE[1], "nz": TILE[2],
+            "nx": TILE[0],
+            "ny": TILE[1],
+            "nz": TILE[2],
             "components": list(COMPONENTS),
             "flatten": "c + 6*(i + nx*(j + ny*k))",
         },
@@ -150,9 +159,12 @@ def build_metadata(cfg, tensor_specs, file_name, nbytes, sha256, code_sha,
             "kind": "mlp",
             "activation": "silu",
             "layers": [
-                {"weight": f"enc.{i}.w", "bias": f"enc.{i}.b",
-                 "in": int(shape_map[f"enc.{i}.w"][0]),
-                 "out": int(shape_map[f"enc.{i}.w"][1])}
+                {
+                    "weight": f"enc.{i}.w",
+                    "bias": f"enc.{i}.b",
+                    "in": int(shape_map[f"enc.{i}.w"][0]),
+                    "out": int(shape_map[f"enc.{i}.w"][1]),
+                }
                 for i in range(len(cfg.hidden) + 1)
             ],
             "output_dim": int(cfg.latent),
@@ -185,7 +197,8 @@ def build_metadata(cfg, tensor_specs, file_name, nbytes, sha256, code_sha,
             "d_max_cells": 512.0,
             "distance_metric": "minimum over the 1536 staggered output points of |x_out - x_source(t)| / dx, with x_out in physical coordinates",
         },
-        "reference": reference or {
+        "reference": reference
+        or {
             "shape": "TSC",
             "shape_support_cells": [2.0, 2.0, 2.0],
             "integrator": "adaptive FP64 quadrature of the constant-velocity point kernel over the lab-frame shape",
@@ -201,8 +214,13 @@ def build_metadata(cfg, tensor_specs, file_name, nbytes, sha256, code_sha,
             "report": "validation_report.json",
         },
         "tensors": [
-            {"name": name, "offset_bytes": int(off), "count": int(np.prod(shape)),
-             "shape": [int(s) for s in shape], "order": "row_major_in_out"}
+            {
+                "name": name,
+                "offset_bytes": int(off),
+                "count": int(np.prod(shape)),
+                "shape": [int(s) for s in shape],
+                "order": "row_major_in_out",
+            }
             for name, off, shape in tensor_specs
         ],
         "artifact": {"file": file_name, "bytes": int(nbytes), "sha256": sha256},
@@ -250,8 +268,14 @@ def write_artifact(model, out_prefix, code_sha=None, reference=None, description
     sha = h.hexdigest()
     nbytes = out_bin.stat().st_size
     meta = build_metadata(
-        cfg, specs, out_bin.name, nbytes, sha,
-        code_sha or compute_code_sha(), reference=reference, description=description,
+        cfg,
+        specs,
+        out_bin.name,
+        nbytes,
+        sha,
+        code_sha or compute_code_sha(),
+        reference=reference,
+        description=description,
     )
     json_path = out_prefix.with_suffix(".json")
     tmp_json = json_path.with_suffix(".json.tmp")
@@ -278,8 +302,7 @@ def load_artifact(prefix):
     if not json_path.is_file():
         raise ArtifactError(f"missing metadata file {json_path}")
     meta = json.loads(json_path.read_text(encoding="utf-8"))
-    for key in ("format", "version", "dtype", "tile", "features", "encoder",
-                "decoder", "tensors", "artifact"):
+    for key in ("format", "version", "dtype", "tile", "features", "encoder", "decoder", "tensors", "artifact"):
         if key not in meta:
             raise ArtifactError(f"metadata missing required key {key!r}")
     if meta["format"] != FORMAT:
@@ -330,7 +353,7 @@ def load_artifact(prefix):
             raise ArtifactError(f"{name}: count/shape mismatch")
         if off + count * 4 > size:
             raise ArtifactError(f"{name}: tensor exceeds payload")
-        tensors[name] = raw[off // 4: off // 4 + count].reshape(shape).astype(np.float64)
+        tensors[name] = raw[off // 4 : off // 4 + count].reshape(shape).astype(np.float64)
         last_end = off + count * 4
     # geometry consistency
     layers = meta["encoder"]["layers"]

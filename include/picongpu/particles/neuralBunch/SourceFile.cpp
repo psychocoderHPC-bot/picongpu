@@ -6,18 +6,18 @@
 
 #if defined(PIC_ENABLE_NEURAL_BUNCH) && PIC_ENABLE_NEURAL_BUNCH
 
-#include <openPMD/openPMD.hpp>
+#    include <algorithm>
+#    include <array>
+#    include <cmath>
+#    include <complex>
+#    include <cstring>
+#    include <limits>
+#    include <optional>
+#    include <sstream>
+#    include <type_traits>
+#    include <variant>
 
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <complex>
-#include <cstring>
-#include <limits>
-#include <optional>
-#include <sstream>
-#include <type_traits>
-#include <variant>
+#    include <openPMD/openPMD.hpp>
 
 namespace picongpu::particles::neuralBunch
 {
@@ -31,6 +31,7 @@ namespace picongpu::particles::neuralBunch
         struct IsComplex : std::false_type
         {
         };
+
         template<typename T>
         struct IsComplex<std::complex<T>> : std::true_type
         {
@@ -68,8 +69,7 @@ namespace picongpu::particles::neuralBunch
             int const candidate = localError.empty() ? size : rank;
             int root = size;
             MPI_Allreduce(&candidate, &root, 1, MPI_INT, MPI_MIN, comm);
-            unsigned long long length
-                = (rank == root) ? static_cast<unsigned long long>(localError.size()) : 0ull;
+            unsigned long long length = (rank == root) ? static_cast<unsigned long long>(localError.size()) : 0ull;
             MPI_Bcast(&length, 1, MPI_UNSIGNED_LONG_LONG, root, comm);
             std::string message(static_cast<std::size_t>(length), '\0');
             if(rank == root && length > 0)
@@ -92,8 +92,8 @@ namespace picongpu::particles::neuralBunch
         std::string dimensionsToString(openPMD::unit_representations::AsArray const& d)
         {
             std::ostringstream os;
-            os << "[" << d[0] << "," << d[1] << "," << d[2] << "," << d[3] << "," << d[4] << ","
-               << d[5] << "," << d[6] << "]";
+            os << "[" << d[0] << "," << d[1] << "," << d[2] << "," << d[3] << "," << d[4] << "," << d[5] << "," << d[6]
+               << "]";
             return os.str();
         }
 
@@ -108,15 +108,13 @@ namespace picongpu::particles::neuralBunch
             bool const unitSIPresent = component.containsAttribute("unitSI");
             double const unitSI = unitSIPresent ? component.getAttribute("unitSI").get<double>() : 1.0;
             if(!std::isfinite(unitSI) || unitSI <= 0.0)
-                fail(
-                    label + ": invalid unitSI " + num(unitSI)
-                    + " (must be finite and positive)");
+                fail(label + ": invalid unitSI " + num(unitSI) + " (must be finite and positive)");
             if(!dimensionsOk)
                 fail(
                     label + ": unitDimension " + dimensionsToString(dimensions)
-                    + " does not match expected L,M,T,I,theta,N,J = "
-                    + dimensionsToString(expectedDimensions)
-                    + (unitSIPresent ? "" : " (unitSI is absent; default 1 is only allowed for matching dimensionality)"));
+                    + " does not match expected L,M,T,I,theta,N,J = " + dimensionsToString(expectedDimensions)
+                    + (unitSIPresent ? ""
+                                     : " (unitSI is absent; default 1 is only allowed for matching dimensionality)"));
             return unitSI;
         }
 
@@ -182,7 +180,11 @@ namespace picongpu::particles::neuralBunch
                 variant);
         }
 
-        void convertId(Variant const& variant, std::uint64_t* destination, std::uint64_t count, std::string const& label)
+        void convertId(
+            Variant const& variant,
+            std::uint64_t* destination,
+            std::uint64_t count,
+            std::string const& label)
         {
             std::visit(
                 [&](auto const& pointer)
@@ -405,8 +407,7 @@ namespace picongpu::particles::neuralBunch
             if(!series.iterations.contains(iteration))
             {
                 std::ostringstream os;
-                os << path << ": iteration " << iteration
-                   << " not present (available iterations:";
+                os << path << ": iteration " << iteration << " not present (available iterations:";
                 for(auto const& entry : series.iterations)
                     os << " " << entry.first;
                 os << ")";
@@ -442,8 +443,7 @@ namespace picongpu::particles::neuralBunch
             };
 
             static constexpr std::array<double, 7> lengthDimensions = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-            static constexpr std::array<double, 7> momentumDimensions
-                = {1.0, 1.0, -1.0, 0.0, 0.0, 0.0, 0.0};
+            static constexpr std::array<double, 7> momentumDimensions = {1.0, 1.0, -1.0, 0.0, 0.0, 0.0, 0.0};
             static constexpr std::array<double, 7> dimensionless = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
             // --- position (required, vector) ---
@@ -457,7 +457,10 @@ namespace picongpu::particles::neuralBunch
                     fail(path + ": record 'position' is missing component '" + name + "'");
                 impl_->position[axis] = positionRecord[name];
                 meta.positionUnitSI[axis] = checkedUnitSI(
-                    *impl_->position[axis], positionRecord, lengthDimensions, path + ": position/" + name);
+                    *impl_->position[axis],
+                    positionRecord,
+                    lengthDimensions,
+                    path + ": position/" + name);
             }
 
             // --- positionOffset (required by this reader, see README) ---
@@ -471,7 +474,10 @@ namespace picongpu::particles::neuralBunch
                     fail(path + ": record 'positionOffset' is missing component '" + name + "'");
                 impl_->positionOffset[axis] = offsetRecord[name];
                 meta.positionOffsetUnitSI[axis] = checkedUnitSI(
-                    *impl_->positionOffset[axis], offsetRecord, lengthDimensions, path + ": positionOffset/" + name);
+                    *impl_->positionOffset[axis],
+                    offsetRecord,
+                    lengthDimensions,
+                    path + ": positionOffset/" + name);
             }
             meta.hasPositionOffset = true;
 
@@ -486,12 +492,13 @@ namespace picongpu::particles::neuralBunch
                     fail(path + ": record 'momentum' is missing component '" + name + "'");
                 impl_->momentum[axis] = momentumRecord[name];
                 meta.momentumUnitSI[axis] = checkedUnitSI(
-                    *impl_->momentum[axis], momentumRecord, momentumDimensions, path + ": momentum/" + name);
+                    *impl_->momentum[axis],
+                    momentumRecord,
+                    momentumDimensions,
+                    path + ": momentum/" + name);
             }
-            meta.momentumMacroWeighted
-                = attributeInt(momentumRecord, "macroWeighted", 1, path + ": momentum");
-            meta.momentumWeightingPower
-                = attributeInt(momentumRecord, "weightingPower", 1, path + ": momentum");
+            meta.momentumMacroWeighted = attributeInt(momentumRecord, "macroWeighted", 1, path + ": momentum");
+            meta.momentumWeightingPower = attributeInt(momentumRecord, "weightingPower", 1, path + ": momentum");
             if(meta.momentumWeightingPower < 0)
                 fail(path + ": momentum/weightingPower must be non-negative");
 
@@ -500,10 +507,8 @@ namespace picongpu::particles::neuralBunch
             impl_->weighting = scalarComponent(weightingRecord, "weighting");
             meta.weightingUnitSI
                 = checkedUnitSI(*impl_->weighting, weightingRecord, dimensionless, path + ": weighting");
-            meta.weightingMacroWeighted
-                = attributeInt(weightingRecord, "macroWeighted", 1, path + ": weighting");
-            meta.weightingWeightingPower
-                = attributeInt(weightingRecord, "weightingPower", 1, path + ": weighting");
+            meta.weightingMacroWeighted = attributeInt(weightingRecord, "macroWeighted", 1, path + ": weighting");
+            meta.weightingWeightingPower = attributeInt(weightingRecord, "weightingPower", 1, path + ": weighting");
 
             // --- optional id ---
             if(particles.contains("id"))
@@ -519,8 +524,8 @@ namespace picongpu::particles::neuralBunch
                 openPMD::Record chargeRecord = particles["charge"];
                 impl_->charge = scalarComponent(chargeRecord, "charge");
                 meta.chargeUnitSI = chargeRecord.containsAttribute("unitSI")
-                    ? chargeRecord.getAttribute("unitSI").get<double>()
-                    : 1.0;
+                                        ? chargeRecord.getAttribute("unitSI").get<double>()
+                                        : 1.0;
                 if(!std::isfinite(meta.chargeUnitSI) || meta.chargeUnitSI <= 0.0)
                     fail(path + ": invalid charge unitSI");
                 if(impl_->charge->constant())
@@ -537,9 +542,8 @@ namespace picongpu::particles::neuralBunch
             {
                 openPMD::Record massRecord = particles["mass"];
                 impl_->mass = scalarComponent(massRecord, "mass");
-                meta.massUnitSI = massRecord.containsAttribute("unitSI")
-                    ? massRecord.getAttribute("unitSI").get<double>()
-                    : 1.0;
+                meta.massUnitSI
+                    = massRecord.containsAttribute("unitSI") ? massRecord.getAttribute("unitSI").get<double>() : 1.0;
                 if(!std::isfinite(meta.massUnitSI) || meta.massUnitSI <= 0.0)
                     fail(path + ": invalid mass unitSI");
                 if(impl_->mass->constant())
@@ -564,11 +568,17 @@ namespace picongpu::particles::neuralBunch
                 auto const offsetExtent = impl_->positionOffset[axis]->getExtent();
                 auto const momentumExtent = impl_->momentum[axis]->getExtent();
                 if(positionExtent.size() != 1 || positionExtent[0] != meta.globalCount)
-                    fail(path + ": position component " + std::string(1, "xyz"[axis]) + " extent does not match position/x");
+                    fail(
+                        path + ": position component " + std::string(1, "xyz"[axis])
+                        + " extent does not match position/x");
                 if(offsetExtent.size() != 1 || offsetExtent[0] != meta.globalCount)
-                    fail(path + ": positionOffset component " + std::string(1, "xyz"[axis]) + " extent does not match position/x");
+                    fail(
+                        path + ": positionOffset component " + std::string(1, "xyz"[axis])
+                        + " extent does not match position/x");
                 if(momentumExtent.size() != 1 || momentumExtent[0] != meta.globalCount)
-                    fail(path + ": momentum component " + std::string(1, "xyz"[axis]) + " extent does not match position/x");
+                    fail(
+                        path + ": momentum component " + std::string(1, "xyz"[axis])
+                        + " extent does not match position/x");
             }
             auto const weightingExtent = impl_->weighting->getExtent();
             if(weightingExtent.size() != 1 || weightingExtent[0] != meta.globalCount)
@@ -617,7 +627,7 @@ namespace picongpu::particles::neuralBunch
         catch(std::exception const& error)
         {
             localError = std::string("SourceFile(") + path + ", species " + species + ", iteration "
-                + std::to_string(iteration) + "): " + error.what();
+                         + std::to_string(iteration) + "): " + error.what();
         }
 
         collectiveFail(localError, comm);
@@ -632,9 +642,7 @@ namespace picongpu::particles::neuralBunch
 
     SourceReader::~SourceReader() = default;
 
-    SourceReader::SourceReader(SourceReader&& other) noexcept
-        : impl_(std::move(other.impl_))
-        , comm_(other.comm_)
+    SourceReader::SourceReader(SourceReader&& other) noexcept : impl_(std::move(other.impl_)), comm_(other.comm_)
     {
         other.comm_ = MPI_COMM_NULL;
     }
@@ -726,8 +734,7 @@ namespace picongpu::particles::neuralBunch
             rawId.resize(static_cast<std::size_t>(n));
             if(d.id->constant())
             {
-                std::uint64_t const value = static_cast<std::uint64_t>(
-                    constantValue(*d.id, d.path + ": id"));
+                std::uint64_t const value = static_cast<std::uint64_t>(constantValue(*d.id, d.path + ": id"));
                 std::fill(rawId.begin(), rawId.end(), value);
             }
             else
@@ -745,20 +752,17 @@ namespace picongpu::particles::neuralBunch
         }
 
         SourceMetadata const& meta = d.meta;
-        int const momentumEffectivePower
-            = meta.momentumMacroWeighted != 0 ? meta.momentumWeightingPower : 0;
+        int const momentumEffectivePower = meta.momentumMacroWeighted != 0 ? meta.momentumWeightingPower : 0;
 
         std::size_t firstInvalid = std::numeric_limits<std::size_t>::max();
         std::string firstInvalidField;
         for(std::uint64_t i = 0; i < n; ++i)
         {
             double const weight = rawWeight[static_cast<std::size_t>(i)] * meta.weightingUnitSI;
-            double const factor
-                = momentumEffectivePower == 0 ? 1.0 : std::pow(weight, meta.momentumWeightingPower);
-            double const charge = d.charge ? rawCharge[static_cast<std::size_t>(i)]
-                                           : (meta.hasCharge ? meta.charge : 0.0);
-            double const mass = d.mass ? rawMass[static_cast<std::size_t>(i)]
-                                       : (meta.hasMass ? meta.mass : 0.0);
+            double const factor = momentumEffectivePower == 0 ? 1.0 : std::pow(weight, meta.momentumWeightingPower);
+            double const charge
+                = d.charge ? rawCharge[static_cast<std::size_t>(i)] : (meta.hasCharge ? meta.charge : 0.0);
+            double const mass = d.mass ? rawMass[static_cast<std::size_t>(i)] : (meta.hasMass ? meta.mass : 0.0);
             double const restMass = mass > 0.0 ? mass : electronMassSI;
             bool valid = true;
             auto const flag = [&](double value, std::string const& field)
@@ -811,19 +815,16 @@ namespace picongpu::particles::neuralBunch
                 }
                 else
                 {
-                    if(positionRaw < -positionFractionTolerance
-                       || positionRaw > 1.0 + positionFractionTolerance)
+                    if(positionRaw < -positionFractionTolerance || positionRaw > 1.0 + positionFractionTolerance)
                         fail(
                             d.path + ": position/" + std::string(1, "xyz"[axis]) + " at global index "
-                            + std::to_string(begin + i) + " is "
-                            + num(positionRaw)
+                            + std::to_string(begin + i) + " is " + num(positionRaw)
                             + " but unitSI equals the positionOffset cell size; the additive openPMD "
                               "convention requires position inside [0,1). Rejecting non-standard file.");
                     physical = (positionRaw + offsetRaw) * meta.positionUnitSI[axis];
                 }
-                double const u
-                    = rawMomentum[axis][static_cast<std::size_t>(i)] * meta.momentumUnitSI[axis]
-                    / (restMass * speedOfLightSI * factor);
+                double const u = rawMomentum[axis][static_cast<std::size_t>(i)] * meta.momentumUnitSI[axis]
+                                 / (restMass * speedOfLightSI * factor);
                 out.position[3 * static_cast<std::size_t>(i) + axis] = physical;
                 out.u[3 * static_cast<std::size_t>(i) + axis] = u;
                 flag(physical, "position");
@@ -838,10 +839,7 @@ namespace picongpu::particles::neuralBunch
                 + std::to_string(begin + firstInvalid) + " (species " + d.meta.species + ")");
     }
 
-    void SourceReader::readChunkCollective(
-        std::uint64_t begin,
-        std::uint64_t count,
-        ParticleChunk& out)
+    void SourceReader::readChunkCollective(std::uint64_t begin, std::uint64_t count, ParticleChunk& out)
     {
         Impl& d = *impl_;
         std::string localError;

@@ -21,7 +21,7 @@ import time
 import zlib
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List
 
 import numpy as np
 
@@ -57,10 +57,7 @@ BUNCH_N_BY_GAMMA = {1.0: [16, 32, 64], 10.0: [16, 32], 100.0: [16]}
 BUNCH_FLOOR_CELLS = {1.0: 12.0, 10.0: 16.0, 100.0: 24.0}
 BUNCH_CHUNK_SIZES = (1, 17, 1024, 5)
 
-TOTAL_TILES_ESTIMATE = (
-    len(GAMMAS) * len(DIRECTIONS) * len(ASPECT_PAIRS) * len(POSITION_MODES) * 1.15
-    + 400
-)
+TOTAL_TILES_ESTIMATE = len(GAMMAS) * len(DIRECTIONS) * len(ASPECT_PAIRS) * len(POSITION_MODES) * 1.15 + 400
 
 
 def _gamma_label(g):
@@ -160,9 +157,7 @@ def descriptors_for_split(split: str, extra_fraction: int = 5) -> List[dict]:
 # --------------------------------------------------------------------------
 def _scenario_sample(desc: dict, split: str, seed: int) -> sampling.Sample:
     rng = np.random.default_rng(
-        sampling._stable_seed(
-            "scaledsample", split, seed, desc["split_key"], desc["sample_index"]
-        )
+        sampling._stable_seed("scaledsample", split, seed, desc["split_key"], desc["sample_index"])
     )
     gamma = float(desc["gamma"])
     beta = float(np.sqrt(max(0.0, 1.0 - 1.0 / (gamma * gamma))))
@@ -171,9 +166,7 @@ def _scenario_sample(desc: dict, split: str, seed: int) -> sampling.Sample:
     ay, az = float(desc["aspects"][0]), float(desc["aspects"][1])
     dx = float(2.0 ** rng.integers(-2, 3))
     origin = rng.uniform(-30.0, 30.0, size=3) * dx
-    pos, origin, dx, dmin = sampling._place_single(
-        rng, origin, dx, ay, az, desc["position_mode"]
-    )
+    pos, origin, dx, dmin = sampling._place_single(rng, origin, dx, ay, az, desc["position_mode"])
     particles = sampling._particle_dict(pos[None, :], u[None, :], np.array([1.0]))
     return sampling.Sample(
         origin=np.asarray(origin, dtype=np.float64),
@@ -360,7 +353,6 @@ def generate_split(
     manifest_path = split_dir / "manifest.json"
     seed = int(base_seed) + SPLIT_SEED_OFFSET[split]
     ref_info = reference_info(module_path, hpp_path, python_reference_path)
-    pol = ref_info["quadrature"]
 
     if manifest_path.is_file() and resume:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -395,16 +387,14 @@ def generate_split(
         _write_manifest(manifest_path, manifest)
 
     descs = manifest["descriptors"]
-    manifest["shards"] = [
-        s for s in manifest.get("shards", []) if (split_dir / s["file"]).is_file()
-    ]
+    manifest["shards"] = [s for s in manifest.get("shards", []) if (split_dir / s["file"]).is_file()]
     done = {s["file"] for s in manifest["shards"]}
     tasks = []
     for start in range(0, len(descs), int(manifest["shard_size"])):
         fname = f"shard_{start // int(manifest['shard_size']):05d}.npz"
         if fname in done:
             continue
-        chunk = descs[start:start + int(manifest["shard_size"])]
+        chunk = descs[start : start + int(manifest["shard_size"])]
         tasks.append((start, fname, chunk))
 
     if jobs <= 1:
@@ -462,12 +452,9 @@ def generate_all(root, *, base_seed=20261101, jobs=1, shard_size=128, splits=SPL
     out = {}
     for sp in splits:
         print(f"[scaled] {sp}", flush=True)
-        out[sp] = generate_split(
-            root, sp, base_seed=base_seed, jobs=jobs, shard_size=shard_size, **kw
-        )
+        out[sp] = generate_split(root, sp, base_seed=base_seed, jobs=jobs, shard_size=shard_size, **kw)
         print(
-            f"[scaled] {sp}: {out[sp]['n_tiles']} tiles, "
-            f"{len(out[sp]['shards'])} shards",
+            f"[scaled] {sp}: {out[sp]['n_tiles']} tiles, {len(out[sp]['shards'])} shards",
             flush=True,
         )
     return out

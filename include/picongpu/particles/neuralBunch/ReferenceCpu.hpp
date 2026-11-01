@@ -109,10 +109,7 @@ namespace picongpu::particles::neuralBunch
     }
 
     /** Interpolated decoder matrix, [latent, 1536] row-major. */
-    inline std::vector<double> referenceInterpolatedBank(
-        HostArtifact const& artifact,
-        double aY,
-        double aZ)
+    inline std::vector<double> referenceInterpolatedBank(HostArtifact const& artifact, double aY, double aZ)
     {
         auto const& meta = artifact.metadata;
         auto const cell = bilinearCell(meta.aYAnchors, meta.aZAnchors, aY, aZ);

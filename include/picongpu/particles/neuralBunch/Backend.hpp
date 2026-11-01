@@ -35,9 +35,8 @@ namespace picongpu::particles::neuralBunch
                 auto tryConfiguration = [&](auto const& cfg)
                 {
                     using Api = std::decay_t<decltype(cfg[alpaka::object::api])>;
-                    bool const match
-                        = (requested == "host" && std::same_as<Api, alpaka::api::Host>)
-                          || (requested == "cuda" && std::same_as<Api, alpaka::api::Cuda>);
+                    bool const match = (requested == "host" && std::same_as<Api, alpaka::api::Host>)
+                                       || (requested == "cuda" && std::same_as<Api, alpaka::api::Cuda>);
                     if(!match || invoked)
                         return;
                     auto const spec = alpaka::onHost::makeDeviceSpec(cfg);

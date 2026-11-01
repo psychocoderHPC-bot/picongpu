@@ -7,6 +7,7 @@
  */
 
 #include "picongpu/particles/neuralBunch/ReferenceKernel.hpp"
+
 #include "picongpu/particles/neuralBunch/TileGeometry.hpp"
 
 #include <algorithm>
@@ -73,8 +74,7 @@ namespace
                 {
                     std::string tag;
                     in >> tag;
-                    in >> source.x.x >> source.x.y >> source.x.z >> source.u.x >> source.u.y
-                        >> source.u.z >> source.w;
+                    in >> source.x.x >> source.x.y >> source.x.z >> source.u.x >> source.u.y >> source.u.z >> source.w;
                 }
             }
             else if(token == "order")
@@ -159,7 +159,9 @@ namespace
         zero.u = u;
         zero.w = 0.0;
         auto const zeroTile = ref::tile_field(ref::Vec3{}, {zero}, 1.0, 2.0, 0.5);
-        check(std::all_of(zeroTile.begin(), zeroTile.end(), [](double v) { return v == 0.0; }), "zero weight zero tile");
+        check(
+            std::all_of(zeroTile.begin(), zeroTile.end(), [](double v) { return v == 0.0; }),
+            "zero weight zero tile");
         auto const emptyTile = ref::tile_field(ref::Vec3{}, {}, 1.0, 2.0, 0.5);
         check(std::all_of(emptyTile.begin(), emptyTile.end(), [](double v) { return v == 0.0; }), "empty zero tile");
     }
@@ -190,8 +192,9 @@ namespace
                             int const idx[3]{i, j, k};
                             for(int axis = 0; axis < 3; ++axis)
                             {
-                                double const output = origin[axis]
-                                    + (idx[axis] + tg::componentOffsets[component][axis]) * axisCell[axis];
+                                double const output
+                                    = origin[axis]
+                                      + (idx[axis] + tg::componentOffsets[component][axis]) * axisCell[axis];
                                 double const diff = (source[axis] - output) / cells.dx;
                                 sum2 += diff * diff;
                             }
@@ -199,11 +202,11 @@ namespace
                         }
             return best;
         };
-        for(auto const& source : std::array<std::array<double, 3>, 4>{{
-                {{0.3, 1.7, 0.1}},
-                {{0.0, 1.0 * cells.dy, 0.0}},
-                {{0.0, 0.0, 0.25 * cells.dz}},
-                {{2.5, -3.25, 4.75}}}})
+        for(auto const& source : std::array<std::array<double, 3>, 4>{
+                {{{0.3, 1.7, 0.1}},
+                 {{0.0, 1.0 * cells.dy, 0.0}},
+                 {{0.0, 0.0, 0.25 * cells.dz}},
+                 {{2.5, -3.25, 4.75}}}})
         {
             double const fast = tg::minimumStaggeredDistanceCells(source, origin, cells);
             double const slow = bruteForce(source);
@@ -222,15 +225,9 @@ namespace
         check(
             tg::classify(1.0, 1.0, 2.0, 0.5, 10.0, domain) == tg::PairRoute::neural,
             "hybrid: in-domain pair is neural");
-        check(
-            tg::classify(1.0, 1.0, 2.0, 0.5, 3.999, domain) == tg::PairRoute::referenceNear,
-            "hybrid: near pair");
-        check(
-            tg::classify(1.0, 1.0, 2.0, 0.5, 512.001, domain) == tg::PairRoute::referenceFar,
-            "hybrid: far pair");
-        check(
-            tg::classify(1.0, 101.0, 2.0, 0.5, 10.0, domain) == tg::PairRoute::referenceGamma,
-            "hybrid: gamma pair");
+        check(tg::classify(1.0, 1.0, 2.0, 0.5, 3.999, domain) == tg::PairRoute::referenceNear, "hybrid: near pair");
+        check(tg::classify(1.0, 1.0, 2.0, 0.5, 512.001, domain) == tg::PairRoute::referenceFar, "hybrid: far pair");
+        check(tg::classify(1.0, 101.0, 2.0, 0.5, 10.0, domain) == tg::PairRoute::referenceGamma, "hybrid: gamma pair");
         check(
             tg::classify(0.0, 1.0, 2.0, 0.5, 1.0, domain) == tg::PairRoute::zeroWeight,
             "hybrid: zero weight skipped");

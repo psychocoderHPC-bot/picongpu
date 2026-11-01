@@ -14,10 +14,7 @@ def find_extension(root=None) -> Path:
     root = Path(root or os.environ.get("NEURALBUNCH_FAST_ROOT", DEFAULT_ROOT))
     matches = sorted(root.glob("_nbref_cpp*.so"))
     if not matches:
-        raise FileNotFoundError(
-            f"compiled _nbref_cpp extension not found under {root}; "
-            "run cpp/build_fast.sh"
-        )
+        raise FileNotFoundError(f"compiled _nbref_cpp extension not found under {root}; run cpp/build_fast.sh")
     return matches[0]
 
 

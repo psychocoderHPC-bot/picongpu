@@ -6,7 +6,6 @@ import numpy as np
 from neuralbunch import sampling
 from neuralbunch.reference_data import build_dataset, load_split
 from neuralbunch.reference_loader import (
-    ReferenceUnavailable,
     flatten_tile,
     load_standin,
     target_from_sample,
@@ -43,14 +42,12 @@ def test_standin_chunk_additivity():
 
 
 def test_build_resume_and_load(tmp_path):
-    m1 = build_dataset(tmp_path, "train", seed=5, n_configs=4,
-                       samples_per_config=1, shard_size=2, _allow_standin=True)
+    m1 = build_dataset(tmp_path, "train", seed=5, n_configs=4, samples_per_config=1, shard_size=2, _allow_standin=True)
     assert m1["reference"]["kind"] == "analytic_standin"
     assert len(m1["shards"]) == 2
     hashes = [s["sha256"] for s in m1["shards"]]
     # resume must not recompute or change finished shards
-    m2 = build_dataset(tmp_path, "train", seed=5, n_configs=4,
-                       samples_per_config=1, shard_size=2, _allow_standin=True)
+    m2 = build_dataset(tmp_path, "train", seed=5, n_configs=4, samples_per_config=1, shard_size=2, _allow_standin=True)
     assert [s["sha256"] for s in m2["shards"]] == hashes
     d = load_split(tmp_path, "train")
     assert d.feats.shape == (d.src_w.shape[0], 69)
@@ -66,8 +63,7 @@ def test_build_resume_and_load(tmp_path):
 
 def test_split_datasets_are_config_disjoint(tmp_path):
     for sp, seed in (("train", 1), ("val", 2), ("test", 3)):
-        build_dataset(tmp_path, sp, seed=seed, n_configs=3, samples_per_config=1,
-                      shard_size=4, _allow_standin=True)
+        build_dataset(tmp_path, sp, seed=seed, n_configs=3, samples_per_config=1, shard_size=4, _allow_standin=True)
     keys = {}
     for sp in ("train", "val", "test"):
         m = json.loads((Path(tmp_path) / sp / "manifest.json").read_text())

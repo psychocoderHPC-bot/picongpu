@@ -120,8 +120,7 @@ namespace
         {
             Case c = load_case(path);
             nbref::TileReport report;
-            auto got = nbref::tile_field(
-                c.x_tile, c.sources, c.dx, c.dy, c.dz, c.settings, &report);
+            auto got = nbref::tile_field(c.x_tile, c.sources, c.dx, c.dy, c.dz, c.settings, &report);
             check(got.size() == 1536, c.name + ": tile size");
 
             double max_abs = 0.0;
@@ -136,10 +135,8 @@ namespace
             double const rel = max_abs / std::max(max_ref, 1e-300);
             double const limit = is_near_case(c.name) ? 1e-7 : 1e-10;
 
-            std::cout << "golden " << c.name << ": rel_inf=" << rel
-                      << " limit=" << limit
-                      << " near=" << (report.any_near ? "yes" : "no")
-                      << " max_quad_err=" << report.max_error << "\n";
+            std::cout << "golden " << c.name << ": rel_inf=" << rel << " limit=" << limit
+                      << " near=" << (report.any_near ? "yes" : "no") << " max_quad_err=" << report.max_error << "\n";
             check(finite, c.name + ": finite");
             check(rel <= limit, c.name + ": relative error limit");
             check(!report.any_near || report.all_converged, c.name + ": converged");
@@ -152,8 +149,7 @@ namespace
                     for(int j = 0; j < 8; ++j)
                         for(int i = 0; i < 8; ++i)
                             for(int cc = 3; cc < 6; ++cc)
-                                b_zero = b_zero
-                                    && got[cc + 6 * (i + 8 * (j + 8 * k))] == 0.0;
+                                b_zero = b_zero && got[cc + 6 * (i + 8 * (j + 8 * k))] == 0.0;
                 check(b_zero, "stationary: B exactly zero");
             }
         }
@@ -215,20 +211,17 @@ namespace
                 max_ord = std::max(max_ord, std::abs(B4[i] - B8[i]));
                 max_ord = std::max(max_ord, std::abs(B6[i] - B8[i]));
             }
-            double const rel_py = max_ref > 0.0
-                ? max_py / max_ref
-                : (max_py == 0.0 ? 0.0 : std::numeric_limits<double>::infinity());
-            double const rel_ord = max_ref > 0.0
-                ? max_ord / max_ref
-                : (max_ord == 0.0 ? 0.0 : std::numeric_limits<double>::infinity());
+            double const rel_py
+                = max_ref > 0.0 ? max_py / max_ref : (max_py == 0.0 ? 0.0 : std::numeric_limits<double>::infinity());
+            double const rel_ord
+                = max_ref > 0.0 ? max_ord / max_ref : (max_ord == 0.0 ? 0.0 : std::numeric_limits<double>::infinity());
             worst_py = std::max(worst_py, rel_py);
             worst_order = std::max(worst_order, rel_ord);
             ++cases;
             check(rel_py <= 1e-9, "aspect case Python/C++ agreement");
             check(rel_ord <= 1e-6, "aspect case order 4/6/8 agreement");
         }
-        std::cout << "aspect grid: " << cases
-                  << " cases, worst Python/C++=" << worst_py
+        std::cout << "aspect grid: " << cases << " cases, worst Python/C++=" << worst_py
                   << ", worst order4/6/8=" << worst_order << "\n";
         check(cases == 225, "aspect grid case count");
     }
@@ -257,24 +250,20 @@ namespace
             Vec3 const Eref{v[9], v[10], v[11]};
             Vec3 const Bref{v[12], v[13], v[14]};
             Vec3 E, B;
-            nbref::shape_field(
-                R0, Vec3{}, u, cells.x, cells.y, cells.z, s, E, B);
+            nbref::shape_field(R0, Vec3{}, u, cells.x, cells.y, cells.z, s, E, B);
             double max_ref = 0.0, max_diff = 0.0;
             for(int i = 0; i < 3; ++i)
             {
                 max_ref = std::max({max_ref, std::abs(Eref[i]), std::abs(Bref[i])});
-                max_diff = std::max({max_diff, std::abs(E[i] - Eref[i]),
-                                     std::abs(B[i] - Bref[i])});
+                max_diff = std::max({max_diff, std::abs(E[i] - Eref[i]), std::abs(B[i] - Bref[i])});
             }
-            double const rel = max_ref > 0.0
-                ? max_diff / max_ref
-                : (max_diff == 0.0 ? 0.0 : std::numeric_limits<double>::infinity());
+            double const rel = max_ref > 0.0 ? max_diff / max_ref
+                                             : (max_diff == 0.0 ? 0.0 : std::numeric_limits<double>::infinity());
             worst = std::max(worst, rel);
             ++cases;
             check(rel <= 1e-9, "near set Python/C++ agreement");
         }
-        std::cout << "near test set: " << cases
-                  << " cases, worst Python/C++=" << worst << "\n";
+        std::cout << "near test set: " << cases << " cases, worst Python/C++=" << worst << "\n";
         check(cases == 24, "near set case count");
     }
 
@@ -282,16 +271,12 @@ namespace
     {
         nbref::Settings s;
         auto empty = nbref::tile_field(Vec3{}, {}, 1.0, 1.0, 1.0, s);
-        bool all_zero = std::all_of(empty.begin(), empty.end(), [](double v) {
-            return v == 0.0;
-        });
+        bool all_zero = std::all_of(empty.begin(), empty.end(), [](double v) { return v == 0.0; });
         check(all_zero, "empty sources: exact zero tile");
 
         std::vector<Source> zero_weight{{Vec3{0.2, -0.1, 0.3}, Vec3{0.4, 0.0, 0.0}, 0.0}};
         auto zw = nbref::tile_field(Vec3{}, zero_weight, 1.0, 1.0, 1.0, s);
-        all_zero = std::all_of(zw.begin(), zw.end(), [](double v) {
-            return v == 0.0;
-        });
+        all_zero = std::all_of(zw.begin(), zw.end(), [](double v) { return v == 0.0; });
         check(all_zero, "zero weight: exact zero tile");
     }
 
@@ -308,19 +293,14 @@ namespace
         }};
         bool offsets_ok = true;
         for(int c = 0; c < 6; ++c)
-            offsets_ok = offsets_ok
-                && off[c].x == expected[c].x
-                && off[c].y == expected[c].y
-                && off[c].z == expected[c].z;
+            offsets_ok
+                = offsets_ok && off[c].x == expected[c].x && off[c].y == expected[c].y && off[c].z == expected[c].z;
         check(offsets_ok, "six Yee offsets pinned");
 
         Vec3 const x_tile{0.3, -0.7, 1.1};
         double const dx = 0.8, dy = 1.1, dz = 0.6;
         Vec3 const cells{dx, dy, dz};
-        Vec3 const x_src{
-            x_tile.x - 32.0 * dx,
-            x_tile.y + 0.25 * dy,
-            x_tile.z - 0.35 * dz};
+        Vec3 const x_src{x_tile.x - 32.0 * dx, x_tile.y + 0.25 * dy, x_tile.z - 0.35 * dz};
         Vec3 const u{0.4, -0.2, 0.1};
         double const w = 1.7;
         nbref::Settings s;
@@ -335,10 +315,10 @@ namespace
                     for(int c = 0; c < 6; ++c)
                     {
                         Vec3 const pos = x_tile
-                            + Vec3{
-                                (i + expected[c].x) * cells.x,
-                                (j + expected[c].y) * cells.y,
-                                (k + expected[c].z) * cells.z};
+                                         + Vec3{
+                                             (i + expected[c].x) * cells.x,
+                                             (j + expected[c].y) * cells.y,
+                                             (k + expected[c].z) * cells.z};
                         Vec3 E, B;
                         nbref::shape_field(pos, x_src, u, dx, dy, dz, s, E, B);
                         double const component = c < 3 ? E[c] : B[c - 3];
@@ -381,8 +361,7 @@ namespace
         double const lambda = 3.0;
         Vec3 E1, B1, E2, B2;
         nbref::shape_field(R, Vec3{}, u, 1.0, 1.0, 1.0, s, E1, B1);
-        nbref::shape_field(
-            R * lambda, Vec3{}, u, lambda, lambda, lambda, s, E2, B2);
+        nbref::shape_field(R * lambda, Vec3{}, u, lambda, lambda, lambda, s, E2, B2);
         double max_e = 0.0, max_b = 0.0, ref_e = 0.0, ref_b = 0.0;
         for(int i = 0; i < 3; ++i)
         {
@@ -393,9 +372,7 @@ namespace
             ref_e = std::max(ref_e, std::abs(want_e));
             ref_b = std::max(ref_b, std::abs(want_b));
         }
-        double const rel = std::max(
-            max_e / std::max(ref_e, 1e-300),
-            max_b / std::max(ref_b, 1e-300));
+        double const rel = std::max(max_e / std::max(ref_e, 1e-300), max_b / std::max(ref_b, 1e-300));
         std::cout << "E ~ 1/L^2 scaling: rel_inf=" << rel << "\n";
         check(rel <= 1e-12, "E and B scale as 1/L^2");
     }
@@ -408,9 +385,8 @@ namespace
             double const p = gamma == 1.0 ? 0.0 : std::sqrt(gamma * gamma - 1.0);
             Vec3 E, B;
             nbref::point_field(Vec3{0.0, 1.0, 1.0}, Vec3{p, 0.0, 0.0}, E, B);
-            bool const finite = std::isfinite(E.x) && std::isfinite(E.y)
-                && std::isfinite(E.z) && std::isfinite(B.x) && std::isfinite(B.y)
-                && std::isfinite(B.z);
+            bool const finite = std::isfinite(E.x) && std::isfinite(E.y) && std::isfinite(E.z) && std::isfinite(B.x)
+                                && std::isfinite(B.y) && std::isfinite(B.z);
             check(finite, "point_field finite at gamma " + std::to_string(gamma));
         }
         Vec3 E, B;

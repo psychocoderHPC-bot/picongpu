@@ -30,16 +30,8 @@ namespace picongpu::particles::neuralBunch
     inline constexpr int kOctaveHigh = 6;
     inline constexpr double kPi = 3.141592653589793238462643383279502884;
 
-    inline constexpr std::array<char const*, 9> kFeatureInputNames{
-        "r_x",
-        "r_y",
-        "r_z",
-        "u_x",
-        "u_y",
-        "u_z",
-        "gamma",
-        "a_y",
-        "a_z"};
+    inline constexpr std::array<char const*, 9>
+        kFeatureInputNames{"r_x", "r_y", "r_z", "u_x", "u_y", "u_z", "gamma", "a_y", "a_z"};
 
     /** 2^j for j = -3 .. 6, indexed by j + 3. */
     inline constexpr std::array<double, 10> kOctaveScale{0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0};

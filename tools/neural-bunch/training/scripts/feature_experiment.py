@@ -14,7 +14,10 @@ Example:
   python scripts/feature_experiment.py --data /path/data --mode smooth \
       --out /path/exp_smooth --steps 20000 --device cuda:1
 """
-import argparse, json, sys
+
+import argparse
+import json
+import sys
 from pathlib import Path
 import numpy as np
 
@@ -44,9 +47,7 @@ def make_features(data, mode):
         rn = np.linalg.norm(r, axis=1, keepdims=True)
         rs = r / (1.0 + rn / 8.0)
         logr = np.log1p(rn)
-        f = np.concatenate(
-            [u, gamma, ay[:, None], az[:, None], rs, logr], axis=1
-        )
+        f = np.concatenate([u, gamma, ay[:, None], az[:, None], rs, logr], axis=1)
         return f.astype(np.float64), f.shape[1]
     raise ValueError(mode)
 
@@ -79,22 +80,39 @@ def main(argv=None):
     from neuralbunch.train import TrainConfig, train_one, evaluate
 
     cfg = TrainConfig(
-        hidden=[int(x) for x in args.hidden.split(",")], latent=args.latent,
-        lr=args.lr, weight_decay=1e-4, batch_tiles=args.batch,
-        max_steps=args.steps, eval_every=args.eval_every, seed=0,
-        force_weight=0.1, time_budget_s=1e9,
+        hidden=[int(x) for x in args.hidden.split(",")],
+        latent=args.latent,
+        lr=args.lr,
+        weight_decay=1e-4,
+        batch_tiles=args.batch,
+        max_steps=args.steps,
+        eval_every=args.eval_every,
+        seed=0,
+        force_weight=0.1,
+        time_budget_s=1e9,
     )
     import torch
+
     dev = torch.device(args.device)
-    out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
     model, history, best = train_one(cfg, train, val, dev, out_dir=out)
     ev = evaluate(model, val, cfg.model_config(), dev, cfg.force_weight)
-    result = {"mode": args.mode, "feature_dim": dim, "config": vars(cfg),
-              "val": {k: ev[k] for k in ("E", "cB", "force", "overall_rel_rms", "loss")},
-              "per_case_meta": ev["per_case_meta"], "history": history}
+    result = {
+        "mode": args.mode,
+        "feature_dim": dim,
+        "config": vars(cfg),
+        "val": {k: ev[k] for k in ("E", "cB", "force", "overall_rel_rms", "loss")},
+        "per_case_meta": ev["per_case_meta"],
+        "history": history,
+    }
     (out / "feature_experiment.json").write_text(json.dumps(result, indent=2) + "\n")
-    print(json.dumps({"mode": args.mode, "E": ev["E"], "cB": ev["cB"],
-                      "force": ev["force"], "overall": ev["overall_rel_rms"]}, indent=2))
+    print(
+        json.dumps(
+            {"mode": args.mode, "E": ev["E"], "cB": ev["cB"], "force": ev["force"], "overall": ev["overall_rel_rms"]},
+            indent=2,
+        )
+    )
     return 0
 
 

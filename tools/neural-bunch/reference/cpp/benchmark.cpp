@@ -24,10 +24,7 @@ namespace
             double const a = 2.0 * 3.14159265358979323846 * i / std::max(1, n);
             double const r = 3.0 * i / std::max(1, n);
             Source s;
-            s.x = {
-                x_tile.x - distance,
-                x_tile.y + r * std::cos(a),
-                x_tile.z + r * std::sin(a)};
+            s.x = {x_tile.x - distance, x_tile.y + r * std::cos(a), x_tile.z + r * std::sin(a)};
             s.u = {0.3 * std::cos(a), 0.2 * std::sin(a), 0.1};
             s.w = 1.0 + 0.01 * i;
             out.push_back(s);

@@ -26,13 +26,14 @@ def cmd_reference(args):
             bunch_gammas=args.bunch_gammas,
             shard_size=args.shard_size,
             reference_path=args.reference,
-            quadrature=(None if not args.ref_fixed else
-                        {"order": args.ref_order, "tol": args.ref_tol,
-                         "max_level": args.ref_max_level}),
+            quadrature=(
+                None
+                if not args.ref_fixed
+                else {"order": args.ref_order, "tol": args.ref_tol, "max_level": args.ref_max_level}
+            ),
             aspect_range=(args.aspect_min, args.aspect_max),
         )
-        out[sp] = {"shards": len(m["shards"]), "samples": len(m["descriptors"]),
-                   "reference": m["reference"]["kind"]}
+        out[sp] = {"shards": len(m["shards"]), "samples": len(m["descriptors"]), "reference": m["reference"]["kind"]}
     print(json.dumps(out, indent=2))
     return 0
 
@@ -85,15 +86,12 @@ def cmd_validate(args):
     from .train import validate_artifact_on_data
 
     splits = tuple(s.strip() for s in args.splits.split(",") if s.strip())
-    report = validate_artifact_on_data(
-        args.artifact, args.data, splits=splits, out_report=args.out, device=args.device
-    )
+    report = validate_artifact_on_data(args.artifact, args.data, splits=splits, out_report=args.out, device=args.device)
     print(json.dumps({k: v.get("overall_rel_rms") for k, v in report["splits"].items()}, indent=2))
     return 0
 
 
 def cmd_export(args):
-    from .export import load_artifact
     from .train import export_from_checkpoint
 
     meta = export_from_checkpoint(args.checkpoint, args.out)
@@ -149,8 +147,11 @@ def build_parser():
     r.add_argument("--ref-order", type=int, default=5)
     r.add_argument("--ref-tol", type=float, default=1e-8)
     r.add_argument("--ref-max-level", type=int, default=5)
-    r.add_argument("--ref-fixed", action="store_true",
-                   help="use one fixed quadrature (--ref-order/--ref-tol/--ref-max-level); default is the per-sample policy")
+    r.add_argument(
+        "--ref-fixed",
+        action="store_true",
+        help="use one fixed quadrature (--ref-order/--ref-tol/--ref-max-level); default is the per-sample policy",
+    )
     r.add_argument("--aspect-min", type=float, default=0.1)
     r.add_argument("--aspect-max", type=float, default=10.0)
     r.set_defaults(func=cmd_reference)
@@ -172,14 +173,26 @@ def build_parser():
     t.add_argument("--time-budget-s", type=float, default=600.0)
     t.add_argument("--resume", action="store_true")
     t.add_argument("--device", default=None)
-    t.add_argument("--eval-splits", default="train,val,test",
-                   help="splits evaluated during/after training; use train,val to keep test untouched")
-    t.add_argument("--decoder-anchors", type=int, default=5,
-                   help="number of log-spaced aspect anchors per axis on [0.1,10]")
-    t.add_argument("--feature-gate", default="ones", choices=["ones", "lowfreq"],
-                   help="initial learned gate on fourier_v1 features; lowfreq starts with octaves >=2 disabled")
-    t.add_argument("--lr-schedule", default="constant", choices=["constant", "cosine"],
-                   help="constant lr or 2k warmup + cosine decay to 2%% of peak")
+    t.add_argument(
+        "--eval-splits",
+        default="train,val,test",
+        help="splits evaluated during/after training; use train,val to keep test untouched",
+    )
+    t.add_argument(
+        "--decoder-anchors", type=int, default=5, help="number of log-spaced aspect anchors per axis on [0.1,10]"
+    )
+    t.add_argument(
+        "--feature-gate",
+        default="ones",
+        choices=["ones", "lowfreq"],
+        help="initial learned gate on fourier_v1 features; lowfreq starts with octaves >=2 disabled",
+    )
+    t.add_argument(
+        "--lr-schedule",
+        default="constant",
+        choices=["constant", "cosine"],
+        help="constant lr or 2k warmup + cosine decay to 2%% of peak",
+    )
     t.add_argument("--export", default=None, help="also export the final model to this prefix")
     t.add_argument("--validation-report", default=None)
     t.set_defaults(func=cmd_train)

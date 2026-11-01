@@ -66,9 +66,7 @@ def array_checksums(data: dict) -> dict:
         array = np.ascontiguousarray(array)
         if array.ndim == 2:
             for axis, component in enumerate(POSITION_OFFSET_NAMES):
-                checksums[f"{name}/{component}"] = sha256_bytes(
-                    np.ascontiguousarray(array[:, axis]).tobytes()
-                )
+                checksums[f"{name}/{component}"] = sha256_bytes(np.ascontiguousarray(array[:, axis]).tobytes())
         else:
             checksums[name] = sha256_bytes(array.tobytes())
     return checksums
@@ -199,9 +197,7 @@ def read_hdf5(path: str, iteration: int, species: str) -> dict:
         if patch_group is not None:
             patches = {
                 "numParticles": np.asarray(patch_group["numParticles"][()]).copy(),
-                "numParticlesOffset": np.asarray(
-                    patch_group["numParticlesOffset"][()]
-                ).copy(),
+                "numParticlesOffset": np.asarray(patch_group["numParticlesOffset"][()]).copy(),
                 "offset": np.stack(
                     [np.asarray(patch_group["offset"][axis][()]) for axis in "xyz"],
                     axis=1,
@@ -220,20 +216,14 @@ def read_hdf5(path: str, iteration: int, species: str) -> dict:
         for record_name in sorted(group):
             if record_name == "particlePatches":
                 continue
-            components, record_meta, record_constants = _h5_read_record(
-                group[record_name], count
-            )
+            components, record_meta, record_constants = _h5_read_record(group[record_name], count)
             if count == 0:
                 count = len(next(iter(components.values())))
             meta[record_name] = record_meta
             for name, value in record_constants.items():
                 constants.setdefault(record_name, {})[name] = value
-            if record_name in VECTOR_RECORDS and all(
-                axis in components for axis in POSITION_OFFSET_NAMES
-            ):
-                data[record_name] = np.stack(
-                    [components[axis] for axis in POSITION_OFFSET_NAMES], axis=1
-                )
+            if record_name in VECTOR_RECORDS and all(axis in components for axis in POSITION_OFFSET_NAMES):
+                data[record_name] = np.stack([components[axis] for axis in POSITION_OFFSET_NAMES], axis=1)
             else:
                 data[record_name] = next(iter(components.values()))
 
@@ -241,21 +231,14 @@ def read_hdf5(path: str, iteration: int, species: str) -> dict:
             "grid": [int(v) for v in np.asarray(_h5_attr(group, "grid", []))]
             if _h5_attr(group, "grid") is not None
             else None,
-            "cellSizeSI": [
-                float(v) for v in np.asarray(_h5_attr(group, "cellSizeSI", []))
-            ]
+            "cellSizeSI": [float(v) for v in np.asarray(_h5_attr(group, "cellSizeSI", []))]
             if _h5_attr(group, "cellSizeSI") is not None
             else None,
         }
         if attrs["grid"] is None and patches is not None:
-            attrs["grid"] = (
-                patches["offset"] + patches["extent"]
-            ).max(axis=0).astype(int).tolist()
+            attrs["grid"] = (patches["offset"] + patches["extent"]).max(axis=0).astype(int).tolist()
         if attrs["cellSizeSI"] is None and "position" in meta:
-            attrs["cellSizeSI"] = [
-                float(meta["position"]["unitSI"].get(axis, 1.0))
-                for axis in POSITION_OFFSET_NAMES
-            ]
+            attrs["cellSizeSI"] = [float(meta["position"]["unitSI"].get(axis, 1.0)) for axis in POSITION_OFFSET_NAMES]
 
         return {
             "backend": "HDF5",
@@ -298,9 +281,7 @@ def read_openpmd(path: str, iteration: int, species: str) -> dict:
             "unit_dimension": [float(v) for v in record.unit_dimension],
             "unitSI": {},
             "constant": {},
-            "macroWeighted": int(record.get_attribute("macroWeighted"))
-            if "macroWeighted" in record.attributes
-            else 0,
+            "macroWeighted": int(record.get_attribute("macroWeighted")) if "macroWeighted" in record.attributes else 0,
             "weightingPower": float(record.get_attribute("weightingPower"))
             if "weightingPower" in record.attributes
             else 0.0,
@@ -318,15 +299,14 @@ def read_openpmd(path: str, iteration: int, species: str) -> dict:
                 components[component_name] = load(component)
         meta[record_name] = record_meta
         if record_name in VECTOR_RECORDS:
-            data[record_name] = np.stack(
-                [components[axis] for axis in POSITION_OFFSET_NAMES], axis=1
-            )
+            data[record_name] = np.stack([components[axis] for axis in POSITION_OFFSET_NAMES], axis=1)
         else:
             data[record_name] = next(iter(components.values()))
 
     patches = None
     patch_records = sp.particle_patches
     if len(list(patch_records)) > 0:
+
         def load_patch(component):
             array = component.load_chunk([0], [1])
             series.series_flush()
@@ -334,15 +314,9 @@ def read_openpmd(path: str, iteration: int, species: str) -> dict:
 
         patches = {
             "numParticles": load_patch(patch_records["numParticles"][io.Record.SCALAR]),
-            "numParticlesOffset": load_patch(
-                patch_records["numParticlesOffset"][io.Record.SCALAR]
-            ),
-            "offset": np.stack(
-                [load_patch(patch_records["offset"][axis]) for axis in "xyz"], axis=1
-            ),
-            "extent": np.stack(
-                [load_patch(patch_records["extent"][axis]) for axis in "xyz"], axis=1
-            ),
+            "numParticlesOffset": load_patch(patch_records["numParticlesOffset"][io.Record.SCALAR]),
+            "offset": np.stack([load_patch(patch_records["offset"][axis]) for axis in "xyz"], axis=1),
+            "extent": np.stack([load_patch(patch_records["extent"][axis]) for axis in "xyz"], axis=1),
         }
 
     attrs = {"grid": None, "cellSizeSI": None}
@@ -350,18 +324,13 @@ def read_openpmd(path: str, iteration: int, species: str) -> dict:
         if "grid" in sp.attributes:
             attrs["grid"] = [int(v) for v in np.asarray(sp.get_attribute("grid")).ravel()]
         if "cellSizeSI" in sp.attributes:
-            attrs["cellSizeSI"] = [
-                float(v) for v in np.asarray(sp.get_attribute("cellSizeSI")).ravel()
-            ]
+            attrs["cellSizeSI"] = [float(v) for v in np.asarray(sp.get_attribute("cellSizeSI")).ravel()]
     except Exception:
         pass
     if attrs["grid"] is None and patches is not None:
         attrs["grid"] = (patches["offset"] + patches["extent"]).max(axis=0).astype(int).tolist()
     if attrs["cellSizeSI"] is None and "position" in meta:
-        attrs["cellSizeSI"] = [
-            float(meta["position"]["unitSI"].get(axis, 1.0))
-            for axis in POSITION_OFFSET_NAMES
-        ]
+        attrs["cellSizeSI"] = [float(meta["position"]["unitSI"].get(axis, 1.0)) for axis in POSITION_OFFSET_NAMES]
 
     backend = str(series.backend)
     return {
@@ -503,9 +472,7 @@ def validate_readback(result: dict) -> tuple[dict, list]:
     if result["patches"] is not None:
         num = result["patches"]["numParticles"]
         if int(np.sum(num)) != n:
-            problems.append(
-                f"patch numParticles sum {int(np.sum(num))} != particle count {n}"
-            )
+            problems.append(f"patch numParticles sum {int(np.sum(num))} != particle count {n}")
 
     grid = result["attrs"].get("grid")
     cell = result["attrs"].get("cellSizeSI")
@@ -554,9 +521,7 @@ def compare_readbacks(left: dict, right: dict) -> list:
             problems.append(f"missing record {record}")
             continue
         if lhs.dtype != rhs.dtype or lhs.shape != rhs.shape:
-            problems.append(
-                f"{record}: dtype/shape {lhs.dtype}{lhs.shape} != {rhs.dtype}{rhs.shape}"
-            )
+            problems.append(f"{record}: dtype/shape {lhs.dtype}{lhs.shape} != {rhs.dtype}{rhs.shape}")
             continue
         if not np.array_equal(lhs, rhs):
             problems.append(f"{record}: arrays differ")
@@ -623,11 +588,7 @@ def check_manifest(manifest: dict, series_path: str, data: dict) -> list:
 
     entries = manifest.get("files", [])
     for entry in entries:
-        absolute = (
-            os.path.join(series_path, entry["path"])
-            if os.path.isdir(series_path)
-            else series_path
-        )
+        absolute = os.path.join(series_path, entry["path"]) if os.path.isdir(series_path) else series_path
         if not os.path.isfile(absolute):
             problems.append(f"manifest file missing: {entry['path']}")
             continue

@@ -15,8 +15,12 @@ import numpy as np
 STANDIN_WARNING = "ANALYTIC STAND-IN: not a physics reference; not validation"
 _COMPONENTS = ("Ex", "Ey", "Ez", "Bx", "By", "Bz")
 _STAG = {
-    "Ex": (0.5, 1.0, 1.0), "Ey": (1.0, 0.5, 1.0), "Ez": (1.0, 1.0, 0.5),
-    "Bx": (1.0, 0.5, 0.5), "By": (0.5, 1.0, 0.5), "Bz": (0.5, 0.5, 1.0),
+    "Ex": (0.5, 1.0, 1.0),
+    "Ey": (1.0, 0.5, 1.0),
+    "Ez": (1.0, 1.0, 0.5),
+    "Bx": (1.0, 0.5, 0.5),
+    "By": (0.5, 1.0, 0.5),
+    "Bz": (0.5, 0.5, 1.0),
 }
 
 

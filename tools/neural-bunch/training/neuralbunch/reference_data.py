@@ -18,7 +18,6 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Iterator, List, Optional
 
 import numpy as np
 
@@ -26,7 +25,6 @@ from . import sampling
 from .features import compute_features
 from .reference_loader import (
     DEFAULT_REFERENCE,
-    ReferenceUnavailable,
     call_tile_field,
     flatten_tile,
     load_module,
@@ -49,8 +47,7 @@ def _now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def make_descriptors(split, n_configs, samples_per_config, include_bunches, bunch_kinds,
-                     n_particles, bunch_gammas):
+def make_descriptors(split, n_configs, samples_per_config, include_bunches, bunch_kinds, n_particles, bunch_gammas):
     descs = []
     configs = sampling.scenario_keys(split, limit=n_configs)
     for cfg in configs:
@@ -73,8 +70,9 @@ def make_descriptors(split, n_configs, samples_per_config, include_bunches, bunc
 
 def sample_from_descriptor(split, seed, desc, aspect_range=(0.1, 10.0)) -> sampling.Sample:
     if desc["kind"] == "scenario":
-        return sampling.make_scenario_sample(split, seed, tuple(desc["config"]),
-                                            desc["sample_index"], aspect_range=aspect_range)
+        return sampling.make_scenario_sample(
+            split, seed, tuple(desc["config"]), desc["sample_index"], aspect_range=aspect_range
+        )
     if desc["kind"] == "bunch":
         return sampling.sample_bunch(
             desc["bunch_kind"],
@@ -110,12 +108,16 @@ def preregistered_scales(tile):
 def _resolve_reference(reference_path, allow_standin, quadrature):
     if allow_standin:
         mod = load_standin()
-        return mod, {"kind": "analytic_standin", "file": None, "sha256": None,
-                     "warning": mod.STANDIN_WARNING, "quadrature": dict(quadrature)}
+        return mod, {
+            "kind": "analytic_standin",
+            "file": None,
+            "sha256": None,
+            "warning": mod.STANDIN_WARNING,
+            "quadrature": dict(quadrature),
+        }
     mod = load_module(reference_path)
     path = Path(reference_path) if reference_path else DEFAULT_REFERENCE
-    return mod, {"kind": "convkernel", "file": str(path), "sha256": sha256_file(path),
-                 "quadrature": dict(quadrature)}
+    return mod, {"kind": "convkernel", "file": str(path), "sha256": sha256_file(path), "quadrature": dict(quadrature)}
 
 
 def _dmin_cells(sample):
@@ -132,9 +134,10 @@ def _sample_quadrature(sample, quadrature):
         return dict(quadrature)
     umax = 0.0
     for i in range(sample.n):
-        umax = max(umax, float(np.linalg.norm([
-            sample.particles["ux"][i], sample.particles["uy"][i],
-            sample.particles["uz"][i]])))
+        umax = max(
+            umax,
+            float(np.linalg.norm([sample.particles["ux"][i], sample.particles["uy"][i], sample.particles["uz"][i]])),
+        )
     dmin = _dmin_cells(sample)
     if umax > HIGH_NEAR_THRESHOLD and dmin < NEAR_DISTANCE_CELLS:
         return dict(NEAR_HIGH_QUADRATURE)
@@ -185,20 +188,34 @@ def _write_manifest(path: Path, manifest: dict):
     os.replace(tmp, path)
 
 
-def build_dataset(root, split, seed=0, n_configs=None, samples_per_config=1,
-                  include_bunches=False, bunch_kinds=None, n_particles=64,
-                  bunch_gammas=(2.0, 10.0, 100.0), shard_size=SHARD_SIZE_DEFAULT,
-                  reference_path=None, quadrature=None, aspect_range=(0.1, 10.0),
-                  _allow_standin=False) -> dict:
+def build_dataset(
+    root,
+    split,
+    seed=0,
+    n_configs=None,
+    samples_per_config=1,
+    include_bunches=False,
+    bunch_kinds=None,
+    n_particles=64,
+    bunch_gammas=(2.0, 10.0, 100.0),
+    shard_size=SHARD_SIZE_DEFAULT,
+    reference_path=None,
+    quadrature=None,
+    aspect_range=(0.1, 10.0),
+    _allow_standin=False,
+) -> dict:
     """Generate (or resume) one split.  Returns the manifest."""
     split_dir = Path(root) / split
     split_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = split_dir / "manifest.json"
 
     quad = None if quadrature is None else dict(quadrature)
-    pol = {"policy": "order 8 (tight) for |u|>5 and d_min<10; order 6 for |u|>10; else order 4",
-           "low": DEFAULT_QUADRATURE, "high": HIGH_GAMMA_QUADRATURE,
-           "near_high": NEAR_HIGH_QUADRATURE}
+    pol = {
+        "policy": "order 8 (tight) for |u|>5 and d_min<10; order 6 for |u|>10; else order 4",
+        "low": DEFAULT_QUADRATURE,
+        "high": HIGH_GAMMA_QUADRATURE,
+        "near_high": NEAR_HIGH_QUADRATURE,
+    }
     mod, ref_info = _resolve_reference(reference_path, _allow_standin, quad or pol)
     if bunch_kinds is None:
         bunch_kinds = list(sampling.BUNCH_KINDS)
@@ -211,8 +228,13 @@ def build_dataset(root, split, seed=0, n_configs=None, samples_per_config=1,
             raise ValueError("reference implementation changed since the manifest was written")
     else:
         descs = make_descriptors(
-            split, n_configs, samples_per_config, include_bunches, bunch_kinds,
-            n_particles, bunch_gammas,
+            split,
+            n_configs,
+            samples_per_config,
+            include_bunches,
+            bunch_kinds,
+            n_particles,
+            bunch_gammas,
         )
         manifest = {
             "format": DATASET_FORMAT,
@@ -238,7 +260,7 @@ def build_dataset(root, split, seed=0, n_configs=None, samples_per_config=1,
         fname = f"shard_{start // int(manifest['shard_size']):05d}.npz"
         if fname in done:
             continue
-        chunk = descs[start:start + int(manifest["shard_size"])]
+        chunk = descs[start : start + int(manifest["shard_size"])]
         samples = [sample_from_descriptor(split, seed, d, aspect_range) for d in chunk]
         packed = _pack_shard(samples, mod, quad)
         path = split_dir / fname

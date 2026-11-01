@@ -15,16 +15,19 @@ int main(int argc, char** argv)
 {
     if(argc < 10)
     {
-        std::fprintf(
-            stderr,
-            "usage: %s sx sy sz ox oy oz dx dy dz [tol]\n",
-            argv[0]);
+        std::fprintf(stderr, "usage: %s sx sy sz ox oy oz dx dy dz [tol]\n", argv[0]);
         return 2;
     }
-    double const v[9] = {
-        std::atof(argv[1]), std::atof(argv[2]), std::atof(argv[3]),
-        std::atof(argv[4]), std::atof(argv[5]), std::atof(argv[6]),
-        std::atof(argv[7]), std::atof(argv[8]), std::atof(argv[9])};
+    double const v[9]
+        = {std::atof(argv[1]),
+           std::atof(argv[2]),
+           std::atof(argv[3]),
+           std::atof(argv[4]),
+           std::atof(argv[5]),
+           std::atof(argv[6]),
+           std::atof(argv[7]),
+           std::atof(argv[8]),
+           std::atof(argv[9])};
     nbref::Settings s;
     if(argc > 10)
         s.tol = std::atof(argv[10]);

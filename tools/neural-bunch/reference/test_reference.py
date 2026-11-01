@@ -57,11 +57,7 @@ def _scipy_cubature_shape(x_obs, x_src, u, cells, *, rtol=1e-4):
     def integrand(s):
         R = R0[None, :] - s * cells[None, :]
         E, _ = ck.point_field(R, u)
-        w = (
-            ck.tsc_shape(s[:, 0])
-            * ck.tsc_shape(s[:, 1])
-            * ck.tsc_shape(s[:, 2])
-        )
+        w = ck.tsc_shape(s[:, 0]) * ck.tsc_shape(s[:, 1]) * ck.tsc_shape(s[:, 2])
         return E * w[:, None]
 
     res = integrate.cubature(
@@ -169,15 +165,11 @@ def test_shape_normalization_is_one():
 def test_far_gauss_convergence_rate():
     u = np.array([0.3, 0.1, 0.0])
     R0 = np.array([4.0, 1.0, -2.0])
-    ref, _ = ck.shape_field(
-        R0, np.zeros(3), u, 1.0, 1.0, 1.0, adaptive=False, order=16
-    )
+    ref, _ = ck.shape_field(R0, np.zeros(3), u, 1.0, 1.0, 1.0, adaptive=False, order=16)
     orders = [2, 3, 4, 5, 6]
     errors = []
     for o in orders:
-        E, _ = ck.shape_field(
-            R0, np.zeros(3), u, 1.0, 1.0, 1.0, adaptive=False, order=o
-        )
+        E, _ = ck.shape_field(R0, np.zeros(3), u, 1.0, 1.0, 1.0, adaptive=False, order=o)
         errors.append(np.max(np.abs(E - ref)))
 
     assert errors[-1] < 1e-10
@@ -190,9 +182,7 @@ def test_near_point_cross_check_with_scipy_cubature():
     x_obs = np.array([0.0, 0.0, 1.0])
     x_src = np.zeros(3)
     u = np.zeros(3)
-    E, B, info = ck.shape_field(
-        x_obs, x_src, u, 1.0, 1.0, 1.0, return_info=True
-    )
+    E, B, info = ck.shape_field(x_obs, x_src, u, 1.0, 1.0, 1.0, return_info=True)
     assert info["near"] is True
     assert info["error"] is not None
     ref = _scipy_cubature_shape(x_obs, x_src, u, [1.0, 1.0, 1.0], rtol=1e-4)
@@ -263,9 +253,7 @@ def test_uniform_spatial_scaling_point_and_shape():
     assert np.allclose(B2, B1 / lam**2, rtol=1e-14, atol=0.0)
 
     xobs = np.array([2.0, 0.0, 0.0])
-    Es, Bs = ck.shape_field(
-        xobs, np.zeros(3), u, 1.0, 1.0, 1.0, adaptive=False, level=3, order=8
-    )
+    Es, Bs = ck.shape_field(xobs, np.zeros(3), u, 1.0, 1.0, 1.0, adaptive=False, level=3, order=8)
     Es2, Bs2 = ck.shape_field(
         lam * xobs,
         np.zeros(3),
@@ -304,11 +292,7 @@ def test_aspects(aspect):
 
 
 ASPECTS = [0.1, 0.5, 1.0, 2.0, 10.0]
-ASPECT_PAIRS = (
-    [(a, a) for a in ASPECTS]
-    + [(a, 1.0) for a in ASPECTS]
-    + [(1.0, a) for a in ASPECTS]
-)
+ASPECT_PAIRS = [(a, a) for a in ASPECTS] + [(a, 1.0) for a in ASPECTS] + [(1.0, a) for a in ASPECTS]
 ASPECT_DISTANCES = [4.0, 8.0, 32.0, 128.0, 512.0]
 ASPECT_GAMMAS = [1.0, 10.0, 100.0]
 
@@ -320,9 +304,7 @@ def aspect_cases():
             for gamma in ASPECT_GAMMAS:
                 cells = np.array([1.0, dy, dz])
                 R0 = np.array([d, 0.3, -0.2]) * cells
-                u = np.array(
-                    [0.0 if gamma == 1.0 else math.sqrt(gamma * gamma - 1.0), 0.0, 0.0]
-                )
+                u = np.array([0.0 if gamma == 1.0 else math.sqrt(gamma * gamma - 1.0), 0.0, 0.0])
                 yield cells, R0, u, (dy, dz, d, gamma)
 
 
@@ -333,16 +315,17 @@ def test_aspect_corner_convergence():
     for cells, R0, u, case in aspect_cases():
         values = []
         for order in (4, 6, 8):
-            E, _ = ck.shape_field(
-                R0, np.zeros(3), u, *cells, order=order
-            )
+            E, _ = ck.shape_field(R0, np.zeros(3), u, *cells, order=order)
             values.append(E)
         ref = values[-1]
         scale = max(1e-300, float(np.max(np.abs(ref))))
-        err = max(
-            float(np.max(np.abs(values[0] - ref))),
-            float(np.max(np.abs(values[1] - ref))),
-        ) / scale
+        err = (
+            max(
+                float(np.max(np.abs(values[0] - ref))),
+                float(np.max(np.abs(values[1] - ref))),
+            )
+            / scale
+        )
         if err > worst:
             worst = err
             worst_case = case
@@ -361,13 +344,9 @@ def test_empty_and_zero_weight_are_exact_zero():
     particles = [
         {"x": np.array([0.0, 0.0, 0.0]), "u": np.zeros(3), "w": 0.0},
     ]
-    assert np.array_equal(
-        ck.tile_field(np.zeros(3), particles, 1.0, 1.0, 1.0), zero
-    )
+    assert np.array_equal(ck.tile_field(np.zeros(3), particles, 1.0, 1.0, 1.0), zero)
     particles = [(np.array([1.0, 2.0, 3.0]), np.array([0.1, 0.0, 0.0]), 0.0)]
-    assert np.array_equal(
-        ck.tile_field(np.zeros(3), particles, 1.0, 1.0, 1.0), zero
-    )
+    assert np.array_equal(ck.tile_field(np.zeros(3), particles, 1.0, 1.0, 1.0), zero)
 
 
 def test_offsets_and_flatten_order_are_pinned():
@@ -474,9 +453,7 @@ def test_single_particle_all_1536_slots_offsets_and_components():
                     want_x = x_tile + (np.array([i, j, k]) + expected[c]) * cells
                     assert np.array_equal(x, want_x)
 
-                    E, B = ck.shape_field(
-                        x, x_src, u, dx, dy, dz, adaptive=False, order=6
-                    )
+                    E, B = ck.shape_field(x, x_src, u, dx, dy, dz, adaptive=False, order=6)
                     component = E[c] if c < 3 else B[c - 3]
                     want = -w * dx * dx * component
                     assert tile[i, j, k, c] == pytest.approx(want, rel=1e-12)
@@ -484,16 +461,12 @@ def test_single_particle_all_1536_slots_offsets_and_components():
                     if c < 3:
                         # E orientation must follow the point-charge result.
                         Ep, _ = ck.point_field(x - x_src, u)
-                        cosang = np.dot(E, Ep) / (
-                            np.linalg.norm(E) * np.linalg.norm(Ep)
-                        )
+                        cosang = np.dot(E, Ep) / (np.linalg.norm(E) * np.linalg.norm(Ep))
                         assert cosang > 1.0 - 1e-6
                     else:
                         # B component must equal (beta x E) component.
                         B_cross = np.cross(beta, E)
-                        assert tile[i, j, k, c] == pytest.approx(
-                            -w * dx * dx * B_cross[c - 3], rel=1e-11
-                        )
+                        assert tile[i, j, k, c] == pytest.approx(-w * dx * dx * B_cross[c - 3], rel=1e-11)
 
     flat = ck.flatten_tile(tile)
     assert flat.shape == (1536,)

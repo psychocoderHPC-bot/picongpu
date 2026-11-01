@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import zlib
 from dataclasses import dataclass, field
-from typing import Dict, Iterator, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -182,7 +182,7 @@ def _place_single(rng, origin, dx, ay, az, mode):
     """
     if mode == "scaled":
         s = int(rng.integers(-3, 4))
-        dx = float(dx * (2.0 ** s))
+        dx = float(dx * (2.0**s))
     if mode == "translation":
         origin = origin + rng.uniform(-1000.0, 1000.0, size=3) * dx
     pts = output_points(origin, dx, ay, az)
@@ -223,13 +223,18 @@ def _place_single(rng, origin, dx, ay, az, mode):
     return pos, origin, dx, dmin
 
 
-def make_sample(split: str, seed: int, gamma_name: str, direction: str,
-                position_mode: str, sample_index: int = 0,
-                aspect_range=(0.1, 10.0), aspects=None) -> Sample:
+def make_sample(
+    split: str,
+    seed: int,
+    gamma_name: str,
+    direction: str,
+    position_mode: str,
+    sample_index: int = 0,
+    aspect_range=(0.1, 10.0),
+    aspects=None,
+) -> Sample:
     """Build one deterministic single-source tile sample."""
-    rng = np.random.default_rng(
-        _stable_seed("sample", split, seed, gamma_name, direction, position_mode, sample_index)
-    )
+    rng = np.random.default_rng(_stable_seed("sample", split, seed, gamma_name, direction, position_mode, sample_index))
     gname = gamma_name
     gval = dict((n, v) for n, _, v in GAMMA_SPECS)[gname]
     u, gamma = _momenta(rng, gname, direction, gval)
@@ -291,8 +296,7 @@ def scenario_keys(split: str, limit: Optional[int] = None) -> List[tuple]:
     return keys
 
 
-def make_scenario_sample(split: str, seed: int, config, sample_index: int = 0,
-                         aspect_range=(0.1, 10.0)) -> Sample:
+def make_scenario_sample(split: str, seed: int, config, sample_index: int = 0, aspect_range=(0.1, 10.0)) -> Sample:
     gname, direction, ai, pm = config
     rng = np.random.default_rng(_stable_seed("aspect", split, seed, config))
     # Continuous aspect, not only the anchor, inside the bucket neighbourhood.
@@ -303,8 +307,7 @@ def make_scenario_sample(split: str, seed: int, config, sample_index: int = 0,
     a_z = float(10.0 ** rng.uniform(lo_r, hi_r))
     # aspects are fixed *before* placement, otherwise the source can end up
     # inside the support box after the aspect is changed
-    sample = make_sample(split, seed, gname, direction, pm, sample_index,
-                         aspect_range=aspect_range, aspects=(a_y, a_z))
+    sample = make_sample(split, seed, gname, direction, pm, sample_index, aspect_range=aspect_range, aspects=(a_y, a_z))
     sample.meta["aspect_bucket"] = ai
     return sample
 
@@ -312,9 +315,16 @@ def make_scenario_sample(split: str, seed: int, config, sample_index: int = 0,
 # --------------------------------------------------------------------------
 # multi-particle bunches (fine-tuning / sum-validation)
 # --------------------------------------------------------------------------
-def sample_bunch(kind: str, split: str = "train", seed: int = 0,
-                 n_particles: int = 64, gamma: float = 10.0,
-                 a_y: float = 1.0, a_z: float = 1.0, dx: float = 1.0) -> Sample:
+def sample_bunch(
+    kind: str,
+    split: str = "train",
+    seed: int = 0,
+    n_particles: int = 64,
+    gamma: float = 10.0,
+    a_y: float = 1.0,
+    a_z: float = 1.0,
+    dx: float = 1.0,
+) -> Sample:
     if kind not in BUNCH_KINDS:
         raise ValueError(f"unknown bunch kind {kind!r}")
     rng = np.random.default_rng(_stable_seed("bunch", split, seed, kind, n_particles))

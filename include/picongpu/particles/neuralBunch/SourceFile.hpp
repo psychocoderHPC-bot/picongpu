@@ -7,14 +7,14 @@
  */
 #pragma once
 
-#include <mpi.h>
-
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <mpi.h>
 
 namespace picongpu::particles::neuralBunch
 {
@@ -130,11 +130,7 @@ namespace picongpu::particles::neuralBunch
     public:
         using ChunkCallback = std::function<void(ParticleChunk const&)>;
 
-        SourceReader(
-            std::string const& path,
-            std::uint64_t iteration,
-            std::string const& species,
-            MPI_Comm comm);
+        SourceReader(std::string const& path, std::uint64_t iteration, std::string const& species, MPI_Comm comm);
         ~SourceReader();
 
         SourceReader(SourceReader const&) = delete;
