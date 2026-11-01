@@ -6,6 +6,7 @@ target_compile_definitions(
     neuralBunchReferenceTest
     PRIVATE NB_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/testdata"
 )
+target_link_libraries(neuralBunchReferenceTest PRIVATE OpenMP::OpenMP_CXX)
 add_test(NAME neuralBunchReferenceTest COMMAND neuralBunchReferenceTest)
 
 add_executable(neuralBunchTileGeometryTest tileGeometryTest.cpp)

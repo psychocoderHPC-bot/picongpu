@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -85,6 +86,9 @@ namespace picongpu::particles::neuralBunch::reference
         double tol = 1e-7; //!< order-pair convergence tolerance
         int max_level = 5; //!< maximum per-axis grading level
         int max_order = 16; //!< maximum Gauss order
+        int sphere_n = 10; //!< starting angular order for in-support boxes
+        int sphere_max_n = 32; //!< maximum angular order
+        int sphere_radial_order = 4; //!< radial Gauss order per corner box
     };
 
     struct ShapeResult
@@ -100,6 +104,9 @@ namespace picongpu::particles::neuralBunch::reference
         double max_error = 0.0;
         bool all_converged = true;
         bool any_near = false;
+        std::size_t total = 0;
+        std::size_t not_converged = 0;
+        std::size_t near_count = 0;
     };
 
     struct Source
@@ -352,6 +359,158 @@ namespace picongpu::particles::neuralBunch::reference
             return max_diff / (1.0 + max_val);
         }
 
+        //! Error-controlled box/pyramid quadrature for t inside the support.
+        //! The support is split into the 27 TSC sub-boxes.  The box containing
+        //! t is split further at t into corner boxes, each covered by three
+        //! pyramids with t as the apex; r^2 cancels the 1/r^2 kernel and W is a
+        //! single polynomial on each sub-box.
+        inline void box_support_integral(
+            Vec3 const& R0,
+            Vec3 const& u,
+            Vec3 const& cells,
+            int nang,
+            int nr,
+            int ng,
+            Vec3& Eout,
+            Vec3& Bout)
+        {
+            Vec3 const t{R0.x / cells.x, R0.y / cells.y, R0.z / cells.z};
+            double const tb[3] = {t.x, t.y, t.z};
+            double const box_lo[3] = {-1.5, -1.5, -1.5};
+
+            std::vector<double> xa, wa, xr, wr, xg, wg;
+            gauss_legendre(nang, xa, wa);
+            gauss_legendre(nr, xr, wr);
+            gauss_legendre(ng, xg, wg);
+            std::array<double, 6> acc{};
+
+            auto accumulate = [&](Vec3 const& s, double w) {
+                double const W = tsc_shape(s.x) * tsc_shape(s.y) * tsc_shape(s.z);
+                if(W == 0.0)
+                    return;
+                Vec3 const R = R0 - Vec3{s.x * cells.x, s.y * cells.y, s.z * cells.z};
+                Vec3 E, B;
+                point_field(R, u, E, B);
+                double const ww = w * W;
+                acc[0] += ww * E.x;
+                acc[1] += ww * E.y;
+                acc[2] += ww * E.z;
+                acc[3] += ww * B.x;
+                acc[4] += ww * B.y;
+                acc[5] += ww * B.z;
+            };
+
+            for(int ix = 0; ix < 3; ++ix)
+                for(int iy = 0; iy < 3; ++iy)
+                    for(int iz = 0; iz < 3; ++iz)
+                    {
+                        double const lo[3] = {
+                            box_lo[0] + ix, box_lo[1] + iy, box_lo[2] + iz};
+                        double const hi[3] = {
+                            lo[0] + 1.0, lo[1] + 1.0, lo[2] + 1.0};
+                        bool contains = true;
+                        for(int a = 0; a < 3; ++a)
+                            contains = contains && lo[a] <= tb[a] && tb[a] <= hi[a];
+
+                        if(!contains)
+                        {
+                            for(int a0 = 0; a0 < ng; ++a0)
+                            {
+                                double const s0 = 0.5 * (lo[0] + hi[0])
+                                    + 0.5 * (hi[0] - lo[0]) * xg[a0];
+                                double const w0 = 0.5 * (hi[0] - lo[0]) * wg[a0];
+                                for(int a1 = 0; a1 < ng; ++a1)
+                                {
+                                    double const s1 = 0.5 * (lo[1] + hi[1])
+                                        + 0.5 * (hi[1] - lo[1]) * xg[a1];
+                                    double const w1 = 0.5 * (hi[1] - lo[1]) * wg[a1];
+                                    for(int a2 = 0; a2 < ng; ++a2)
+                                    {
+                                        double const s2 = 0.5 * (lo[2] + hi[2])
+                                            + 0.5 * (hi[2] - lo[2]) * xg[a2];
+                                        double const w2 = 0.5 * (hi[2] - lo[2]) * wg[a2];
+                                        accumulate({s0, s1, s2}, w0 * w1 * w2);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+
+                        // Split the containing box at t into up to 8 corner boxes.
+                        std::array<std::vector<std::array<double, 3>>, 3> choices;
+                        for(int a = 0; a < 3; ++a)
+                        {
+                            if(lo[a] < tb[a])
+                                choices[a].push_back({lo[a], tb[a], -1.0});
+                            if(tb[a] < hi[a])
+                                choices[a].push_back({tb[a], hi[a], 1.0});
+                        }
+                        for(auto const& cx : choices[0])
+                            for(auto const& cy : choices[1])
+                                for(auto const& cz : choices[2])
+                                {
+                                    std::array<std::array<double, 3>, 3> seg{cx, cy, cz};
+                                    double L[3], sgn[3];
+                                    for(int a = 0; a < 3; ++a)
+                                    {
+                                        L[a] = seg[a][1] - seg[a][0];
+                                        sgn[a] = seg[a][2];
+                                    }
+                                    if(L[0] <= 0.0 || L[1] <= 0.0 || L[2] <= 0.0)
+                                        continue;
+                                    double const V = L[0] * L[1] * L[2];
+                                    for(int face = 0; face < 3; ++face)
+                                    {
+                                        int const o0 = (face + 1) % 3;
+                                        int const o1 = (face + 2) % 3;
+                                        for(int iu = 0; iu < nang; ++iu)
+                                        {
+                                            double const uu = 0.5 * (xa[iu] + 1.0);
+                                            double const wu = 0.5 * wa[iu];
+                                            for(int iv = 0; iv < nang; ++iv)
+                                            {
+                                                double const vv = 0.5 * (xa[iv] + 1.0);
+                                                double const wv = 0.5 * wa[iv];
+                                                double q[3] = {0.0, 0.0, 0.0};
+                                                q[face] = sgn[face] * L[face];
+                                                q[o0] = sgn[o0] * uu * L[o0];
+                                                q[o1] = sgn[o1] * vv * L[o1];
+                                                for(int ir = 0; ir < nr; ++ir)
+                                                {
+                                                    double const r = 0.5 * (xr[ir] + 1.0);
+                                                    double const w =
+                                                        0.5 * wr[ir] * wu * wv * V * r * r;
+                                                    Vec3 const s{
+                                                        t.x + r * q[0],
+                                                        t.y + r * q[1],
+                                                        t.z + r * q[2]};
+                                                    Vec3 const R{
+                                                        -r * q[0] * cells.x,
+                                                        -r * q[1] * cells.y,
+                                                        -r * q[2] * cells.z};
+                                                    double const W = tsc_shape(s.x)
+                                                        * tsc_shape(s.y) * tsc_shape(s.z);
+                                                    if(W == 0.0)
+                                                        continue;
+                                                    Vec3 E, B;
+                                                    point_field(R, u, E, B);
+                                                    double const ww = w * W;
+                                                    acc[0] += ww * E.x;
+                                                    acc[1] += ww * E.y;
+                                                    acc[2] += ww * E.z;
+                                                    acc[3] += ww * B.x;
+                                                    acc[4] += ww * B.y;
+                                                    acc[5] += ww * B.z;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                    }
+            Eout = {acc[0], acc[1], acc[2]};
+            Bout = {acc[3], acc[4], acc[5]};
+        }
+
         inline std::array<std::vector<Panel>, 3> panels_for(Vec3 const& target, int level)
         {
             return {
@@ -379,42 +538,78 @@ namespace picongpu::particles::neuralBunch::reference
             throw std::invalid_argument("cell sizes must be positive");
 
         Vec3 const R0 = x_obs - x_src;
+        double const support_dist = detail::support_distance(R0, cells);
         bool const is_near = detail::near_support(R0, cells);
         double err = 0.0;
         int level = 0;
         bool converged = false;
-        Vec3 const target{R0.x / cells.x, R0.y / cells.y, R0.z / cells.z};
 
-        int order_lo = settings.order;
-        auto panels = detail::panels_for(target, level);
-        auto a = detail::integral_on_panels(panels, order_lo, R0, cells, u);
-        auto b = detail::integral_on_panels(panels, order_lo + 2, R0, cells, u);
-        for(;;)
+        if(support_dist == 0.0)
         {
-            err = detail::richardson_error(a, b);
-            if(err <= settings.tol)
+            // Singular point inside the TSC support: split into TSC sub-boxes
+            // and use pyramid coordinates in the box containing t.
+            int nang = settings.sphere_n;
+            int ng = 8;
+            Vec3 E1, B1, E2, B2;
+            detail::box_support_integral(
+                R0, u, cells, nang, settings.sphere_radial_order, ng, E1, B1);
+            for(;;)
             {
-                converged = true;
-                break;
-            }
-            if(level < settings.max_level)
-            {
-                ++level;
-                order_lo += 2;
-                panels = detail::panels_for(target, level);
-                a = detail::integral_on_panels(panels, order_lo, R0, cells, u);
-            }
-            else
-            {
-                if(order_lo + 2 >= settings.max_order)
+                int const nang2 = std::min(nang + 4, settings.sphere_max_n);
+                int const ng2 = std::min(ng + 2, 16);
+                detail::box_support_integral(
+                    R0, u, cells, nang2, settings.sphere_radial_order, ng2, E2, B2);
+                std::array<double, 6> a{E1.x, E1.y, E1.z, B1.x, B1.y, B1.z};
+                std::array<double, 6> b{E2.x, E2.y, E2.z, B2.x, B2.y, B2.z};
+                err = detail::richardson_error(a, b);
+                if(err <= settings.tol
+                   || (nang2 >= settings.sphere_max_n && ng2 >= 16))
+                {
+                    converged = err <= settings.tol;
+                    E = E2;
+                    B = B2;
                     break;
-                order_lo += 2;
-                a = b;
+                }
+                E1 = E2;
+                B1 = B2;
+                nang = nang2;
+                ng = ng2;
             }
-            b = detail::integral_on_panels(panels, order_lo + 2, R0, cells, u);
         }
-        E = {b[0], b[1], b[2]};
-        B = {b[3], b[4], b[5]};
+        else
+        {
+            Vec3 const target{R0.x / cells.x, R0.y / cells.y, R0.z / cells.z};
+            int order_lo = settings.order;
+            auto panels = detail::panels_for(target, level);
+            auto a = detail::integral_on_panels(panels, order_lo, R0, cells, u);
+            auto b = detail::integral_on_panels(panels, order_lo + 2, R0, cells, u);
+            for(;;)
+            {
+                err = detail::richardson_error(a, b);
+                if(err <= settings.tol)
+                {
+                    converged = true;
+                    break;
+                }
+                if(level < settings.max_level)
+                {
+                    ++level;
+                    order_lo += 2;
+                    panels = detail::panels_for(target, level);
+                    a = detail::integral_on_panels(panels, order_lo, R0, cells, u);
+                }
+                else
+                {
+                    if(order_lo + 2 >= settings.max_order)
+                        break;
+                    order_lo += 2;
+                    a = b;
+                }
+                b = detail::integral_on_panels(panels, order_lo + 2, R0, cells, u);
+            }
+            E = {b[0], b[1], b[2]};
+            B = {b[3], b[4], b[5]};
+        }
 
         if(result)
         {
@@ -435,43 +630,68 @@ namespace picongpu::particles::neuralBunch::reference
         Settings const& settings = {},
         TileReport* report = nullptr)
     {
-        std::vector<double> tile(8 * 8 * 4 * 6, 0.0);
-        TileReport local_report;
+        constexpr std::size_t nslots = 8 * 8 * 4 * 6;
+        std::vector<double> tile(nslots, 0.0);
         Vec3 const cells{dx, dy, dz};
+        std::size_t const nsrc = sources.size();
+        std::size_t const total = nsrc * nslots;
 
-        for(Source const& src : sources)
+        // Each (source, slot) is independent.  Writing into a per-source
+        // contribution array and reducing in source order makes the result
+        // bitwise independent of the OpenMP thread count.
+        std::vector<double> contrib(total, 0.0);
+        std::vector<double> errs(total, 0.0);
+        std::vector<unsigned char> conv(total, 1);
+        std::vector<unsigned char> isnear(total, 0);
+
+#pragma omp parallel for schedule(dynamic,16)
+        for(std::size_t idx = 0; idx < total; ++idx)
         {
+            std::size_t const si = idx / nslots;
+            std::size_t const slot = idx % nslots;
+            Source const& src = sources[si];
             if(src.w == 0.0)
                 continue;
-            for(int k = 0; k < 4; ++k)
-            {
-                for(int j = 0; j < 8; ++j)
-                {
-                    for(int i = 0; i < 8; ++i)
-                    {
-                        for(int c = 0; c < 6; ++c)
-                        {
-                            Vec3 const pos = x_tile
-                                + Vec3{
-                                    (i + offsets()[c].x) * cells.x,
-                                    (j + offsets()[c].y) * cells.y,
-                                    (k + offsets()[c].z) * cells.z};
-                            Vec3 E, B;
-                            ShapeResult sr;
-                            shape_field(pos, src.x, src.u, dx, dy, dz, settings, E, B, &sr);
-                            double const component = c < 3 ? E[c] : B[c - 3];
-                            std::size_t const index =
-                                static_cast<std::size_t>(c + 6 * (i + 8 * (j + 8 * k)));
-                            tile[index] += -src.w * dx * dx * component;
-
-                            local_report.max_error = std::max(local_report.max_error, sr.error);
-                            local_report.all_converged = local_report.all_converged && sr.converged;
-                            local_report.any_near = local_report.any_near || sr.near;
-                        }
-                    }
-                }
-            }
+            int const c = static_cast<int>(slot % 6);
+            std::size_t r = slot / 6;
+            int const i = static_cast<int>(r % 8);
+            r /= 8;
+            int const j = static_cast<int>(r % 8);
+            int const k = static_cast<int>(r / 8);
+            Vec3 const pos = x_tile
+                + Vec3{
+                    (i + offsets()[c].x) * cells.x,
+                    (j + offsets()[c].y) * cells.y,
+                    (k + offsets()[c].z) * cells.z};
+            Vec3 E, B;
+            ShapeResult sr;
+            shape_field(pos, src.x, src.u, dx, dy, dz, settings, E, B, &sr);
+            double const component = c < 3 ? E[c] : B[c - 3];
+            contrib[idx] = -src.w * dx * dx * component;
+            errs[idx] = sr.error;
+            conv[idx] = sr.converged ? 1 : 0;
+            isnear[idx] = sr.near ? 1 : 0;
         }
+
+        TileReport local_report;
+        for(std::size_t slot = 0; slot < nslots; ++slot)
+        {
+            double sum = 0.0;
+            for(std::size_t si = 0; si < nsrc; ++si)
+                sum += contrib[si * nslots + slot];
+            tile[slot] = sum;
+        }
+        local_report.total = total;
+        for(std::size_t idx = 0; idx < total; ++idx)
+        {
+            local_report.max_error = std::max(local_report.max_error, errs[idx]);
+            if(!conv[idx])
+                ++local_report.not_converged;
+            if(isnear[idx])
+                ++local_report.near_count;
+        }
+        local_report.all_converged = local_report.not_converged == 0;
+        local_report.any_near = local_report.near_count != 0;
 
         if(report)
             *report = local_report;
