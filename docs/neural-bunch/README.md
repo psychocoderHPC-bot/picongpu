@@ -287,3 +287,29 @@ runnable HDF5/ADIOS2 example.
 Reference implementation, generator, training code, golden vectors and the
 reproducibility contract are in
 [`tools/neural-bunch/`](../../tools/neural-bunch/README.md).
+
+## Device-resident evaluation path
+
+The production field pass keeps every per-tile intermediate on the accelerator.
+`DeviceBanded.hpp` builds the feature matrix, runs the encoder and applies the
+decoder `gemm`/`gemvBatched` without returning a host vector. Per-band
+contributions (analytic point field, exact device quadrature, model bank,
+`mid_correction`, far multipole) accumulate into one `float[ntiles,1536]`
+device buffer with `ops::weightedAdd` in a fixed near, mid, far order. A single
+store kernel per `tileBatch` then applies the E/B normalisation and adds the
+values directly into the PIConGPU `FieldE`/`FieldB` device data boxes.
+
+Synchronisation: the stage performs exactly one `wait(queue)` after all chunks
+and bands have been enqueued, then one `synchronize()` per field to refresh the
+host mirror for the final diagnostics. There is no per-tile or per-source
+queue wait and no device-to-host copy in the tile path. The remaining host
+transfers are input-only: source coordinates decoded from openPMD (uploaded in
+bounded batches), the far-multipole matrix, and the FP64-reference tile sums
+when a policy actually routes pairs to the host oracle.
+
+`tileBatch` is the number of tiles whose accumulated values one store kernel
+launches for; the source batch inside a tile is bounded separately at 64
+sources. Particle insertion stays on the host: openPMD decoding, MPI, the
+host-side frame allocation, `IdProvider::getNewIdHost`, and
+`splitIntoListOfFrames` all run there, and the initializer only uploads the
+decoded source arrays.
