@@ -43,6 +43,7 @@
 #    include <chrono>
 #    include <cmath>
 #    include <cstdint>
+#    include <cstdlib>
 #    include <limits>
 #    include <sstream>
 #    include <stdexcept>
@@ -88,6 +89,7 @@ namespace picongpu
                     std::uint64_t referenceNearPairs = 0;
                     std::uint64_t referenceFarPairs = 0;
                     std::uint64_t zeroWeightPairs = 0;
+                    std::uint64_t forcedReferencePairs = 0;
                     std::uint64_t synthesizedIds = 0;
                     std::vector<std::uint64_t> localIds;
                     std::uint64_t localParticles = 0;
@@ -413,6 +415,10 @@ namespace picongpu
                         = Environment<simDim>::get().GridController().getCommunicator().getMPIComm();
                     int const rank = Environment<simDim>::get().GridController().getGlobalRank();
 
+                    // Validation-only switch: force the reference path for every
+                    // non-zero-weight pair on every rank (same environment on all ranks).
+                    bool const forceReference = std::getenv("NEURAL_BUNCH_FORCE_REFERENCE") != nullptr;
+
                     bool diagnosticChosen = false;
                     std::size_t diagnosticTile = 0;
                     std::array<double, 3> diagnosticOrigin{};
@@ -484,6 +490,12 @@ namespace picongpu
                                             position,
                                             tileOriginPhysical,
                                             cells);
+                                        if(forceReference && source.weight != 0.0)
+                                        {
+                                            referenceSources.push_back(referenceSource);
+                                            ++stats.forcedReferencePairs;
+                                            continue;
+                                        }
                                         switch(tg::classify(
                                             source.weight,
                                             gamma,
@@ -924,8 +936,9 @@ namespace picongpu
                     MPI_Allreduce(MPI_IN_PLACE, &totalPairs, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
                     log<picLog::PHYSICS>(
                         "neuralBunch: rank=%1% hybrid reasons near=%2% far=%3% gamma=%4% aspect=%5% "
-                        "zeroWeight=%6% referenceCoverage=%7%")
+                        "zeroWeight=%6% forced=%7% referenceCoverage=%8%")
                         % rank % nearPairs % farPairs % gammaPairs % aspectPairs % zeroPairs
+                        % stats.forcedReferencePairs
                         % num(totalPairs == 0u ? 0.0 : double(referencePairs) / double(totalPairs));
                     log<picLog::PHYSICS>(
                         "neuralBunch: rank=%1% referenceMaxAbs=%2% referenceL1=%3% "
