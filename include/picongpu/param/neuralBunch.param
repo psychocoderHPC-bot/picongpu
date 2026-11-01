@@ -23,7 +23,7 @@
  * the particle species inside the openPMD file.
  */
 
-#include "picongpu/param/speciesDefinition.param"
+#include "picongpu/particles/param.hpp"
 
 #include <cstdint>
 #include <string>

@@ -11,7 +11,6 @@
 
 #    include "picongpu/fields/FieldB.hpp"
 #    include "picongpu/fields/FieldE.hpp"
-#    include "picongpu/particles/param.hpp"
 #    include "picongpu/param/neuralBunch.param"
 #    include "picongpu/particles/neuralBunch/Inference.hpp"
 #    include "picongpu/particles/neuralBunch/Model.hpp"
@@ -19,6 +18,7 @@
 #    include "picongpu/particles/neuralBunch/ReferenceTile.hpp"
 #    include "picongpu/particles/neuralBunch/SourceFile.hpp"
 #    include "picongpu/particles/neuralBunch/TileGeometry.hpp"
+#    include "picongpu/particles/param.hpp"
 #    include "picongpu/plugins/output/WriteSpeciesCommon.hpp"
 
 #    include <pmacc/Environment.hpp>
