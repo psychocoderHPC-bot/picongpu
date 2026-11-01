@@ -690,6 +690,19 @@ endif(PIC_HAVE_FFTW3)
 if(PIC_HAVE_neuralBunch)
     target_link_libraries(picongpu PUBLIC alpaka::nn alpakaVendor::alpakaVendor)
     target_compile_definitions(picongpu PUBLIC "-DPIC_ENABLE_NEURAL_BUNCH=1")
+    # The reference fallback is parallelised over the independent tile outputs.
+    # The host-only translation unit needs OpenMP explicitly; nvcc host code gets
+    # -fopenmp from alpaka but picongpu-hostonly does not.
+    find_package(OpenMP REQUIRED COMPONENTS CXX)
+    target_link_libraries(picongpu-hostonly PUBLIC OpenMP::OpenMP_CXX)
+endif(PIC_HAVE_neuralBunch)
+
+if(PIC_HAVE_neuralBunch)
+    enable_testing()
+    add_subdirectory(
+        "${PIConGPUapp_SOURCE_DIR}/../../test/neuralBunch"
+        "${CMAKE_BINARY_DIR}/test_neuralBunch"
+    )
 endif(PIC_HAVE_neuralBunch)
 
 # Including <nlohmann/json.hpp> will throw loads of warnings. Quiet them.

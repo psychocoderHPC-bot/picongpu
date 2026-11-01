@@ -15,6 +15,8 @@
 #    include "picongpu/fields/FieldE.hpp"
 #    include "picongpu/particles/neuralBunch/Inference.hpp"
 #    include "picongpu/particles/neuralBunch/Model.hpp"
+#    include "picongpu/particles/neuralBunch/ReferenceKernel.hpp"
+#    include "picongpu/particles/neuralBunch/ReferenceTile.hpp"
 #    include "picongpu/particles/neuralBunch/SourceFile.hpp"
 #    include "picongpu/particles/neuralBunch/TileGeometry.hpp"
 #    include "picongpu/plugins/output/WriteSpeciesCommon.hpp"
@@ -28,6 +30,7 @@
 #    include <pmacc/meta/conversion/MakeSeq.hpp>
 #    include <pmacc/meta/conversion/RemoveFromSeq.hpp>
 #    include <pmacc/particles/meta/FindByNameOrType.hpp>
+#    include <pmacc/particles/IdProvider.hpp>
 #    include <pmacc/particles/operations/splitIntoListOfFrames.kernel>
 #    include <pmacc/particles/ParticleDescription.hpp>
 #    include <pmacc/traits/HasIdentifier.hpp>
@@ -57,6 +60,7 @@ namespace picongpu
                 using namespace picongpu::particles::neuralBunch;
                 using picongpu::neuralBunch::NeuralBunchParam;
                 namespace tg = picongpu::particles::neuralBunch::tileGeometry;
+                namespace nbRef = picongpu::particles::neuralBunch::reference;
 
                 static_assert(
                     tg::tileNx == static_cast<int>(kTileNx) && tg::tileNy == static_cast<int>(kTileNy)
@@ -79,6 +83,13 @@ namespace picongpu
                     std::uint64_t globalParticles = 0;
                     std::uint64_t neuralPairs = 0;
                     std::uint64_t referencePairs = 0;
+                    std::uint64_t referenceGammaPairs = 0;
+                    std::uint64_t referenceAspectPairs = 0;
+                    std::uint64_t referenceNearPairs = 0;
+                    std::uint64_t referenceFarPairs = 0;
+                    std::uint64_t zeroWeightPairs = 0;
+                    std::uint64_t synthesizedIds = 0;
+                    std::vector<std::uint64_t> localIds;
                     std::uint64_t localParticles = 0;
                     double globalWeight = 0.0;
                     double localWeight = 0.0;
@@ -86,6 +97,15 @@ namespace picongpu
                     double decodedBytes = 0.0;
                     double ioSeconds = 0.0;
                     double inferenceSeconds = 0.0;
+                    double referenceSeconds = 0.0;
+                    double referenceMaxAbs = 0.0;
+                    double referenceL1 = 0.0;
+                    double diagHybridVsReference = -1.0;
+                    double diagHybridVsNeural = -1.0;
+                    double diagReferenceScale = 0.0;
+                    bool diagAvailable = false;
+                    char const* idMode = "none";
+                    bool idUnique = true;
                     double fieldStoreSeconds = 0.0;
                     double particleSeconds = 0.0;
                     double maxLatent = 0.0;
@@ -94,34 +114,6 @@ namespace picongpu
                 };
 
                 constexpr double decodedBytesPerParticle = 3.0 * 8.0 + 3.0 * 8.0 + 8.0 + 8.0 + 8.0 + 8.0 + 1.0;
-
-                /** Build tile-local sources for one chunk. */
-                std::vector<Source> makeSources(
-                    ParticleChunk const& chunk,
-                    std::array<double, 3> const& tileOriginPhysical,
-                    std::array<double, 3> const& cellSizeSI)
-                {
-                    std::vector<Source> sources;
-                    sources.reserve(chunk.size());
-                    for(std::size_t i = 0; i < chunk.size(); ++i)
-                    {
-                        if(!chunk.valid[i])
-                            continue;
-                        Source source;
-                        for(int axis = 0; axis < 3; ++axis)
-                        {
-                            source.r[axis] = (chunk.position[3 * i + axis] - tileOriginPhysical[axis])
-                                             / cellSizeSI[axis];
-                            source.u[axis] = chunk.u[3 * i + axis];
-                        }
-                        source.weight = chunk.weight[i];
-                        // Cubic PIConGPU cells in Phase A, matching the model's dx/dy/dz spacing.
-                        source.aY = 1.0;
-                        source.aZ = 1.0;
-                        sources.push_back(source);
-                    }
-                    return sources;
-                }
 
                 template<typename T_Species>
                 struct ParticleInserter
@@ -258,9 +250,17 @@ namespace picongpu
                             totalCellPtr[target] = totalCellIndex;
 
                             if constexpr(hasId)
-                                id[target] = chunk.id.empty()
-                                                 ? static_cast<IdValue>(chunk.begin + i + 1u)
-                                                 : static_cast<IdValue>(chunk.id[i]);
+                            {
+                                if(chunk.id.empty())
+                                {
+                                    auto idProvider = dc.get<IdProvider>("globalId");
+                                    id[target] = static_cast<IdValue>(idProvider->getNewIdHost());
+                                    ++stats.synthesizedIds;
+                                }
+                                else
+                                    id[target] = static_cast<IdValue>(chunk.id[i]);
+                                stats.localIds.push_back(static_cast<std::uint64_t>(id[target]));
+                            }
                             ++target;
                         }
 
@@ -366,6 +366,30 @@ namespace picongpu
                     Model const model = Model::load(params.modelPath);
                     ModelMetadata const& meta = model.metadata();
 
+                    tg::CellSizes const cells{cellSizeSI[0], cellSizeSI[1], cellSizeSI[2]};
+                    double const aspectY = cells.aspectY();
+                    double const aspectZ = cells.aspectZ();
+                    tg::DomainBounds const domain{
+                        meta.gammaMin,
+                        meta.gammaMax,
+                        meta.aYMin,
+                        meta.aYMax,
+                        meta.aZMin,
+                        meta.aZMax,
+                        meta.dMinCells,
+                        meta.dMaxCells};
+
+                    if(!params.enableReferenceFallback)
+                        throw std::runtime_error(
+                            "neuralBunch: enableReferenceFallback=false is not supported; the Phase B hybrid "
+                            "policy always requires the reference fallback.");
+                    if(!tg::aspectCovered(cells, domain))
+                        throw std::runtime_error(
+                            "neuralBunch: simulation cell aspect a_y=" + num(aspectY) + ", a_z=" + num(aspectZ)
+                            + " is outside the model domain a_y=[" + num(domain.aYMin) + ","
+                            + num(domain.aYMax) + "], a_z=[" + num(domain.aZMin) + "," + num(domain.aZMax)
+                            + "]. Refusing to clamp the model domain.");
+
                     auto& device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
                     auto queue = device.makeQueue(pmacc::ComputeQueuePolicies);
                     auto const exec = pmacc::ComputeExecutor;
@@ -375,6 +399,9 @@ namespace picongpu
                     std::vector<std::vector<double>> latents(
                         grid.tiles.size(),
                         std::vector<double>(meta.latent, 0.0));
+                    std::vector<std::vector<double>> referenceTiles(
+                        grid.tiles.size(),
+                        std::vector<double>(tg::outputDimension, 0.0));
 
                     DataConnector& dc = Environment<>::get().DataConnector();
                     auto fieldE = dc.get<FieldE>(FieldE::getName());
@@ -386,12 +413,19 @@ namespace picongpu
                         = Environment<simDim>::get().GridController().getCommunicator().getMPIComm();
                     int const rank = Environment<simDim>::get().GridController().getGlobalRank();
 
+                    bool diagnosticChosen = false;
+                    std::size_t diagnosticTile = 0;
+                    std::array<double, 3> diagnosticOrigin{};
+                    std::vector<Source> diagnosticSources;
+                    std::vector<nbRef::Source> diagnosticReferenceSources;
+                    std::vector<std::vector<nbRef::Source>> referenceWork(grid.tiles.size());
+
                     {
                         SourceReader reader(params.filename, params.iteration, params.species, comm);
                         SourceMetadata const& sourceMeta = reader.metadata();
                         if(params.timePolicy != 0)
                             throw std::runtime_error(
-                                "neuralBunch: Phase A requires timePolicy == 0 (source time equals injection "
+                                "neuralBunch: Phase B requires timePolicy == 0 (source time equals injection "
                                 "time).");
                         if(std::abs(sourceMeta.time - 0.0) > 1.0e-12 * (1.0 + std::abs(sourceMeta.time)))
                             throw std::runtime_error(
@@ -404,7 +438,6 @@ namespace picongpu
                             [&](ParticleChunk const& chunk)
                             {
                                 stats.decodedBytes += chunk.size() * decodedBytesPerParticle;
-                                stats.neuralPairs += chunk.size() * grid.tiles.size();
                                 for(std::size_t tileIndex = 0; tileIndex < grid.tiles.size(); ++tileIndex)
                                 {
                                     std::array<double, 3> tileOriginPhysical{};
@@ -412,32 +445,296 @@ namespace picongpu
                                         tileOriginPhysical[axis]
                                             = static_cast<double>(grid.tiles[tileIndex].origin[axis])
                                               * cellSizeSI[axis];
-                                    auto sources = makeSources(chunk, tileOriginPhysical, cellSizeSI);
-                                    if(sources.empty())
-                                        continue;
-                                    auto const encodeStart = std::chrono::steady_clock::now();
-                                    auto hidden = runEncoder(queue, exec, meta, tensors, sources);
-                                    stats.inferenceSeconds += std::chrono::duration<double>(
-                                                                  std::chrono::steady_clock::now() - encodeStart)
-                                                                  .count();
-                                    auto& latent = latents[tileIndex];
-                                    for(std::size_t i = 0; i < sources.size(); ++i)
-                                        for(std::size_t k = 0; k < meta.latent; ++k)
+
+                                    std::vector<Source> allSources;
+                                    std::vector<nbRef::Source> allReferenceSources;
+                                    std::vector<Source> neuralSources;
+                                    std::vector<nbRef::Source> referenceSources;
+                                    allSources.reserve(chunk.size());
+                                    allReferenceSources.reserve(chunk.size());
+                                    for(std::size_t i = 0; i < chunk.size(); ++i)
+                                    {
+                                        if(!chunk.valid[i])
+                                            continue;
+                                        Source source;
+                                        std::array<double, 3> position{};
+                                        for(int axis = 0; axis < 3; ++axis)
                                         {
-                                            double const contribution
-                                                = -sources[i].weight
-                                                  * static_cast<double>(
-                                                      hidden[i * meta.latent + k]);
-                                            latent[k] += contribution;
-                                            stats.maxLatent = std::max(stats.maxLatent, std::abs(latent[k]));
+                                            position[axis] = chunk.position[3 * i + axis];
+                                            source.r[axis] = (position[axis] - tileOriginPhysical[axis])
+                                                             / cells.dx;
+                                            source.u[axis] = chunk.u[3 * i + axis];
                                         }
+                                        source.weight = chunk.weight[i];
+                                        source.aY = aspectY;
+                                        source.aZ = aspectZ;
+                                        allSources.push_back(source);
+
+                                        nbRef::Source referenceSource;
+                                        referenceSource.x = {position[0], position[1], position[2]};
+                                        referenceSource.u = {source.u[0], source.u[1], source.u[2]};
+                                        referenceSource.w = source.weight;
+                                        allReferenceSources.push_back(referenceSource);
+
+                                        double const gamma
+                                            = std::sqrt(1.0 + source.u[0] * source.u[0]
+                                                        + source.u[1] * source.u[1]
+                                                        + source.u[2] * source.u[2]);
+                                        double const distanceCells = tg::minimumStaggeredDistanceCells(
+                                            position,
+                                            tileOriginPhysical,
+                                            cells);
+                                        switch(tg::classify(
+                                            source.weight,
+                                            gamma,
+                                            aspectY,
+                                            aspectZ,
+                                            distanceCells,
+                                            domain))
+                                        {
+                                        case tg::PairRoute::neural:
+                                            neuralSources.push_back(source);
+                                            break;
+                                        case tg::PairRoute::referenceGamma:
+                                            referenceSources.push_back(referenceSource);
+                                            ++stats.referenceGammaPairs;
+                                            break;
+                                        case tg::PairRoute::referenceAspect:
+                                            referenceSources.push_back(referenceSource);
+                                            ++stats.referenceAspectPairs;
+                                            break;
+                                        case tg::PairRoute::referenceNear:
+                                            referenceSources.push_back(referenceSource);
+                                            ++stats.referenceNearPairs;
+                                            break;
+                                        case tg::PairRoute::referenceFar:
+                                            referenceSources.push_back(referenceSource);
+                                            ++stats.referenceFarPairs;
+                                            break;
+                                        case tg::PairRoute::zeroWeight:
+                                            ++stats.zeroWeightPairs;
+                                            break;
+                                        }
+                                    }
+
+                                    if(!neuralSources.empty())
+                                    {
+                                        auto const encodeStart = std::chrono::steady_clock::now();
+                                        auto hidden
+                                            = runEncoder(queue, exec, meta, tensors, neuralSources);
+                                        stats.inferenceSeconds += std::chrono::duration<double>(
+                                                                      std::chrono::steady_clock::now()
+                                                                      - encodeStart)
+                                                                      .count();
+                                        auto& latent = latents[tileIndex];
+                                        for(std::size_t i = 0; i < neuralSources.size(); ++i)
+                                            for(std::size_t k = 0; k < meta.latent; ++k)
+                                            {
+                                                double const contribution
+                                                    = -neuralSources[i].weight
+                                                      * static_cast<double>(hidden[i * meta.latent + k]);
+                                                latent[k] += contribution;
+                                                stats.maxLatent
+                                                    = std::max(stats.maxLatent, std::abs(latent[k]));
+                                            }
+                                        stats.neuralPairs += neuralSources.size();
+                                    }
+
+                                    if(!referenceSources.empty())
+                                    {
+                                        // Reference work is evaluated after the tile loop, in parallel.
+                                        referenceWork[tileIndex] = std::move(referenceSources);
+                                        stats.referencePairs += referenceWork[tileIndex].size();
+                                    }
+
+                                    if(!diagnosticChosen && !neuralSources.empty()
+                                       && !referenceWork[tileIndex].empty())
+                                    {
+                                        // Compare the three policies on a bounded subset of this tile:
+                                        // up to four neural and four reference sources. This keeps the
+                                        // reference-only diagnostic affordable while using the same
+                                        // production code paths.
+                                        diagnosticChosen = true;
+                                        diagnosticTile = tileIndex;
+                                        diagnosticOrigin = tileOriginPhysical;
+                                        std::size_t const neuralCount = std::min<std::size_t>(4u, neuralSources.size());
+                                        std::size_t const referenceCount
+                                            = std::min<std::size_t>(4u, referenceWork[tileIndex].size());
+                                        for(std::size_t k = 0; k < neuralCount; ++k)
+                                        {
+                                            nbRef::Source reference;
+                                            for(int axis = 0; axis < 3; ++axis)
+                                            {
+                                                (&reference.x.x)[axis]
+                                                    = neuralSources[k].r[axis] * cells.dx
+                                                      + tileOriginPhysical[axis];
+                                                (&reference.u.x)[axis] = neuralSources[k].u[axis];
+                                            }
+                                            reference.w = neuralSources[k].weight;
+                                            diagnosticReferenceSources.push_back(reference);
+                                        }
+                                        for(std::size_t k = 0; k < referenceCount; ++k)
+                                            diagnosticReferenceSources.push_back(referenceWork[tileIndex][k]);
+
+                                        for(auto const& reference : diagnosticReferenceSources)
+                                        {
+                                            Source source;
+                                            for(int axis = 0; axis < 3; ++axis)
+                                            {
+                                                source.r[axis]
+                                                    = ((&reference.x.x)[axis] - tileOriginPhysical[axis])
+                                                      / cells.dx;
+                                                source.u[axis] = (&reference.u.x)[axis];
+                                            }
+                                            source.weight = reference.w;
+                                            source.aY = aspectY;
+                                            source.aZ = aspectZ;
+                                            diagnosticSources.push_back(source);
+                                        }
+                                    }
                                 }
+
+                                // Host FP64 reference fallback. Tiles are visited in order;
+                                // each tile parallelises its 1536 independent output points.
+                                auto const referenceStart = std::chrono::steady_clock::now();
+                                std::uint64_t referenceMaxErrors = 0;
+                                for(std::size_t tileIndex = 0; tileIndex < grid.tiles.size(); ++tileIndex)
+                                {
+                                    if(referenceWork[tileIndex].empty())
+                                        continue;
+                                    std::array<double, 3> tileOriginPhysical{};
+                                    for(int axis = 0; axis < 3; ++axis)
+                                        tileOriginPhysical[axis]
+                                            = static_cast<double>(grid.tiles[tileIndex].origin[axis])
+                                              * cellSizeSI[axis];
+                                    nbRef::TileReport report;
+                                    auto const referenceValues = nbRef::tileFieldParallel(
+                                        {tileOriginPhysical[0], tileOriginPhysical[1], tileOriginPhysical[2]},
+                                        referenceWork[tileIndex],
+                                        cells.dx,
+                                        cells.dy,
+                                        cells.dz,
+                                        &report);
+                                    auto& referenceTile = referenceTiles[tileIndex];
+                                    double localMax = 0.0;
+                                    double localL1 = 0.0;
+                                    for(std::size_t k = 0; k < referenceValues.size(); ++k)
+                                    {
+                                        referenceTile[k] += referenceValues[k];
+                                        localMax = std::max(localMax, std::abs(referenceValues[k]));
+                                        localL1 += std::abs(referenceValues[k]);
+                                    }
+#pragma omp critical(neuralBunchReferenceStats)
+                                    {
+                                        stats.referenceMaxAbs
+                                            = std::max(stats.referenceMaxAbs, localMax);
+                                        stats.referenceL1 += localL1;
+                                        if(!report.all_converged)
+                                        {
+                                            ++referenceMaxErrors;
+                                            log<picLog::PHYSICS>(
+                                                "neuralBunch: rank=%1% tile=%2% reference quadrature not "
+                                                "converged (max error %3%)")
+                                                % rank % tileIndex % num(report.max_error);
+                                        }
+                                    }
+                                    referenceWork[tileIndex].clear();
+                                }
+                                stats.referenceSeconds += std::chrono::duration<double>(
+                                                              std::chrono::steady_clock::now() - referenceStart)
+                                                              .count();
+                                if(referenceMaxErrors != 0)
+                                    log<picLog::PHYSICS>(
+                                        "neuralBunch: rank=%1% reference quadrature not converged for %2% "
+                                        "tile(s) in this chunk")
+                                        % rank % referenceMaxErrors;
                             },
                             params.chunkSize);
                         stats.ioSeconds += std::chrono::duration<double>(
                                                std::chrono::steady_clock::now() - ioStart)
                                                .count();
                         stats.globalParticles = sourceMeta.globalCount;
+                    }
+
+                    if(stats.neuralPairs + stats.referencePairs + stats.zeroWeightPairs
+                       != stats.globalParticles * grid.tiles.size())
+                        throw std::runtime_error(
+                            "neuralBunch: pair partition is not exhaustive: neural "
+                            + std::to_string(stats.neuralPairs) + " + reference "
+                            + std::to_string(stats.referencePairs) + " + zero-weight "
+                            + std::to_string(stats.zeroWeightPairs) + " != "
+                            + std::to_string(stats.globalParticles * grid.tiles.size()) + " pairs.");
+
+                    // Hybrid-vs-forced comparison for one small tile where both routes occur.
+                    if(diagnosticChosen)
+                    {
+                        auto const referenceAll = nbRef::tileFieldParallel(
+                            {diagnosticOrigin[0], diagnosticOrigin[1], diagnosticOrigin[2]},
+                            diagnosticReferenceSources,
+                            cells.dx,
+                            cells.dy,
+                            cells.dz);
+                        std::vector<double> referenceAllSI(tg::outputDimension, 0.0);
+                        for(std::size_t k = 0; k < referenceAllSI.size(); ++k)
+                            referenceAllSI[k] = (k % 6) < 3
+                                                    ? tg::normalizedEToSI(referenceAll[k], cells.dx)
+                                                    : tg::normalizedBToSI(referenceAll[k], cells.dx);
+
+                        auto hidden = runEncoder(queue, exec, meta, tensors, diagnosticSources);
+                        std::vector<double> neuralAllLatent(meta.latent, 0.0);
+                        for(std::size_t i = 0; i < diagnosticSources.size(); ++i)
+                            for(std::size_t k = 0; k < meta.latent; ++k)
+                                neuralAllLatent[k] -= diagnosticSources[i].weight
+                                                      * static_cast<double>(hidden[i * meta.latent + k]);
+                        std::vector<float> const neuralAllFloat(
+                            neuralAllLatent.begin(),
+                            neuralAllLatent.end());
+                        auto const neuralAll = decodeFromLatent(
+                            queue,
+                            exec,
+                            meta,
+                            tensors,
+                            neuralAllFloat,
+                            aspectY,
+                            aspectZ,
+                            FieldNormalization{cells.dx});
+
+                        std::vector<float> const neuralSubFloat(
+                            latents[diagnosticTile].begin(),
+                            latents[diagnosticTile].end());
+                        auto const neuralSub = decodeFromLatent(
+                            queue,
+                            exec,
+                            meta,
+                            tensors,
+                            neuralSubFloat,
+                            aspectY,
+                            aspectZ,
+                            FieldNormalization{cells.dx});
+
+                        double hybridVsReference = 0.0;
+                        double hybridVsNeural = 0.0;
+                        double scale = 0.0;
+                        for(std::size_t k = 0; k < tg::outputDimension; ++k)
+                        {
+                            double const referenceSubSI = (k % 6) < 3
+                                                              ? tg::normalizedEToSI(
+                                                                    referenceTiles[diagnosticTile][k],
+                                                                    cells.dx)
+                                                              : tg::normalizedBToSI(
+                                                                    referenceTiles[diagnosticTile][k],
+                                                                    cells.dx);
+                            double const hybrid = static_cast<double>(neuralSub[k]) + referenceSubSI;
+                            hybridVsReference
+                                = std::max(hybridVsReference, std::abs(hybrid - referenceAllSI[k]));
+                            hybridVsNeural
+                                = std::max(hybridVsNeural, std::abs(hybrid - static_cast<double>(neuralAll[k])));
+                            scale = std::max(scale, std::max(std::abs(referenceAllSI[k]), std::abs(static_cast<double>(neuralAll[k]))));
+                        }
+                        stats.diagHybridVsReference = hybridVsReference / std::max(scale, 1e-300);
+                        stats.diagHybridVsNeural = hybridVsNeural / std::max(scale, 1e-300);
+                        stats.diagReferenceScale = scale;
+                        stats.diagAvailable = true;
                     }
 
                     auto const storeStart = std::chrono::steady_clock::now();
@@ -453,9 +750,10 @@ namespace picongpu
                             meta,
                             tensors,
                             latentFloat,
-                            1.0,
-                            1.0,
-                            FieldNormalization{dxMeters});
+                            aspectY,
+                            aspectZ,
+                            FieldNormalization{cells.dx});
+                        auto const& referenceTile = referenceTiles[tileIndex];
                         for(int k = 0; k < tg::tileNz; ++k)
                             for(int j = 0; j < tg::tileNy; ++j)
                                 for(int i = 0; i < tg::tileNx; ++i)
@@ -473,14 +771,18 @@ namespace picongpu
                                     auto& b = hostB(localCell);
                                     for(int component = 0; component < 3; ++component)
                                     {
-                                        e[component] += static_cast<float_X>(tg::normalizedEToInternal(
-                                            values[tg::outputIndex(i, j, k, component)],
-                                            dxMeters,
-                                            unitE));
-                                        b[component] += static_cast<float_X>(tg::normalizedBToInternal(
-                                            values[tg::outputIndex(i, j, k, component + 3)],
-                                            dxMeters,
-                                            unitB));
+                                        std::size_t const index = tg::outputIndex(i, j, k, component);
+                                        std::size_t const indexB = tg::outputIndex(i, j, k, component + 3);
+                                        double const eSI = static_cast<double>(values[index])
+                                                           + tg::normalizedEToSI(
+                                                               referenceTile[index],
+                                                               cells.dx);
+                                        double const bSI = static_cast<double>(values[indexB])
+                                                           + tg::normalizedBToSI(
+                                                               referenceTile[indexB],
+                                                               cells.dx);
+                                        e[component] += static_cast<float_X>(eSI / unitE);
+                                        b[component] += static_cast<float_X>(bSI / unitB);
                                     }
                                 }
                     }
@@ -547,6 +849,49 @@ namespace picongpu
                     unsigned long long totalNonFinite = 0;
                     MPI_Allreduce(&nonFinite, &totalNonFinite, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
 
+                    // Particle-ID materialisation and global uniqueness check.
+                    if constexpr(ParticleInserter<typename neuralBunch::Species>::hasId)
+                    {
+                        stats.idMode = stats.synthesizedIds == 0u ? "file" : "synthesized";
+                        unsigned long long localIds = stats.localIds.size();
+                        unsigned long long totalIds = 0;
+                        MPI_Allreduce(&localIds, &totalIds, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+                        if(totalIds != totalCount)
+                            throw std::runtime_error(
+                                "neuralBunch: materialized " + std::to_string(totalIds)
+                                + " particle IDs but inserted " + std::to_string(totalCount) + " particles.");
+                        int localCount = static_cast<int>(stats.localIds.size());
+                        std::vector<int> counts;
+                        if(rank == 0)
+                            counts.resize(Environment<simDim>::get().GridController().getGlobalSize(), 0);
+                        MPI_Gather(&localCount, 1, MPI_INT, counts.data(), 1, MPI_INT, 0, comm);
+                        std::vector<int> displacements(counts.size(), 0);
+                        if(rank == 0)
+                            for(std::size_t i = 1; i < counts.size(); ++i)
+                                displacements[i] = displacements[i - 1] + counts[i - 1];
+                        std::vector<std::uint64_t> allIds(
+                            rank == 0 ? static_cast<std::size_t>(totalIds) : 0u);
+                        MPI_Gatherv(
+                            stats.localIds.data(),
+                            localCount,
+                            MPI_UINT64_T,
+                            allIds.data(),
+                            counts.data(),
+                            displacements.data(),
+                            MPI_UINT64_T,
+                            0,
+                            comm);
+                        int duplicates = 0;
+                        if(rank == 0)
+                        {
+                            std::sort(allIds.begin(), allIds.end());
+                            duplicates = static_cast<int>(
+                                std::adjacent_find(allIds.begin(), allIds.end()) != allIds.end());
+                        }
+                        MPI_Bcast(&duplicates, 1, MPI_INT, 0, comm);
+                        stats.idUnique = duplicates == 0;
+                    }
+
                     double const chargePerWeight = -1.602176634e-19;
                     double const globalCharge = chargePerWeight * stats.globalWeight;
                     log<picLog::PHYSICS>(
@@ -564,9 +909,33 @@ namespace picongpu
                         % rank % totalNonFinite % num(stats.maxLatent);
                     log<picLog::PHYSICS>(
                         "neuralBunch: rank=%1% decodedBytes=%2% ioSeconds=%3% inferenceSeconds=%4% "
-                        "fieldStoreSeconds=%5% particleSeconds=%6%")
+                        "referenceSeconds=%5% fieldStoreSeconds=%6% particleSeconds=%7%")
                         % rank % num(stats.decodedBytes) % num(stats.ioSeconds) % num(stats.inferenceSeconds)
-                        % num(stats.fieldStoreSeconds) % num(stats.particleSeconds);
+                        % num(stats.referenceSeconds) % num(stats.fieldStoreSeconds)
+                        % num(stats.particleSeconds);
+                    unsigned long long neuralPairs = stats.neuralPairs;
+                    unsigned long long referencePairs = stats.referencePairs;
+                    unsigned long long nearPairs = stats.referenceNearPairs;
+                    unsigned long long farPairs = stats.referenceFarPairs;
+                    unsigned long long gammaPairs = stats.referenceGammaPairs;
+                    unsigned long long aspectPairs = stats.referenceAspectPairs;
+                    unsigned long long zeroPairs = stats.zeroWeightPairs;
+                    unsigned long long totalPairs = neuralPairs + referencePairs + zeroPairs;
+                    MPI_Allreduce(MPI_IN_PLACE, &totalPairs, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+                    log<picLog::PHYSICS>(
+                        "neuralBunch: rank=%1% hybrid reasons near=%2% far=%3% gamma=%4% aspect=%5% "
+                        "zeroWeight=%6% referenceCoverage=%7%")
+                        % rank % nearPairs % farPairs % gammaPairs % aspectPairs % zeroPairs
+                        % num(totalPairs == 0u ? 0.0 : double(referencePairs) / double(totalPairs));
+                    log<picLog::PHYSICS>(
+                        "neuralBunch: rank=%1% referenceMaxAbs=%2% referenceL1=%3% "
+                        "hybridVsReference=%4% hybridVsNeural=%5% diagScale=%6% diagAvailable=%7%")
+                        % rank % num(stats.referenceMaxAbs) % num(stats.referenceL1)
+                        % num(stats.diagHybridVsReference) % num(stats.diagHybridVsNeural)
+                        % num(stats.diagReferenceScale) % (stats.diagAvailable ? 1 : 0);
+                    log<picLog::PHYSICS>(
+                        "neuralBunch: rank=%1% ids=%2% unique=%3% synthesized=%4%")
+                        % rank % stats.idMode % (stats.idUnique ? 1 : 0) % stats.synthesizedIds;
 
                     if(totalCount != stats.globalParticles)
                         throw std::runtime_error(
@@ -581,6 +950,8 @@ namespace picongpu
                     if(totalNonFinite != 0)
                         throw std::runtime_error(
                             "neuralBunch: non-finite field values detected after injection.");
+                    if(!stats.idUnique)
+                        throw std::runtime_error("neuralBunch: duplicate particle IDs after insertion.");
                     return stats;
                 }
             } // namespace neuralBunchDetail

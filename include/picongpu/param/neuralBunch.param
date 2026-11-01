@@ -7,15 +7,16 @@
 
 /** User-facing parameters of the neural bunch initializer (Phase A).
  *
- * Phase A is plumbing and mechanism only:
- *  - the model domain bounds (``d_min_cells``/``d_max_cells``) are deliberately
- *    ignored, every (source, tile) pair is evaluated by the neural path;
- *  - the reference fallback is not implemented yet, so
- *    ``enableReferenceFallback`` is accepted but has no effect in this phase;
+ * Phase B implements the deterministic hybrid policy:
+ *  - every (source, tile) pair is routed once by the MODEL-FORMAT domain rules
+ *    (gamma, both aspects, d_min_cells/d_max_cells) to either the neural path
+ *    or the FP64 reference fallback;
+ *  - ``enableReferenceFallback`` must stay true;
  *  - ``timePolicy`` must stay 0, which means the openPMD source time equals the
  *    injection time (no linear drift is applied);
- *  - ``a_y = a_z = 1`` because PIConGPU cells are cubic in this phase, matching
- *    the model's dx/dy/dz tile spacing.
+ *  - ``a_y = dy/dx`` and ``a_z = dz/dx`` are taken from the PIConGPU grid and
+ *    threaded through features, decoder interpolation, tile geometry and the
+ *    reference kernel; there is no cubic-cell assumption.
  *
  * ``Species`` selects the PIConGPU species that receives the particles. It
  * must be an electron species and its name must match ``species``, the name of
@@ -46,8 +47,8 @@ namespace picongpu::neuralBunch
         std::uint64_t chunkSize = 1u << 20;
         //! Number of tiles evaluated per inference batch (accepted, Phase A uses one tile at a time).
         std::uint32_t tileBatch = 1;
-        //! Reserved for Phase B, accepted but ignored in Phase A.
-        bool enableReferenceFallback = false;
+        //! Must stay true: the Phase B hybrid policy always uses the reference fallback.
+        bool enableReferenceFallback = true;
         //! Must stay 0: source time equals injection time (no drift applied).
         int timePolicy = 0;
     };
