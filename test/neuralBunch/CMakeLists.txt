@@ -46,20 +46,45 @@ target_compile_definitions(
         ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
 )
 add_test(NAME neuralBunchProbeFeatureTest COMMAND neuralBunchProbeFeatureTest)
-enable_language(CUDA)
-add_executable(neuralBunchBandedBenchmark bandedBenchmark.cu)
-set_target_properties(neuralBunchBandedBenchmark PROPERTIES CUDA_ARCHITECTURES "70;75")
-target_compile_features(neuralBunchBandedBenchmark PRIVATE cxx_std_20)
-target_include_directories(neuralBunchBandedBenchmark PRIVATE "${PIConGPUapp_SOURCE_DIR}/..")
-target_link_libraries(
-    neuralBunchBandedBenchmark
-    PRIVATE alpaka::nn alpakaVendor::alpakaVendor nlohmann_json::nlohmann_json OpenMP::OpenMP_CXX
-)
-alpaka_finalize(neuralBunchBandedBenchmark)
-target_compile_definitions(
-    neuralBunchBandedBenchmark
-    PRIVATE
-        ALPAKA_CMAKE_TARGET_HEADERS_FINALIZE_CALLED
-        ALPAKA_CMAKE_TARGET_CUDA_FINALIZE_CALLED
-        ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
-)
+# The benchmark binaries are CUDA-only; a CPU-only configuration must still configure and test the host tests.
+if(alpaka_DEP_CUDA)
+    enable_language(CUDA)
+    add_executable(neuralBunchBandedBenchmark bandedBenchmark.cu)
+    set_target_properties(neuralBunchBandedBenchmark PROPERTIES CUDA_ARCHITECTURES "70;75")
+    target_compile_features(neuralBunchBandedBenchmark PRIVATE cxx_std_20)
+    target_include_directories(neuralBunchBandedBenchmark PRIVATE "${PIConGPUapp_SOURCE_DIR}/..")
+    target_link_libraries(
+        neuralBunchBandedBenchmark
+        PRIVATE alpaka::nn alpakaVendor::alpakaVendor nlohmann_json::nlohmann_json OpenMP::OpenMP_CXX
+    )
+    alpaka_finalize(neuralBunchBandedBenchmark)
+    target_compile_definitions(
+        neuralBunchBandedBenchmark
+        PRIVATE
+            ALPAKA_CMAKE_TARGET_HEADERS_FINALIZE_CALLED
+            ALPAKA_CMAKE_TARGET_CUDA_FINALIZE_CALLED
+            ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
+    )
+    add_executable(
+        neuralBunchExactBenchmark
+        exactBenchmark.cu
+        "${PIConGPUapp_SOURCE_DIR}/particles/neuralBunch/ReferenceTile.cpp"
+    )
+    set_target_properties(neuralBunchExactBenchmark PROPERTIES CUDA_ARCHITECTURES "70;75")
+    target_compile_features(neuralBunchExactBenchmark PRIVATE cxx_std_20)
+    target_include_directories(neuralBunchExactBenchmark PRIVATE "${PIConGPUapp_SOURCE_DIR}/..")
+    target_link_libraries(
+        neuralBunchExactBenchmark
+        PRIVATE alpaka::nn alpakaVendor::alpakaVendor nlohmann_json::nlohmann_json OpenMP::OpenMP_CXX
+    )
+    alpaka_finalize(neuralBunchExactBenchmark)
+    target_compile_definitions(
+        neuralBunchExactBenchmark
+        PRIVATE
+            ALPAKA_CMAKE_TARGET_HEADERS_FINALIZE_CALLED
+            ALPAKA_CMAKE_TARGET_CUDA_FINALIZE_CALLED
+            ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
+    )
+    # Device parity of the batched exact quadrature against the host FP64 reference plus the distance policy.
+    add_test(NAME neuralBunchExactDeviceTest COMMAND neuralBunchExactBenchmark check cuda)
+endif(alpaka_DEP_CUDA)

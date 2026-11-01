@@ -13,6 +13,7 @@
 #    include "picongpu/fields/FieldE.hpp"
 #    include "picongpu/param/neuralBunch.param"
 #    include "picongpu/particles/neuralBunch/BandPolicy.hpp"
+#    include "picongpu/particles/neuralBunch/ExactShapeField.hpp"
 #    include "picongpu/particles/neuralBunch/Inference.hpp"
 #    include "picongpu/particles/neuralBunch/Model.hpp"
 #    include "picongpu/particles/neuralBunch/ReferenceKernel.hpp"
@@ -415,6 +416,17 @@ namespace picongpu
                         params.useModelForNear,
                         params.useModelForMid,
                         params.useMidCorrection};
+                    double const exactLimit
+                        = params.useExactDevice
+                              ? exactDistanceLimit(
+                                    aspectY,
+                                    aspectZ,
+                                    ExactDistancePolicy{
+                                        params.bandedExactMaxCells,
+                                        params.bandedExactMaxCells <= 0.0,
+                                        48.0,
+                                        params.bandedExactAspect10Cells})
+                              : 0.0;
                     tg::DomainBounds domain{};
                     tg::ValidatedBand validatedBand;
                     tg::ValidatedBand const* band = nullptr;
@@ -468,6 +480,11 @@ namespace picongpu
                     std::array<double, 3> bandedBandSeconds{};
                     std::uint64_t bandedMissingModelPairs = 0;
                     std::uint64_t bandedModelPairs = 0;
+                    std::uint64_t bandedExactPairsHandled = 0;
+                    std::uint64_t exactDevicePairs = 0;
+                    std::uint64_t exactPointPairs = 0;
+                    double exactDeviceSeconds = 0.0;
+                    double exactPointSeconds = 0.0;
 
                     MPI_Comm const comm = Environment<simDim>::get().GridController().getCommunicator().getMPIComm();
                     int const rank = Environment<simDim>::get().GridController().getGlobalRank();
@@ -526,6 +543,22 @@ namespace picongpu
                             "beats the full model in the mid band (mean ~2.5%% vs ~15%%) and the learned correction "
                             "(~4%%), at roughly 300x lower cost per pair. neural remains selectable.")
                             % rank;
+                        if(params.useExactDevice)
+                        {
+                            log<picLog::PHYSICS>(
+                                "neuralBunch: rank=%1% policy=banded useExactDevice=true: FP64 GPU quadrature for "
+                                "every band with d<%2% cells (%3%), analytic point field beyond%4%.")
+                                % rank % num(exactLimit)
+                                % (params.bandedExactMaxCells <= 0.0 ? "aspect-scaled from BANDS.md"
+                                                                     : "configured cutoff")
+                                % ((meta && meta->farMultipole.present) ? " + far_multipole" : "");
+                            if(params.useModelForNear || params.useModelForMid.value_or(false)
+                               || params.useMidCorrection)
+                                log<picLog::PHYSICS>(
+                                    "neuralBunch: WARNING rank=%1% useExactDevice=true overrides the near/mid model "
+                                    "options; no learned near/mid head is evaluated.")
+                                    % rank;
+                        }
                         log<picLog::PHYSICS>(
                             "neuralBunch: WARNING rank=%1% policy=banded: the far-band analytic point-field-only "
                             "accuracy depends on aspect/gamma; measured thresholds are aspect<=2 ~32-256 cells "
@@ -568,6 +601,7 @@ namespace picongpu
                     std::uint64_t outsideDomainPairs = 0;
 
                     bool diagnosticChosen = false;
+                    bool exactReferenceChecked = false;
                     std::size_t diagnosticTile = 0;
                     std::array<double, 3> diagnosticOrigin{};
                     std::vector<Source> diagnosticSources;
@@ -605,6 +639,10 @@ namespace picongpu
                                     std::vector<Source> neuralSources;
                                     std::vector<nbRef::Source> referenceSources;
                                     std::vector<Source> bandedSources;
+                                    std::vector<Source> exactNearSources;
+                                    std::vector<Source> exactMidSources;
+                                    std::vector<Source> exactFarSources;
+                                    std::vector<Source> exactPointSources;
                                     allSources.reserve(chunk.size());
                                     allReferenceSources.reserve(chunk.size());
                                     for(std::size_t i = 0; i < chunk.size(); ++i)
@@ -649,6 +687,26 @@ namespace picongpu
                                                 continue;
                                             }
                                             auto const bandValue = bandPolicy.classifyDistance(distanceCells);
+                                            if(params.useExactDevice)
+                                            {
+                                                ++bandedPairs
+                                                    [bandValue == Band::near ? 0 : (bandValue == Band::mid ? 1 : 2)];
+                                                // Distance policy: the device quadrature covers every band
+                                                // below the cutoff; the analytic point field covers the rest.
+                                                if(distanceCells < exactLimit)
+                                                {
+                                                    if(bandValue == Band::near)
+                                                        exactNearSources.push_back(source);
+                                                    else if(bandValue == Band::mid)
+                                                        exactMidSources.push_back(source);
+                                                    else
+                                                        exactFarSources.push_back(source);
+                                                }
+                                                else
+                                                    exactPointSources.push_back(source);
+                                                ++bandedExactPairsHandled;
+                                                continue;
+                                            }
                                             ++bandedPairs
                                                 [bandValue == Band::near ? 0 : (bandValue == Band::mid ? 1 : 2)];
                                             auto const route = routeBandedBand(
@@ -769,6 +827,156 @@ namespace picongpu
                                         stats.inferenceSeconds += std::chrono::duration<double>(
                                                                       std::chrono::steady_clock::now() - bandStart)
                                                                       .count();
+                                    }
+
+                                    auto runExactBand = [&](std::vector<Source> const& bandSources, int bandIndex)
+                                    {
+                                        if(bandSources.empty())
+                                            return;
+                                        auto const exactStart = std::chrono::steady_clock::now();
+                                        auto const count = bandSources.size();
+                                        auto hostSources = alpaka::onHost::allocHost<double>(
+                                            alpaka::Vec{count, std::size_t{6}});
+                                        auto hostWeights = alpaka::onHost::allocHost<double>(alpaka::Vec{count});
+                                        for(std::size_t i = 0; i < count; ++i)
+                                        {
+                                            for(std::size_t c = 0; c < 3u; ++c)
+                                            {
+                                                hostSources[alpaka::Vec<std::size_t, 2>{i, c}]
+                                                    = bandSources[i].r[c];
+                                                hostSources[alpaka::Vec<std::size_t, 2>{i, c + 3u}]
+                                                    = bandSources[i].u[c];
+                                            }
+                                            hostWeights[alpaka::Vec<std::size_t, 1>{i}]
+                                                = -bandSources[i].weight;
+                                        }
+                                        auto deviceSources
+                                            = alpaka::onHost::allocLike(queue.getDevice(), hostSources);
+                                        auto deviceWeights
+                                            = alpaka::onHost::allocLike(queue.getDevice(), hostWeights);
+                                        alpaka::onHost::memcpy(queue, deviceSources, hostSources);
+                                        alpaka::onHost::memcpy(queue, deviceWeights, hostWeights);
+                                        hostSources.keepAlive(queue);
+                                        hostWeights.keepAlive(queue);
+                                        auto deviceAccumulator = alpaka::onHost::alloc<double>(
+                                            queue.getDevice(),
+                                            alpaka::Vec{kOutDim});
+                                        enqueueExactZero(queue, exec, deviceAccumulator);
+                                        // CUDA reserves the local frame for the whole launch and PIConGPU leaves
+                                        // only a few hundred MiB free. The kernel frame is ~1 KiB per thread, so
+                                        // budget 8 KiB per resident thread and keep the grid below that bound.
+                                        auto const freeBytes = device.getFreeGlobalMemBytes();
+                                        std::size_t const exactMaxThreads
+                                            = std::clamp<std::size_t>(freeBytes / (8u * 1024u), 512u, 65536u);
+                                        enqueueExactShapeFieldTileAccumulate<double>(
+                                            queue,
+                                            exec,
+                                            deviceSources,
+                                            deviceWeights,
+                                            count,
+                                            Vec3d{1.0, aspectY, aspectZ},
+                                            ExactSettings{},
+                                            deviceAccumulator,
+                                            exactMaxThreads);
+                                        auto hostAccumulator
+                                            = alpaka::onHost::allocHost<double>(alpaka::Vec{kOutDim});
+                                        alpaka::onHost::memcpy(queue, hostAccumulator, deviceAccumulator);
+                                        alpaka::onHost::wait(queue);
+                                        auto& destination = bandedTiles[tileIndex];
+                                        for(std::size_t k = 0; k < tg::outputDimension; ++k)
+                                        {
+                                            double const value = hostAccumulator[alpaka::Vec<std::size_t, 1>{k}];
+                                            double const scale = (k % 6) < 3 ? tg::normalizedEToSI(value, cells.dx)
+                                                                             : tg::normalizedBToSI(value, cells.dx);
+                                            destination[k] += scale;
+                                        }
+                                        // One-time exactness check: for the first tile with a small source
+                                        // count compare the device accumulator against the host FP64 reference.
+                                        if(!exactReferenceChecked && count <= 16u)
+                                        {
+                                            exactReferenceChecked = true;
+                                            std::vector<nbRef::Source> checkSources;
+                                            checkSources.reserve(count);
+                                            for(std::size_t i = 0; i < count; ++i)
+                                            {
+                                                nbRef::Source source;
+                                                for(int axis = 0; axis < 3; ++axis)
+                                                {
+                                                    source.x[axis] = tileOriginPhysical[axis]
+                                                                     + bandSources[i].r[axis] * cells.dx;
+                                                    source.u[axis] = bandSources[i].u[axis];
+                                                }
+                                                source.w = bandSources[i].weight;
+                                                checkSources.push_back(source);
+                                            }
+                                            auto const referenceValues = nbRef::tileFieldParallel(
+                                                {tileOriginPhysical[0], tileOriginPhysical[1], tileOriginPhysical[2]},
+                                                checkSources,
+                                                cells.dx,
+                                                cells.dy,
+                                                cells.dz);
+                                            double maxDiff = 0.0;
+                                            double maxScale = 1.0;
+                                            for(std::size_t k = 0; k < tg::outputDimension; ++k)
+                                            {
+                                                // tileFieldParallel already returns dx^2-normalized values.
+                                                double const expected = referenceValues[k];
+                                                double const actual
+                                                    = hostAccumulator[alpaka::Vec<std::size_t, 1>{k}];
+                                                maxDiff = std::max(maxDiff, std::abs(actual - expected));
+                                                maxScale = std::max(maxScale, std::abs(expected));
+                                            }
+                                            log<picLog::PHYSICS>(
+                                                "neuralBunch: rank=%1% exactDevice sample tile=%2% band=%3% "
+                                                "sources=%4% maxRelVsCpuReference=%5% maxAbsDiff=%6%")
+                                                % rank % tileIndex
+                                                % bandName(
+                                                    bandIndex == 0 ? Band::near
+                                                                   : (bandIndex == 1 ? Band::mid : Band::far))
+                                                % count % num(maxDiff / maxScale) % num(maxDiff);
+                                        }
+                                        exactDevicePairs += count;
+                                        double const seconds = std::chrono::duration<double>(
+                                                                   std::chrono::steady_clock::now() - exactStart)
+                                                                   .count();
+                                        exactDeviceSeconds += seconds;
+                                        bandedBandSeconds[bandIndex] += seconds;
+                                    };
+                                    runExactBand(exactNearSources, 0);
+                                    runExactBand(exactMidSources, 1);
+                                    runExactBand(exactFarSources, 2);
+
+                                    if(!exactPointSources.empty())
+                                    {
+                                        auto const pointStart = std::chrono::steady_clock::now();
+                                        auto const pointResult = evaluateTileBanded(
+                                            queue,
+                                            exec,
+                                            *meta,
+                                            tensors,
+                                            exactPointSources,
+                                            bandPolicy,
+                                            {},
+                                            aspectY,
+                                            aspectZ,
+                                            FieldNormalization{cells.dx},
+                                            std::numeric_limits<std::size_t>::max() / tg::outputDimension,
+                                            std::max<std::size_t>(64u, params.tileBatch),
+                                            TaylorBatchBackend::automatic,
+                                            false,
+                                            false,
+                                            false);
+                                        if(pointResult.nearNotImplemented || pointResult.midNotImplemented)
+                                            throw std::runtime_error(
+                                                "neuralBunch: exact-device point-field fallback requested a model "
+                                                "that is not configured.");
+                                        auto& destination = bandedTiles[tileIndex];
+                                        for(std::size_t k = 0; k < tg::outputDimension; ++k)
+                                            destination[k] += static_cast<double>(pointResult.values[k]);
+                                        exactPointPairs += exactPointSources.size();
+                                        exactPointSeconds += std::chrono::duration<double>(
+                                                                 std::chrono::steady_clock::now() - pointStart)
+                                                                 .count();
                                     }
 
                                     if(!referenceSources.empty())
@@ -906,7 +1114,8 @@ namespace picongpu
                                 + std::to_string(totalMissing)
                                 + " near/mid (source, tile) pair(s) have no configured model.");
                     }
-                    std::uint64_t const modeledPairs = isBanded ? bandedModelPairs : stats.neuralPairs;
+                    std::uint64_t const modeledPairs
+                        = (isBanded ? bandedModelPairs : stats.neuralPairs) + bandedExactPairsHandled;
                     if(modeledPairs + stats.referencePairs + stats.zeroWeightPairs
                        != stats.globalParticles * grid.tiles.size())
                         throw std::runtime_error(
@@ -1176,6 +1385,39 @@ namespace picongpu
                             % num(bandedSecondsTotal[2]) % num(rate(bandedTotal[0], bandedSecondsTotal[0]))
                             % num(rate(bandedTotal[1], bandedSecondsTotal[1]))
                             % num(rate(bandedTotal[2], bandedSecondsTotal[2]));
+                    }
+                    if(params.useExactDevice)
+                    {
+                        unsigned long long exactLocal = exactDevicePairs;
+                        unsigned long long pointLocal = exactPointPairs;
+                        unsigned long long exactTotal = 0;
+                        unsigned long long pointTotal = 0;
+                        MPI_Allreduce(&exactLocal, &exactTotal, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+                        MPI_Allreduce(&pointLocal, &pointTotal, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+                        double exactSecondsTotal = 0.0;
+                        double pointSecondsTotal = 0.0;
+                        MPI_Allreduce(
+                            &exactDeviceSeconds,
+                            &exactSecondsTotal,
+                            1,
+                            MPI_DOUBLE,
+                            MPI_SUM,
+                            comm);
+                        MPI_Allreduce(
+                            &exactPointSeconds,
+                            &pointSecondsTotal,
+                            1,
+                            MPI_DOUBLE,
+                            MPI_SUM,
+                            comm);
+                        auto rate = [](double pairs, double seconds)
+                        { return seconds > 0.0 ? pairs / seconds : 0.0; };
+                        log<picLog::PHYSICS>(
+                            "neuralBunch: rank=%1% useExactDevice=true exactPairs=%2% pointPairs=%3% "
+                            "exactSeconds=%4% pointSeconds=%5% exactPairsPerSecond=%6% pointPairsPerSecond=%7%")
+                            % rank % exactTotal % pointTotal % num(exactSecondsTotal) % num(pointSecondsTotal)
+                            % num(rate(static_cast<double>(exactTotal), exactSecondsTotal))
+                            % num(rate(static_cast<double>(pointTotal), pointSecondsTotal));
                     }
                     unsigned long long neuralPairs = stats.neuralPairs;
                     unsigned long long referencePairs = stats.referencePairs;
