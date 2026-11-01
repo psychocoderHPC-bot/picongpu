@@ -14,8 +14,13 @@
  *    neural output is NOT production-validated; the stage warns once per rank;
  *  - ``validatedNeural`` uses the neural path only inside a measured band;
  *  - ``referenceOnly`` uses the exact reference and requires no model artifact;
+ *  - ``banded`` routes by distance: near uses the exact reference (or a
+ *    ``near_model`` head), mid uses ``mid_correction`` (point field plus the
+ *    learned correction) or the neural model, far uses the analytic point field
+ *    plus an optional ``far_multipole`` Taylor head;
  *  - ``enableReferenceFallback`` selects reference vs collective failure for
- *    pairs outside the model domain under the ``neural`` policy.
+ *    pairs outside the model domain under the ``neural`` policy and for
+ *    near/mid pairs without a configured model under ``banded``.
  *  - ``enableReferenceFallback`` must stay true;
  *  - ``timePolicy`` must stay 0, which means the openPMD source time equals the
  *    injection time (no linear drift is applied);
@@ -53,7 +58,7 @@ namespace picongpu::neuralBunch
         //! Particle species name inside the openPMD file.
         std::string species = "e";
         //! Path prefix of the model artifact (``<modelPath>.json``/``.bin``).
-        std::string modelPath = "model";
+        std::string modelPath = "";
         //! Number of global source particles streamed per collective chunk.
         std::uint64_t chunkSize = 1u << 20;
         //! Number of tiles evaluated per inference batch (accepted, Phase A uses one tile at a time).
@@ -67,14 +72,21 @@ namespace picongpu::neuralBunch
          *   when enableReferenceFallback is true, otherwise fail collectively.
          * - validatedNeural: neural only inside validation.validated_band.
          * - referenceOnly: exact reference, no model artifact required.
+         * - banded: distance-banded composition of the analytic point field,
+         *   optional mid/far heads and the exact reference.
          */
         enum class FieldInitializer
         {
             neural,
             validatedNeural,
-            referenceOnly
+            referenceOnly,
+            banded
         };
-        FieldInitializer fieldInitializer = FieldInitializer::neural;
+        FieldInitializer fieldInitializer = FieldInitializer::banded;
+        //! ``banded``: distances below this many cells use the exact reference (or ``near_model``).
+        double bandedNearMaxCells = 4.0;
+        //! ``banded``: distances above this many cells use the analytic far field (with ``far_multipole``).
+        double bandedFarMinCells = 48.0;
         //! Must stay 0: source time equals injection time (no drift applied).
         int timePolicy = 0;
     };

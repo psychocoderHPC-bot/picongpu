@@ -38,9 +38,12 @@ namespace picongpu::neuralBunch
         {
             neural,
             validatedNeural,
-            referenceOnly
+            referenceOnly,
+            banded
         };
         FieldInitializer fieldInitializer = FieldInitializer::{{{neural_bunch.fieldInitializer}}};
+        double bandedNearMaxCells = 4.0;
+        double bandedFarMinCells = 48.0;
         int timePolicy = {{{neural_bunch.timePolicy}}};
     };
     {{/neural_bunch_enabled}}
@@ -67,9 +70,12 @@ namespace picongpu::neuralBunch
         {
             neural,
             validatedNeural,
-            referenceOnly
+            referenceOnly,
+            banded
         };
         FieldInitializer fieldInitializer = FieldInitializer::referenceOnly;
+        double bandedNearMaxCells = 4.0;
+        double bandedFarMinCells = 48.0;
         int timePolicy = 0;
     };
     {{/neural_bunch_enabled}}

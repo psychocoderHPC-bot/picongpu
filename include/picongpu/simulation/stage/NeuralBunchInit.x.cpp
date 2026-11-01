@@ -12,6 +12,7 @@
 #    include "picongpu/fields/FieldB.hpp"
 #    include "picongpu/fields/FieldE.hpp"
 #    include "picongpu/param/neuralBunch.param"
+#    include "picongpu/particles/neuralBunch/BandPolicy.hpp"
 #    include "picongpu/particles/neuralBunch/Inference.hpp"
 #    include "picongpu/particles/neuralBunch/Model.hpp"
 #    include "picongpu/particles/neuralBunch/ReferenceKernel.hpp"
@@ -369,17 +370,24 @@ namespace picongpu
                                             ? tg::FieldInitializer::neural
                                             : (paramPolicy == NeuralBunchParam::FieldInitializer::validatedNeural
                                                    ? tg::FieldInitializer::validatedNeural
-                                                   : tg::FieldInitializer::referenceOnly);
+                                                   : (paramPolicy == NeuralBunchParam::FieldInitializer::banded
+                                                          ? tg::FieldInitializer::banded
+                                                          : tg::FieldInitializer::referenceOnly));
                     char const* const policyName
                         = paramPolicy == NeuralBunchParam::FieldInitializer::neural
                               ? "neural"
-                              : (paramPolicy == NeuralBunchParam::FieldInitializer::validatedNeural ? "validatedNeural"
-                                                                                                    : "referenceOnly");
+                              : (paramPolicy == NeuralBunchParam::FieldInitializer::validatedNeural
+                                     ? "validatedNeural"
+                                     : (paramPolicy == NeuralBunchParam::FieldInitializer::banded ? "banded"
+                                                                                                  : "referenceOnly"));
                     bool const isReferenceOnly = paramPolicy == NeuralBunchParam::FieldInitializer::referenceOnly;
+                    bool const isBanded = paramPolicy == NeuralBunchParam::FieldInitializer::banded;
                     std::optional<Model> model;
                     TensorBuffers tensors;
                     ModelMetadata const* meta = nullptr;
-                    if(!isReferenceOnly)
+                    // ``banded`` may run without an artifact (exact reference + point field only).
+                    bool const wantsModel = !isReferenceOnly && (!isBanded || !params.modelPath.empty());
+                    if(wantsModel)
                     {
                         // A configured neural policy requires the artifact; a load
                         // failure aborts instead of silently falling back.
@@ -387,10 +395,20 @@ namespace picongpu
                         meta = &model->metadata();
                         tensors = model->loadTensors(queue);
                     }
+                    // A banded run without an artifact still evaluates the far band from the analytic
+                    // point field; an empty metadata object keeps that path branch-free.
+                    ModelMetadata emptyMetadata;
+                    if(isBanded && meta == nullptr)
+                        meta = &emptyMetadata;
 
                     tg::CellSizes const cells{cellSizeSI[0], cellSizeSI[1], cellSizeSI[2]};
                     double const aspectY = cells.aspectY();
                     double const aspectZ = cells.aspectZ();
+                    BandPolicy bandPolicy{BandThresholds{params.bandedNearMaxCells, params.bandedFarMinCells}};
+                    bool const hasNearModel = meta != nullptr && meta->nearModel.present;
+                    bool const hasMidModel
+                        = meta != nullptr
+                          && (meta->midCorrection.present || (!meta->layers.empty() && !meta->bank.empty()));
                     tg::DomainBounds domain{};
                     tg::ValidatedBand validatedBand;
                     tg::ValidatedBand const* band = nullptr;
@@ -437,6 +455,13 @@ namespace picongpu
                     std::vector<std::vector<double>> referenceTiles(
                         grid.tiles.size(),
                         std::vector<double>(tg::outputDimension, 0.0));
+                    std::vector<std::vector<double>> bandedTiles(
+                        isBanded ? grid.tiles.size() : 0u,
+                        std::vector<double>(tg::outputDimension, 0.0));
+                    std::array<std::uint64_t, 3> bandedPairs{};
+                    std::array<double, 3> bandedBandSeconds{};
+                    std::uint64_t bandedMissingModelPairs = 0;
+                    std::uint64_t bandedModelPairs = 0;
 
                     MPI_Comm const comm = Environment<simDim>::get().GridController().getCommunicator().getMPIComm();
                     int const rank = Environment<simDim>::get().GridController().getGlobalRank();
@@ -468,6 +493,23 @@ namespace picongpu
                                 % num(band->gammaMax) % num(band->aYMin) % num(band->aYMax) % num(band->aZMin)
                                 % num(band->aZMax) % num(band->measuredMaxRelRmsE) % num(band->measuredMaxRelRmsCb)
                                 % meta->validatedBand->source;
+                    }
+                    else if(isBanded)
+                    {
+                        log<picLog::PHYSICS>(
+                            "neuralBunch: rank=%1% policy=banded near<%2% cells reference%3%, mid %4%, "
+                            "far>%5% analytic point field%6%.")
+                            % rank % num(params.bandedNearMaxCells) % (hasNearModel ? " (near_model head)" : "")
+                            % (hasMidModel ? (meta && meta->midCorrection.present ? "point field+mid_correction"
+                                                                                  : "neural model")
+                                           : "reference fallback")
+                            % num(params.bandedFarMinCells)
+                            % ((meta && meta->farMultipole.present) ? " + far_multipole" : "");
+                        log<picLog::PHYSICS>(
+                            "neuralBunch: WARNING rank=%1% policy=banded: the far-band analytic point-field-only "
+                            "accuracy depends on aspect/gamma; measured thresholds are aspect<=2 ~32-256 cells "
+                            "and aspect~10 needs >512 cells. Use far_multipole or validate the band edges.")
+                            % rank;
                     }
                     else
                         log<picLog::PHYSICS>(
@@ -518,6 +560,7 @@ namespace picongpu
                                     std::vector<nbRef::Source> allReferenceSources;
                                     std::vector<Source> neuralSources;
                                     std::vector<nbRef::Source> referenceSources;
+                                    std::vector<Source> bandedSources;
                                     allSources.reserve(chunk.size());
                                     allReferenceSources.reserve(chunk.size());
                                     for(std::size_t i = 0; i < chunk.size(); ++i)
@@ -552,6 +595,48 @@ namespace picongpu
                                         {
                                             referenceSources.push_back(referenceSource);
                                             ++stats.forcedReferencePairs;
+                                            continue;
+                                        }
+                                        if(isBanded)
+                                        {
+                                            if(source.weight == 0.0)
+                                            {
+                                                ++stats.zeroWeightPairs;
+                                                continue;
+                                            }
+                                            auto const bandValue = bandPolicy.classifyDistance(distanceCells);
+                                            if(bandValue == Band::near)
+                                            {
+                                                ++bandedPairs[0];
+                                                if(hasNearModel)
+                                                {
+                                                    bandedSources.push_back(source);
+                                                    ++bandedModelPairs;
+                                                }
+                                                else if(params.enableReferenceFallback)
+                                                    referenceSources.push_back(referenceSource);
+                                                else
+                                                    ++bandedMissingModelPairs;
+                                            }
+                                            else if(bandValue == Band::mid)
+                                            {
+                                                ++bandedPairs[1];
+                                                if(hasMidModel)
+                                                {
+                                                    bandedSources.push_back(source);
+                                                    ++bandedModelPairs;
+                                                }
+                                                else if(params.enableReferenceFallback)
+                                                    referenceSources.push_back(referenceSource);
+                                                else
+                                                    ++bandedMissingModelPairs;
+                                            }
+                                            else
+                                            {
+                                                ++bandedPairs[2];
+                                                bandedSources.push_back(source);
+                                                ++bandedModelPairs;
+                                            }
                                             continue;
                                         }
                                         auto const route = tg::classify(
@@ -620,6 +705,36 @@ namespace picongpu
                                                 stats.maxLatent = std::max(stats.maxLatent, std::abs(latent[k]));
                                             }
                                         stats.neuralPairs += neuralSources.size();
+                                    }
+
+                                    if(!bandedSources.empty())
+                                    {
+                                        auto const bandStart = std::chrono::steady_clock::now();
+                                        auto const bandedResult = evaluateTileBanded(
+                                            queue,
+                                            exec,
+                                            *meta,
+                                            tensors,
+                                            bandedSources,
+                                            bandPolicy,
+                                            {},
+                                            aspectY,
+                                            aspectZ,
+                                            FieldNormalization{cells.dx},
+                                            std::numeric_limits<std::size_t>::max() / tg::outputDimension,
+                                            std::max<std::size_t>(64u, params.tileBatch));
+                                        if(bandedResult.nearNotImplemented || bandedResult.midNotImplemented)
+                                            throw std::runtime_error(
+                                                "neuralBunch: banded evaluation requested a near/mid model that "
+                                                "is not configured.");
+                                        auto& destination = bandedTiles[tileIndex];
+                                        for(std::size_t k = 0; k < tg::outputDimension; ++k)
+                                            destination[k] += static_cast<double>(bandedResult.values[k]);
+                                        for(std::size_t b = 0; b < 3; ++b)
+                                            bandedBandSeconds[b] += bandedResult.bandSeconds[b];
+                                        stats.inferenceSeconds += std::chrono::duration<double>(
+                                                                      std::chrono::steady_clock::now() - bandStart)
+                                                                      .count();
                                     }
 
                                     if(!referenceSources.empty())
@@ -746,12 +861,23 @@ namespace picongpu
                                 + " (source, tile) pair(s) are outside the artifact domain.");
                     }
 
-                    if(stats.neuralPairs + stats.referencePairs + stats.zeroWeightPairs
+                    if(isBanded)
+                    {
+                        unsigned long long localMissing = bandedMissingModelPairs;
+                        unsigned long long totalMissing = 0;
+                        MPI_Allreduce(&localMissing, &totalMissing, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+                        if(totalMissing != 0)
+                            throw std::runtime_error(
+                                "neuralBunch: policy=banded with enableReferenceFallback=false, but "
+                                + std::to_string(totalMissing)
+                                + " near/mid (source, tile) pair(s) have no configured model.");
+                    }
+                    std::uint64_t const modeledPairs = isBanded ? bandedModelPairs : stats.neuralPairs;
+                    if(modeledPairs + stats.referencePairs + stats.zeroWeightPairs
                        != stats.globalParticles * grid.tiles.size())
                         throw std::runtime_error(
-                            "neuralBunch: pair partition is not exhaustive: neural "
-                            + std::to_string(stats.neuralPairs) + " + reference "
-                            + std::to_string(stats.referencePairs) + " + zero-weight "
+                            "neuralBunch: pair partition is not exhaustive: modeled " + std::to_string(modeledPairs)
+                            + " + reference " + std::to_string(stats.referencePairs) + " + zero-weight "
                             + std::to_string(stats.zeroWeightPairs)
                             + " != " + std::to_string(stats.globalParticles * grid.tiles.size()) + " pairs.");
 
@@ -826,7 +952,12 @@ namespace picongpu
                     {
                         auto const& tile = grid.tiles[tileIndex];
                         std::vector<float> values(tg::outputDimension, 0.0f);
-                        if(meta)
+                        if(isBanded)
+                        {
+                            for(std::size_t k = 0; k < tg::outputDimension; ++k)
+                                values[k] = static_cast<float>(bandedTiles[tileIndex][k]);
+                        }
+                        else if(meta)
                         {
                             std::vector<float> const latentFloat(latents[tileIndex].begin(), latents[tileIndex].end());
                             values = decodeFromLatent(
@@ -987,6 +1118,31 @@ namespace picongpu
                                          "referenceSeconds=%5% fieldStoreSeconds=%6% particleSeconds=%7%")
                         % rank % num(stats.decodedBytes) % num(stats.ioSeconds) % num(stats.inferenceSeconds)
                         % num(stats.referenceSeconds) % num(stats.fieldStoreSeconds) % num(stats.particleSeconds);
+                    if(isBanded)
+                    {
+                        unsigned long long bandedLocal[3]{bandedPairs[0], bandedPairs[1], bandedPairs[2]};
+                        unsigned long long bandedTotal[3]{};
+                        MPI_Allreduce(bandedLocal, bandedTotal, 3, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+                        double bandedSecondsLocal[3]
+                            = {bandedBandSeconds[0], bandedBandSeconds[1], bandedBandSeconds[2]};
+                        double bandedSecondsTotal[3]{};
+                        MPI_Allreduce(bandedSecondsLocal, bandedSecondsTotal, 3, MPI_DOUBLE, MPI_SUM, comm);
+                        unsigned long long modelLocal = bandedModelPairs;
+                        unsigned long long modelTotal = 0;
+                        MPI_Allreduce(&modelLocal, &modelTotal, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+                        auto rate = [](double pairs, double seconds) { return seconds > 0.0 ? pairs / seconds : 0.0; };
+                        log<picLog::PHYSICS>(
+                            "neuralBunch: rank=%1% policy=banded pairs near=%2% mid=%3% far=%4% modeled=%5% "
+                            "near/far thresholds=[%6%,%7%] cells")
+                            % rank % bandedTotal[0] % bandedTotal[1] % bandedTotal[2] % modelTotal
+                            % num(params.bandedNearMaxCells) % num(params.bandedFarMinCells);
+                        log<picLog::PHYSICS>("neuralBunch: rank=%1% banded timings near=%2%s mid=%3%s far=%4%s; "
+                                             "throughput near=%5% pairs/s mid=%6% pairs/s far=%7% pairs/s")
+                            % rank % num(bandedSecondsTotal[0]) % num(bandedSecondsTotal[1])
+                            % num(bandedSecondsTotal[2]) % num(rate(bandedTotal[0], bandedSecondsTotal[0]))
+                            % num(rate(bandedTotal[1], bandedSecondsTotal[1]))
+                            % num(rate(bandedTotal[2], bandedSecondsTotal[2]));
+                    }
                     unsigned long long neuralPairs = stats.neuralPairs;
                     unsigned long long referencePairs = stats.referencePairs;
                     unsigned long long nearPairs = stats.referenceNearPairs;

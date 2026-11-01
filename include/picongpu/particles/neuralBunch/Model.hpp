@@ -24,6 +24,7 @@
  */
 
 #include "Features.hpp"
+#include "TaylorField.hpp"
 
 #include <alpaka/alpaka.hpp>
 #include <alpaka/nn/onHost/core/binary.hpp>
@@ -79,6 +80,38 @@ namespace picongpu::particles::neuralBunch
         std::string bias;
         std::size_t in{};
         std::size_t out{};
+    };
+
+    /** One dense linear decoder (weight [in,out], optional bias [out]). */
+    struct LinearDecoderSpec
+    {
+        std::string weight;
+        std::string bias;
+        std::size_t in{};
+        std::size_t out{};
+        bool hasBias = false;
+    };
+
+    /** Optional mid-band TSC shape correction: features -> MLP -> linear 1536 decode. */
+    struct MidCorrectionSpec
+    {
+        bool present = false;
+        std::vector<EncoderLayer> layers;
+        std::size_t latent{};
+        LinearDecoderSpec decoder;
+    };
+
+    /** Optional far-band multipole/Taylor head: features -> MLP -> K coefficients. */
+    struct FarMultipoleSpec
+    {
+        bool present = false;
+        int order = 0;
+        std::size_t coefficientDim{};
+        TaylorOrigin origin = TaylorOrigin::tileCentre;
+        double aspectY = 1.0;
+        double aspectZ = 1.0;
+        std::vector<double> perComponentScale;
+        std::vector<EncoderLayer> layers;
     };
 
     /** Physical normalisation of the decoder output.
@@ -166,6 +199,11 @@ namespace picongpu::particles::neuralBunch
         std::array<std::size_t, 2> bankEntryShape{};
         bool decoderBias = false;
         std::vector<std::string> bank;
+
+        MidCorrectionSpec midCorrection;
+        //! Optional near-band full-field model (features -> MLP -> linear 1536). Falls back to the FP64 reference.
+        MidCorrectionSpec nearModel;
+        FarMultipoleSpec farMultipole;
 
         double gammaMin{};
         double gammaMax{};
@@ -443,6 +481,12 @@ namespace picongpu::particles::neuralBunch
             parseDecoder(required(root, "decoder", "root"));
             parseDomain(required(root, "domain", "root"));
             parseValidation(root);
+            if(root.contains("near_model"))
+                parseNearModel(root.at("near_model"));
+            if(root.contains("mid_correction"))
+                parseMidCorrection(root.at("mid_correction"));
+            if(root.contains("far_multipole"))
+                parseFarMultipole(root.at("far_multipole"));
             parseNormalization(required(root, "normalization", "root"));
             parseTensors(required(root, "tensors", "root"));
             parseArtifact(required(root, "artifact", "root"));
@@ -794,6 +838,7 @@ namespace picongpu::particles::neuralBunch
         {
             using detail::asFiniteDouble;
             using detail::asString;
+            using detail::required;
 
             if(!root.contains("validation"))
                 return;
@@ -809,7 +854,7 @@ namespace picongpu::particles::neuralBunch
             auto value = [&](char const* key)
             {
                 auto const context = std::string{"validation.validated_band."} + key;
-                return asFiniteDouble(detail::required(bandJson, key, "validation.validated_band"), context);
+                return asFiniteDouble(required(bandJson, key, "validation.validated_band"), context);
             };
             ValidatedBand band;
             band.dMinCells = value("d_min_cells");
@@ -824,7 +869,7 @@ namespace picongpu::particles::neuralBunch
             band.measuredMaxRelRmsCb = value("measured_max_rel_rms_cb");
             band.measuredMinForcePassShare = value("measured_min_force_pass_share");
             band.source = asString(
-                detail::required(bandJson, "source", "validation.validated_band"),
+                required(bandJson, "source", "validation.validated_band"),
                 "validation.validated_band.source");
             if(band.source.empty())
                 throw ModelError{"validation.validated_band.source must not be empty."};
@@ -849,7 +894,6 @@ namespace picongpu::particles::neuralBunch
                 throw ModelError{"validation.validated_band measured relative RMS values must be non-negative."};
             if(band.measuredMinForcePassShare < 0.0 || band.measuredMinForcePassShare > 1.0)
                 throw ModelError{"validation.validated_band.measured_min_force_pass_share must be in [0, 1]."};
-            // A validated band is a subset of the artifact domain.
             if(band.dMinCells < m_metadata.dMinCells || band.dMaxCells > m_metadata.dMaxCells
                || band.gammaMin < m_metadata.gammaMin || band.gammaMax > m_metadata.gammaMax
                || band.aYMin < m_metadata.aYMin || band.aYMax > m_metadata.aYMax || band.aZMin < m_metadata.aZMin
@@ -877,6 +921,200 @@ namespace picongpu::particles::neuralBunch
                 throw ModelError{"unsupported normalization length/charge convention."};
             if(m_metadata.normalizationLatent != "none")
                 throw ModelError{"format v1 requires normalization.latent = none."};
+        }
+
+        static std::vector<EncoderLayer> parseNestedEncoder(
+            json const& encoder,
+            std::string const& context,
+            std::size_t expectedInput,
+            std::size_t& outputDim)
+        {
+            using detail::asSize;
+            using detail::asString;
+            using detail::required;
+
+            auto const kind = asString(required(encoder, "kind", context), context + ".kind");
+            if(kind != "mlp")
+                throw ModelError{context + ".kind must be 'mlp'."};
+            auto const activation = asString(required(encoder, "activation", context), context + ".activation");
+            if(activation != "silu")
+                throw ModelError{context + ".activation must be 'silu'."};
+            auto const last
+                = asString(required(encoder, "last_layer_activation", context), context + ".last_layer_activation");
+            if(last != "none")
+                throw ModelError{context + ".last_layer_activation must be 'none'."};
+
+            auto const layersJson = required(encoder, "layers", context);
+            if(!layersJson.is_array() || layersJson.empty())
+                throw ModelError{context + ".layers must be a non-empty array."};
+
+            std::vector<EncoderLayer> layers;
+            std::size_t expectedIn = expectedInput;
+            for(std::size_t i = 0; i < layersJson.size(); ++i)
+            {
+                auto const layerContext = context + ".layers[" + std::to_string(i) + "]";
+                auto const& layer = layersJson.at(i);
+                EncoderLayer parsed;
+                parsed.weight = asString(required(layer, "weight", layerContext), layerContext + ".weight");
+                parsed.bias = asString(required(layer, "bias", layerContext), layerContext + ".bias");
+                parsed.in = asSize(required(layer, "in", layerContext), layerContext + ".in");
+                parsed.out = asSize(required(layer, "out", layerContext), layerContext + ".out");
+                if(parsed.in != expectedIn)
+                    throw ModelError{
+                        layerContext + ": in=" + std::to_string(parsed.in)
+                        + " does not match expected in=" + std::to_string(expectedIn) + "."};
+                if(parsed.out == 0u)
+                    throw ModelError{layerContext + ": out must be positive."};
+                layers.push_back(std::move(parsed));
+                expectedIn = layers.back().out;
+            }
+            outputDim = asSize(required(encoder, "output_dim", context), context + ".output_dim");
+            if(outputDim != expectedIn)
+                throw ModelError{context + ".output_dim does not match the last layer out extent."};
+            return layers;
+        }
+
+        void parseMidCorrection(json const& mid)
+        {
+            using detail::asSize;
+            using detail::asString;
+            using detail::required;
+
+            m_metadata.midCorrection.present = true;
+            auto const kind = asString(required(mid, "kind", "mid_correction"), "mid_correction.kind");
+            if(kind != "tsc_correction")
+                throw ModelError{"mid_correction.kind must be 'tsc_correction'."};
+
+            auto const encoder = required(mid, "encoder", "mid_correction");
+            std::size_t latent = 0u;
+            m_metadata.midCorrection.layers
+                = parseNestedEncoder(encoder, "mid_correction.encoder", m_metadata.featureDim, latent);
+            m_metadata.midCorrection.latent = latent;
+
+            auto const decoder = required(mid, "decoder", "mid_correction");
+            auto& spec = m_metadata.midCorrection.decoder;
+            auto const decoderKind
+                = asString(required(decoder, "kind", "mid_correction.decoder"), "mid_correction.decoder.kind");
+            if(decoderKind != "linear")
+                throw ModelError{"mid_correction.decoder.kind must be 'linear'."};
+            spec.weight
+                = asString(required(decoder, "weight", "mid_correction.decoder"), "mid_correction.decoder.weight");
+            spec.in = asSize(required(decoder, "in", "mid_correction.decoder"), "mid_correction.decoder.in");
+            spec.out = asSize(required(decoder, "out", "mid_correction.decoder"), "mid_correction.decoder.out");
+            if(spec.in != latent || spec.out != kOutDim)
+                throw ModelError{"mid_correction.decoder must be [latent, 1536]."};
+            auto const biasEnabled = required(decoder, "bias_enabled", "mid_correction.decoder");
+            if(!biasEnabled.is_boolean())
+                throw ModelError{"mid_correction.decoder.bias_enabled must be boolean."};
+            spec.hasBias = biasEnabled.get<bool>();
+            if(spec.hasBias)
+                spec.bias
+                    = asString(required(decoder, "bias", "mid_correction.decoder"), "mid_correction.decoder.bias");
+            else if(decoder.contains("bias"))
+                spec.bias
+                    = asString(required(decoder, "bias", "mid_correction.decoder"), "mid_correction.decoder.bias");
+        }
+
+        void parseNearModel(json const& near)
+        {
+            using detail::asSize;
+            using detail::asString;
+            using detail::required;
+
+            // ``near_model`` is optional and not yet part of MODEL-FORMAT v1. It uses the same
+            // features -> MLP -> linear 1536 layout as ``mid_correction`` and replaces the exact
+            // reference only when the artifact explicitly provides it.
+            auto& spec = m_metadata.nearModel;
+            spec.present = true;
+            auto const encoder = required(near, "encoder", "near_model");
+            std::size_t latent = 0u;
+            spec.layers = parseNestedEncoder(encoder, "near_model.encoder", m_metadata.featureDim, latent);
+            spec.latent = latent;
+
+            auto const decoder = required(near, "decoder", "near_model");
+            auto& decoderSpec = spec.decoder;
+            decoderSpec.weight
+                = asString(required(decoder, "weight", "near_model.decoder"), "near_model.decoder.weight");
+            decoderSpec.in = asSize(required(decoder, "in", "near_model.decoder"), "near_model.decoder.in");
+            decoderSpec.out = asSize(required(decoder, "out", "near_model.decoder"), "near_model.decoder.out");
+            if(decoderSpec.in != latent || decoderSpec.out != kOutDim)
+                throw ModelError{"near_model.decoder must be [latent, 1536]."};
+            if(decoder.contains("bias_enabled"))
+                decoderSpec.hasBias = decoder.at("bias_enabled").get<bool>();
+            if(decoder.contains("bias"))
+                decoderSpec.bias
+                    = asString(required(decoder, "bias", "near_model.decoder"), "near_model.decoder.bias");
+        }
+
+        void parseFarMultipole(json const& far)
+        {
+            using detail::asDoubleVector;
+            using detail::asFiniteDouble;
+            using detail::asInt;
+            using detail::asString;
+            using detail::required;
+
+            auto& spec = m_metadata.farMultipole;
+            spec.present = true;
+            auto const kind = asString(required(far, "kind", "far_multipole"), "far_multipole.kind");
+            if(kind != "taylor")
+                throw ModelError{"far_multipole.kind must be 'taylor'."};
+            spec.order = asInt(required(far, "order", "far_multipole"), "far_multipole.order");
+            if(spec.order < 0 || spec.order > 12)
+                throw ModelError{"far_multipole.order must be in [0, 12]."};
+
+            auto const basis = required(far, "basis", "far_multipole");
+            auto const basisKind
+                = asString(required(basis, "kind", "far_multipole.basis"), "far_multipole.basis.kind");
+            if(basisKind != "monomial_3d")
+                throw ModelError{"far_multipole.basis.kind must be 'monomial_3d'."};
+            auto const normalization = asString(
+                required(basis, "normalization", "far_multipole.basis"),
+                "far_multipole.basis.normalization");
+            if(normalization != "dx")
+                throw ModelError{"far_multipole.basis.normalization must be 'dx'."};
+            auto const originName
+                = asString(required(basis, "origin", "far_multipole.basis"), "far_multipole.basis.origin");
+            auto const origin = taylorOriginFromString(originName);
+            if(!origin)
+                throw ModelError{"far_multipole.basis.origin must be 'cell_origin' or 'tile_centre'."};
+            spec.origin = *origin;
+            auto const indexOrder
+                = asString(required(basis, "index_order", "far_multipole.basis"), "far_multipole.basis.index_order");
+            if(indexOrder != "component-major, total degree ascending, ax=0..d, then ay=0..d-ax, az=d-ax-ay")
+                throw ModelError{"far_multipole.basis.index_order does not match the compiled basis."};
+            auto const componentOrder = required(basis, "component_order", "far_multipole.basis");
+            std::array<std::string, 6> const expected{"Ex", "Ey", "Ez", "Bx", "By", "Bz"};
+            if(!componentOrder.is_array() || componentOrder.size() != 6u)
+                throw ModelError{"far_multipole.basis.component_order must list six components."};
+            for(std::size_t i = 0; i < 6u; ++i)
+                if(asString(componentOrder.at(i), "far_multipole.basis.component_order") != expected[i])
+                    throw ModelError{"far_multipole.basis.component_order does not match Ex..Bz."};
+
+            auto const aspect = required(far, "aspect", "far_multipole");
+            spec.aspectY = asFiniteDouble(required(aspect, "a_y", "far_multipole.aspect"), "far_multipole.aspect.a_y");
+            spec.aspectZ = asFiniteDouble(required(aspect, "a_z", "far_multipole.aspect"), "far_multipole.aspect.a_z");
+            if(spec.aspectY < m_metadata.aYMin - 1e-12 || spec.aspectY > m_metadata.aYMax + 1e-12
+               || spec.aspectZ < m_metadata.aZMin - 1e-12 || spec.aspectZ > m_metadata.aZMax + 1e-12)
+                throw ModelError{"far_multipole.aspect is outside the domain a_y/a_z bounds."};
+
+            auto const encoder = required(far, "encoder", "far_multipole");
+            std::size_t coefficients = 0u;
+            spec.layers = parseNestedEncoder(encoder, "far_multipole.encoder", m_metadata.featureDim, coefficients);
+            spec.coefficientDim = coefficients;
+            auto const expectedCount = taylorBasisSize(spec.order);
+            if(spec.coefficientDim != expectedCount)
+                throw ModelError{
+                    "far_multipole.encoder.output_dim must be " + std::to_string(expectedCount) + " for order "
+                    + std::to_string(spec.order) + "."};
+
+            if(far.contains("per_component_scale"))
+            {
+                spec.perComponentScale
+                    = asDoubleVector(far.at("per_component_scale"), "far_multipole.per_component_scale");
+                if(spec.perComponentScale.size() != 6u)
+                    throw ModelError{"far_multipole.per_component_scale must have six entries."};
+            }
         }
 
         void parseTensors(json const& tensors)
@@ -935,6 +1173,39 @@ namespace picongpu::particles::neuralBunch
             }
             for(auto const& name : m_metadata.bank)
                 checkTensor(name, {m_metadata.latent, kOutDim}, referenced, "decoder bank entry");
+
+            if(m_metadata.nearModel.present)
+            {
+                for(auto const& layer : m_metadata.nearModel.layers)
+                {
+                    checkTensor(layer.weight, {layer.in, layer.out}, referenced, "near encoder weight");
+                    checkTensor(layer.bias, {layer.out}, referenced, "near encoder bias");
+                }
+                auto const& decoder = m_metadata.nearModel.decoder;
+                checkTensor(decoder.weight, {decoder.in, decoder.out}, referenced, "near decoder weight");
+                if(!decoder.bias.empty())
+                    checkTensor(decoder.bias, {decoder.out}, referenced, "near decoder bias");
+            }
+            if(m_metadata.midCorrection.present)
+            {
+                for(auto const& layer : m_metadata.midCorrection.layers)
+                {
+                    checkTensor(layer.weight, {layer.in, layer.out}, referenced, "mid encoder weight");
+                    checkTensor(layer.bias, {layer.out}, referenced, "mid encoder bias");
+                }
+                auto const& decoder = m_metadata.midCorrection.decoder;
+                checkTensor(decoder.weight, {decoder.in, decoder.out}, referenced, "mid decoder weight");
+                if(decoder.hasBias)
+                    checkTensor(decoder.bias, {decoder.out}, referenced, "mid decoder bias");
+                else if(!decoder.bias.empty())
+                    checkTensor(decoder.bias, {decoder.out}, referenced, "mid decoder bias");
+            }
+            if(m_metadata.farMultipole.present)
+                for(auto const& layer : m_metadata.farMultipole.layers)
+                {
+                    checkTensor(layer.weight, {layer.in, layer.out}, referenced, "far encoder weight");
+                    checkTensor(layer.bias, {layer.out}, referenced, "far encoder bias");
+                }
 
             if(referenced.size() != m_metadata.tensors.size())
             {

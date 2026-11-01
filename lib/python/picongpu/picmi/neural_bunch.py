@@ -46,6 +46,10 @@ class NeuralBunchInitializer(BaseModel):
       ``validation.validated_band``.
     * ``"referenceOnly"``: the exact FP64 reference is used and no model
       artifact is read.
+    * ``"banded"``: distance-banded near/mid/far composition. The near band
+      uses the exact reference (or an optional ``near_model``), the mid band
+      uses ``mid_correction`` or the neural model, and the far band uses the
+      analytic point field plus an optional ``far_multipole`` Taylor head.
     """
 
     filename: str = Field(min_length=1)
@@ -66,7 +70,7 @@ class NeuralBunchInitializer(BaseModel):
     tile_batch: int = Field(1, ge=1)
     """tiles per inference batch"""
 
-    field_initializer: FieldInitializerName = "neural"
+    field_initializer: FieldInitializerName = "banded"
     """field-initializer policy, see the class docstring"""
 
     enable_reference_fallback: bool = True
@@ -80,7 +84,7 @@ class NeuralBunchInitializer(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self):
-        if self.field_initializer != "referenceOnly" and not self.model_path:
+        if self.field_initializer in ("neural", "validatedNeural") and not self.model_path:
             raise ValueError(
                 f"model_path is required for field_initializer={self.field_initializer!r}; "
                 "use field_initializer='referenceOnly' to read the exact reference without an artifact."

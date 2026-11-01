@@ -297,7 +297,8 @@ namespace picongpu::particles::neuralBunch::tileGeometry
     {
         neural,
         validatedNeural,
-        referenceOnly
+        referenceOnly,
+        banded
     };
 
     //! Fractional safety margin on the validated band.

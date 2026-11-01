@@ -6,6 +6,23 @@ target_compile_definitions(neuralBunchReferenceTest PRIVATE NB_TESTDATA_DIR="${C
 target_link_libraries(neuralBunchReferenceTest PRIVATE OpenMP::OpenMP_CXX)
 add_test(NAME neuralBunchReferenceTest COMMAND neuralBunchReferenceTest)
 
+add_executable(neuralBunchBandedPolicyTest bandedPolicyTest.cpp)
+target_compile_features(neuralBunchBandedPolicyTest PRIVATE cxx_std_20)
+target_include_directories(neuralBunchBandedPolicyTest PRIVATE "${PIConGPUapp_SOURCE_DIR}/..")
+target_link_libraries(
+    neuralBunchBandedPolicyTest
+    PRIVATE alpaka::nn alpakaVendor::alpakaVendor nlohmann_json::nlohmann_json OpenMP::OpenMP_CXX
+)
+alpaka_finalize(neuralBunchBandedPolicyTest)
+target_compile_definitions(
+    neuralBunchBandedPolicyTest
+    PRIVATE
+        ALPAKA_CMAKE_TARGET_HEADERS_FINALIZE_CALLED
+        ALPAKA_CMAKE_TARGET_CUDA_FINALIZE_CALLED
+        ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
+)
+add_test(NAME neuralBunchBandedPolicyTest COMMAND neuralBunchBandedPolicyTest)
+
 add_executable(neuralBunchTileGeometryTest tileGeometryTest.cpp)
 target_compile_features(neuralBunchTileGeometryTest PRIVATE cxx_std_20)
 target_include_directories(neuralBunchTileGeometryTest PRIVATE "${PIConGPUapp_SOURCE_DIR}/..")
@@ -29,3 +46,20 @@ target_compile_definitions(
         ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
 )
 add_test(NAME neuralBunchProbeFeatureTest COMMAND neuralBunchProbeFeatureTest)
+enable_language(CUDA)
+add_executable(neuralBunchBandedBenchmark bandedBenchmark.cu)
+set_target_properties(neuralBunchBandedBenchmark PROPERTIES CUDA_ARCHITECTURES "70;75")
+target_compile_features(neuralBunchBandedBenchmark PRIVATE cxx_std_20)
+target_include_directories(neuralBunchBandedBenchmark PRIVATE "${PIConGPUapp_SOURCE_DIR}/..")
+target_link_libraries(
+    neuralBunchBandedBenchmark
+    PRIVATE alpaka::nn alpakaVendor::alpakaVendor nlohmann_json::nlohmann_json OpenMP::OpenMP_CXX
+)
+alpaka_finalize(neuralBunchBandedBenchmark)
+target_compile_definitions(
+    neuralBunchBandedBenchmark
+    PRIVATE
+        ALPAKA_CMAKE_TARGET_HEADERS_FINALIZE_CALLED
+        ALPAKA_CMAKE_TARGET_CUDA_FINALIZE_CALLED
+        ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
+)

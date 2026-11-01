@@ -16,7 +16,7 @@ from typing import Annotated
 
 from .grid import serialise_vec3
 
-FieldInitializerName = Literal["neural", "validatedNeural", "referenceOnly"]
+FieldInitializerName = Literal["neural", "validatedNeural", "referenceOnly", "banded"]
 """Field-initializer policy names, identical to the C++ enum values."""
 
 Vec3_float = Annotated[tuple[float, float, float], PlainSerializer(serialise_vec3)]
@@ -40,8 +40,10 @@ class NeuralBunchInit(BaseModel):
     same vocabulary.
 
     ``fieldInitializer`` is the policy discriminator: ``neural`` (default),
-    ``validatedNeural`` (only inside a measured validation band) or
-    ``referenceOnly`` (exact FP64 reference, no model artifact required).
+    ``validatedNeural`` (only inside a measured validation band),
+    ``referenceOnly`` (exact FP64 reference, no model artifact required) or
+    ``banded`` (near/mid/far composition of reference, learned heads and the
+    analytic point field).
     """
 
     type_neuralbunch: Literal[True] = True
@@ -65,7 +67,7 @@ class NeuralBunchInit(BaseModel):
     tileBatch: int = 1
     """tiles per inference batch"""
 
-    fieldInitializer: FieldInitializerName = "neural"
+    fieldInitializer: FieldInitializerName = "banded"
     """field-initializer policy"""
 
     enableReferenceFallback: bool = True
@@ -110,7 +112,7 @@ class NeuralBunchInit(BaseModel):
             raise ValueError("source_species must not be empty.")
         if not self.filename:
             raise ValueError("filename must not be empty.")
-        if self.fieldInitializer != "referenceOnly" and not self.modelPath:
+        if self.fieldInitializer in ("neural", "validatedNeural") and not self.modelPath:
             raise ValueError(
                 f"modelPath is required for fieldInitializer={self.fieldInitializer!r}; "
                 "use field_initializer='referenceOnly' to run without an artifact."
@@ -119,7 +121,7 @@ class NeuralBunchInit(BaseModel):
 
     @property
     def needs_model(self) -> bool:
-        return self.fieldInitializer != "referenceOnly"
+        return self.fieldInitializer in ("neural", "validatedNeural")
 
     @property
     def model_json(self) -> str:
