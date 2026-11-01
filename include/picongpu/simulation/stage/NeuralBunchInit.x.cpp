@@ -13,6 +13,8 @@
 #    include "picongpu/fields/FieldE.hpp"
 #    include "picongpu/param/neuralBunch.param"
 #    include "picongpu/particles/neuralBunch/BandPolicy.hpp"
+#    include "picongpu/particles/neuralBunch/DeviceBanded.hpp"
+#    include "picongpu/particles/neuralBunch/ExactShapeField.hpp"
 #    include "picongpu/particles/neuralBunch/Inference.hpp"
 #    include "picongpu/particles/neuralBunch/Model.hpp"
 #    include "picongpu/particles/neuralBunch/ReferenceKernel.hpp"
@@ -36,6 +38,9 @@
 #    include <pmacc/particles/operations/splitIntoListOfFrames.kernel>
 #    include <pmacc/traits/HasIdentifier.hpp>
 #    include <pmacc/traits/Resolve.hpp>
+
+#    include <alpaka/nn/onHost/ops/elementwise.hpp>
+#    include <alpaka/nn/onHost/ops/weighted_add.hpp>
 
 #    include <boost/mpl/placeholders.hpp>
 
@@ -333,6 +338,101 @@ namespace picongpu
                         += std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
                 }
 
+                /** Write device tile accumulators into the PIConGPU field device boxes.
+                 *
+                 * One thread per (tile, output slot). Tiles are enumerated exactly like ``tg::enumerateTiles``
+                 * (x fastest, then y, then z) and clipped against the owned domain. The E/B normalisation and
+                 * the internal-unit conversion happen here, once, after all bands and all chunks accumulated
+                 * into the same tile buffer.
+                 */
+                template<typename TEBox, typename TBBox>
+                struct TileStoreKernel
+                {
+                    TEBox eBox;
+                    TBBox bBox;
+                    std::array<int, 3> offset;
+                    std::array<int, 3> size;
+                    std::array<int, 3> tileCounts;
+                    int firstTile{};
+                    int tilesToStore{};
+                    double scaleE{};
+                    double scaleB{};
+
+                    ALPAKA_FN_ACC void operator()(auto const& acc, auto values) const
+                    {
+                        auto const total
+                            = static_cast<std::size_t>(tilesToStore) * static_cast<std::size_t>(tg::outputDimension);
+                        for(auto index : alpaka::onAcc::makeIdxMap(
+                                acc,
+                                alpaka::onAcc::worker::threadsInGrid,
+                                alpaka::IdxRange{alpaka::Vec{total}}))
+                        {
+                            auto const flat = static_cast<std::size_t>(index[0]);
+                            auto const localTile = flat / static_cast<std::size_t>(tg::outputDimension);
+                            auto const slot = flat % static_cast<std::size_t>(tg::outputDimension);
+                            auto const tileIndex = static_cast<std::size_t>(firstTile) + localTile;
+
+                            auto const countX = static_cast<std::size_t>(tileCounts[0]);
+                            auto const countY = static_cast<std::size_t>(tileCounts[1]);
+                            auto const i0 = tileIndex % countX;
+                            auto const j0 = (tileIndex / countX) % countY;
+                            auto const k0 = tileIndex / (countX * countY);
+
+                            auto const cell = slot / 6u;
+                            int const ci = static_cast<int>(cell % static_cast<std::size_t>(tg::tileNx));
+                            int const cj = static_cast<int>(
+                                (cell / static_cast<std::size_t>(tg::tileNx)) % static_cast<std::size_t>(tg::tileNy));
+                            int const ck = static_cast<int>(cell / static_cast<std::size_t>(tg::tileNx * tg::tileNy));
+                            int const component = static_cast<int>(slot % 6u);
+
+                            DataSpace<simDim> localCell;
+                            localCell[0] = static_cast<int>(i0) * tg::tileNx + ci;
+                            localCell[1] = static_cast<int>(j0) * tg::tileNy + cj;
+                            localCell[2] = static_cast<int>(k0) * tg::tileNz + ck;
+                            bool inside = true;
+                            for(int axis = 0; axis < 3; ++axis)
+                                if(localCell[axis] < 0 || localCell[axis] >= size[axis])
+                                    inside = false;
+                            if(!inside)
+                                continue;
+
+                            auto const scale = component < 3 ? scaleE : scaleB;
+                            auto const value = static_cast<float_X>(
+                                static_cast<double>(values[alpaka::Vec<std::size_t, 2>{localTile, slot}]) * scale);
+                            if(component < 3)
+                            {
+                                auto& field = const_cast<float3_X&>(eBox(localCell));
+                                field[component] += value;
+                            }
+                            else
+                            {
+                                auto& field = const_cast<float3_X&>(bBox(localCell));
+                                field[component - 3] += value;
+                            }
+                        }
+                    }
+                };
+
+                /** Add the host FP64-reference tile contributions to the device tile accumulator. */
+                struct AddTilesKernel
+                {
+                    ALPAKA_FN_ACC void operator()(auto const& acc, auto reference, auto values) const
+                    {
+                        auto const extents = values.getExtents();
+                        auto const total = static_cast<std::size_t>(extents[0]) * static_cast<std::size_t>(extents[1]);
+                        for(auto index : alpaka::onAcc::makeIdxMap(
+                                acc,
+                                alpaka::onAcc::worker::threadsInGrid,
+                                alpaka::IdxRange{alpaka::Vec{total}}))
+                        {
+                            auto const flat = static_cast<std::size_t>(index[0]);
+                            auto const columns = static_cast<std::size_t>(extents[1]);
+                            auto const idx = alpaka::Vec<std::size_t, 2>{flat / columns, flat % columns};
+                            values[idx] += reference[idx];
+                        }
+                    }
+                };
+
                 template<typename T_Species>
                 Statistics run(NeuralBunchParam const& params, uint32_t const step, MappingDesc const& cellDescription)
                 {
@@ -357,7 +457,6 @@ namespace picongpu
                         throw std::runtime_error(
                             "neuralBunch: the neural bunch initializer requires a 3D simulation.");
 
-                    double const dxMeters = cellSizeSI[0];
                     double const unitE = sim.unit.eField();
                     double const unitB = sim.unit.bField();
 
@@ -415,6 +514,17 @@ namespace picongpu
                         params.useModelForNear,
                         params.useModelForMid,
                         params.useMidCorrection};
+                    double const exactLimit = params.useExactDevice ? exactDistanceLimit(
+                                                                          aspectY,
+                                                                          aspectZ,
+                                                                          ExactDistancePolicy{
+                                                                              params.bandedExactMaxCells,
+                                                                              params.bandedExactMaxCells <= 0.0,
+                                                                              48.0,
+                                                                              params.bandedExactAspect10Cells})
+                                                                    : 0.0;
+                    // Bounded source batch used by the device encoder/decoder and the point field.
+                    std::size_t const sourceBatch = std::max<std::size_t>(64u, params.tileBatch);
                     tg::DomainBounds domain{};
                     tg::ValidatedBand validatedBand;
                     tg::ValidatedBand const* band = nullptr;
@@ -455,19 +565,56 @@ namespace picongpu
                     }
 
                     auto const grid = tg::enumerateTiles(offset, size);
-                    std::vector<std::vector<double>> latents;
-                    if(meta)
-                        latents.assign(grid.tiles.size(), std::vector<double>(meta->latent, 0.0));
+                    std::size_t const tileCount = grid.tiles.size();
+                    std::size_t const latentDim = std::max<std::size_t>(1u, meta ? meta->latent : 1u);
+                    // One device accumulator per tile, shared by every band and every chunk. Nothing is
+                    // copied to the host until the single final store.
+                    auto deviceTileValues = alpaka::onHost::alloc<float>(
+                        queue.getDevice(),
+                        alpaka::Vec{tileCount, std::size_t{tg::outputDimension}});
+                    alpaka::nn::onHost::ops::fill(queue, exec, deviceTileValues, 0.0f);
+                    auto deviceLatents
+                        = alpaka::onHost::alloc<float>(queue.getDevice(), alpaka::Vec{tileCount, latentDim});
+                    alpaka::nn::onHost::ops::fill(queue, exec, deviceLatents, 0.0f);
+                    auto tileValueView = [&](std::size_t tile)
+                    {
+                        return alpaka::makeView(
+                            queue.getDevice(),
+                            alpaka::onHost::data(deviceTileValues) + tile * tg::outputDimension,
+                            alpaka::Vec{std::size_t{tg::outputDimension}});
+                    };
+                    auto tileValueRow = [&](std::size_t tile)
+                    {
+                        return alpaka::makeView(
+                            queue.getDevice(),
+                            alpaka::onHost::data(deviceTileValues) + tile * tg::outputDimension,
+                            alpaka::Vec{std::size_t{1}, std::size_t{tg::outputDimension}});
+                    };
+                    auto latentFlat = [&](std::size_t tile)
+                    {
+                        return alpaka::makeView(
+                            queue.getDevice(),
+                            alpaka::onHost::data(deviceLatents) + tile * latentDim,
+                            alpaka::Vec{latentDim});
+                    };
+                    auto latentRow = [&](std::size_t tile)
+                    {
+                        return alpaka::makeView(
+                            queue.getDevice(),
+                            alpaka::onHost::data(deviceLatents) + tile * latentDim,
+                            alpaka::Vec{std::size_t{1}, latentDim});
+                    };
                     std::vector<std::vector<double>> referenceTiles(
-                        grid.tiles.size(),
-                        std::vector<double>(tg::outputDimension, 0.0));
-                    std::vector<std::vector<double>> bandedTiles(
-                        isBanded ? grid.tiles.size() : 0u,
+                        tileCount,
                         std::vector<double>(tg::outputDimension, 0.0));
                     std::array<std::uint64_t, 3> bandedPairs{};
                     std::array<double, 3> bandedBandSeconds{};
                     std::uint64_t bandedMissingModelPairs = 0;
                     std::uint64_t bandedModelPairs = 0;
+                    std::uint64_t exactDevicePairs = 0;
+                    std::uint64_t exactPointPairs = 0;
+                    double exactDeviceSeconds = 0.0;
+                    double exactPointSeconds = 0.0;
 
                     MPI_Comm const comm = Environment<simDim>::get().GridController().getCommunicator().getMPIComm();
                     int const rank = Environment<simDim>::get().GridController().getGlobalRank();
@@ -567,11 +714,6 @@ namespace picongpu
                     bool const forceReference = std::getenv("NEURAL_BUNCH_FORCE_REFERENCE") != nullptr;
                     std::uint64_t outsideDomainPairs = 0;
 
-                    bool diagnosticChosen = false;
-                    std::size_t diagnosticTile = 0;
-                    std::array<double, 3> diagnosticOrigin{};
-                    std::vector<Source> diagnosticSources;
-                    std::vector<nbRef::Source> diagnosticReferenceSources;
                     std::vector<std::vector<nbRef::Source>> referenceWork(grid.tiles.size());
 
                     {
@@ -600,13 +742,11 @@ namespace picongpu
                                             = static_cast<double>(grid.tiles[tileIndex].origin[axis])
                                               * cellSizeSI[axis];
 
-                                    std::vector<Source> allSources;
-                                    std::vector<nbRef::Source> allReferenceSources;
                                     std::vector<Source> neuralSources;
                                     std::vector<nbRef::Source> referenceSources;
                                     std::vector<Source> bandedSources;
-                                    allSources.reserve(chunk.size());
-                                    allReferenceSources.reserve(chunk.size());
+                                    std::vector<Source> exactSources;
+                                    std::vector<Source> exactPointSources;
                                     for(std::size_t i = 0; i < chunk.size(); ++i)
                                     {
                                         if(!chunk.valid[i])
@@ -622,13 +762,11 @@ namespace picongpu
                                         source.weight = chunk.weight[i];
                                         source.aY = aspectY;
                                         source.aZ = aspectZ;
-                                        allSources.push_back(source);
 
                                         nbRef::Source referenceSource;
                                         referenceSource.x = {position[0], position[1], position[2]};
                                         referenceSource.u = {source.u[0], source.u[1], source.u[2]};
                                         referenceSource.w = source.weight;
-                                        allReferenceSources.push_back(referenceSource);
 
                                         double const gamma = std::sqrt(
                                             1.0 + source.u[0] * source.u[0] + source.u[1] * source.u[1]
@@ -649,6 +787,21 @@ namespace picongpu
                                                 continue;
                                             }
                                             auto const bandValue = bandPolicy.classifyDistance(distanceCells);
+                                            if(params.useExactDevice)
+                                            {
+                                                ++bandedPairs
+                                                    [bandValue == Band::near ? 0 : (bandValue == Band::mid ? 1 : 2)];
+                                                // Near uses the device quadrature. Mid uses it below the
+                                                // measured cutoff and the point field beyond it; far stays
+                                                // point field. No pair is routed to the host reference.
+                                                if(bandValue == Band::near
+                                                   || (bandValue == Band::mid && distanceCells < exactLimit))
+                                                    exactSources.push_back(source);
+                                                else
+                                                    exactPointSources.push_back(source);
+                                                ++bandedModelPairs;
+                                                continue;
+                                            }
                                             ++bandedPairs
                                                 [bandValue == Band::near ? 0 : (bandValue == Band::mid ? 1 : 2)];
                                             auto const route = routeBandedBand(
@@ -720,39 +873,53 @@ namespace picongpu
                                     if(!neuralSources.empty())
                                     {
                                         auto const encodeStart = std::chrono::steady_clock::now();
-                                        auto hidden = runEncoder(queue, exec, *meta, tensors, neuralSources);
+                                        for(std::size_t begin = 0u; begin < neuralSources.size(); begin += sourceBatch)
+                                        {
+                                            auto const last = std::min(begin + sourceBatch, neuralSources.size());
+                                            std::vector<Source> batch(
+                                                neuralSources.begin() + begin,
+                                                neuralSources.begin() + last);
+                                            auto hidden = alpaka::onHost::alloc<float>(
+                                                queue.getDevice(),
+                                                alpaka::Vec{batch.size(), meta->latent});
+                                            picongpu::particles::neuralBunch::detail::enqueueEncodeLayers(
+                                                queue,
+                                                exec,
+                                                *meta,
+                                                meta->featureKind,
+                                                meta->featureDim,
+                                                meta->layers,
+                                                tensors,
+                                                std::span<Source const>{batch},
+                                                hidden);
+                                            hidden.keepAlive(queue);
+                                            auto weights = deviceDetail::packNegativeWeights(
+                                                queue,
+                                                std::span<Source const>{batch});
+                                            auto latentTarget = latentFlat(tileIndex);
+                                            deviceDetail::accumulate(queue, exec, hidden, weights, latentTarget);
+                                        }
                                         stats.inferenceSeconds += std::chrono::duration<double>(
                                                                       std::chrono::steady_clock::now() - encodeStart)
                                                                       .count();
-                                        auto& latent = latents[tileIndex];
-                                        for(std::size_t i = 0; i < neuralSources.size(); ++i)
-                                            for(std::size_t k = 0; k < meta->latent; ++k)
-                                            {
-                                                double const contribution
-                                                    = -neuralSources[i].weight
-                                                      * static_cast<double>(hidden[i * meta->latent + k]);
-                                                latent[k] += contribution;
-                                                stats.maxLatent = std::max(stats.maxLatent, std::abs(latent[k]));
-                                            }
                                         stats.neuralPairs += neuralSources.size();
                                     }
 
                                     if(!bandedSources.empty())
                                     {
                                         auto const bandStart = std::chrono::steady_clock::now();
-                                        auto const bandedResult = evaluateTileBanded(
+                                        auto tileTarget = tileValueView(tileIndex);
+                                        auto const bandedResult = enqueueBandedTileDevice(
                                             queue,
                                             exec,
                                             *meta,
                                             tensors,
-                                            bandedSources,
+                                            std::span<Source const>{bandedSources},
                                             bandPolicy,
-                                            {},
                                             aspectY,
                                             aspectZ,
-                                            FieldNormalization{cells.dx},
-                                            std::numeric_limits<std::size_t>::max() / tg::outputDimension,
-                                            std::max<std::size_t>(64u, params.tileBatch),
+                                            tileTarget,
+                                            sourceBatch,
                                             TaylorBatchBackend::automatic,
                                             params.useModelForNear,
                                             params.useModelForMid.value_or(false),
@@ -761,9 +928,6 @@ namespace picongpu
                                             throw std::runtime_error(
                                                 "neuralBunch: banded evaluation requested a near/mid model that "
                                                 "is not configured.");
-                                        auto& destination = bandedTiles[tileIndex];
-                                        for(std::size_t k = 0; k < tg::outputDimension; ++k)
-                                            destination[k] += static_cast<double>(bandedResult.values[k]);
                                         for(std::size_t b = 0; b < 3; ++b)
                                             bandedBandSeconds[b] += bandedResult.bandSeconds[b];
                                         stats.inferenceSeconds += std::chrono::duration<double>(
@@ -771,56 +935,94 @@ namespace picongpu
                                                                       .count();
                                     }
 
+                                    if(!exactSources.empty())
+                                    {
+                                        auto const exactStart = std::chrono::steady_clock::now();
+                                        auto const count = exactSources.size();
+                                        auto hostSources
+                                            = alpaka::onHost::allocHost<double>(alpaka::Vec{count, std::size_t{6}});
+                                        auto hostWeights = alpaka::onHost::allocHost<double>(alpaka::Vec{count});
+                                        for(std::size_t i = 0; i < count; ++i)
+                                        {
+                                            for(std::size_t c = 0; c < 3u; ++c)
+                                            {
+                                                hostSources[alpaka::Vec<std::size_t, 2>{i, c}] = exactSources[i].r[c];
+                                                hostSources[alpaka::Vec<std::size_t, 2>{i, c + 3u}]
+                                                    = exactSources[i].u[c];
+                                            }
+                                            hostWeights[alpaka::Vec<std::size_t, 1>{i}] = -exactSources[i].weight;
+                                        }
+                                        auto deviceSources = alpaka::onHost::allocLike(queue.getDevice(), hostSources);
+                                        auto deviceWeights = alpaka::onHost::allocLike(queue.getDevice(), hostWeights);
+                                        alpaka::onHost::memcpy(queue, deviceSources, hostSources);
+                                        alpaka::onHost::memcpy(queue, deviceWeights, hostWeights);
+                                        hostSources.keepAlive(queue);
+                                        hostWeights.keepAlive(queue);
+                                        auto tileTarget = tileValueView(tileIndex);
+                                        // The in-support quadrature needs ~21 KiB of local stack per thread,
+                                        // and PIConGPU reserves nearly all free device memory for the particle
+                                        // heap. Bound the resident thread count so the launch stack fits into
+                                        // a quarter of the currently free device memory.
+                                        auto const freeBytes = device.getFreeGlobalMemBytes();
+                                        std::size_t const exactMaxThreads
+                                            = std::clamp<std::size_t>(freeBytes / (4u * 24u * 1024u), 512u, 65536u);
+                                        enqueueExactShapeFieldTileAccumulate<double>(
+                                            queue,
+                                            exec,
+                                            deviceSources,
+                                            deviceWeights,
+                                            count,
+                                            Vec3d{1.0, aspectY, aspectZ},
+                                            ExactSettings{},
+                                            tileTarget,
+                                            exactMaxThreads);
+                                        exactDevicePairs += count;
+                                        exactDeviceSeconds += std::chrono::duration<double>(
+                                                                  std::chrono::steady_clock::now() - exactStart)
+                                                                  .count();
+                                    }
+
+                                    if(!exactPointSources.empty())
+                                    {
+                                        auto const pointStart = std::chrono::steady_clock::now();
+                                        for(std::size_t begin = 0u; begin < exactPointSources.size();
+                                            begin += sourceBatch)
+                                        {
+                                            auto const last = std::min(begin + sourceBatch, exactPointSources.size());
+                                            std::vector<Source> batch(
+                                                exactPointSources.begin() + begin,
+                                                exactPointSources.begin() + last);
+                                            auto deviceSources = deviceDetail::packSourceGeometry(
+                                                queue,
+                                                std::span<Source const>{batch});
+                                            auto contributions = alpaka::onHost::alloc<float>(
+                                                queue.getDevice(),
+                                                alpaka::Vec{batch.size(), kOutDim});
+                                            enqueuePointFieldBatched(
+                                                queue,
+                                                exec,
+                                                deviceSources,
+                                                Vec3d{1.0, aspectY, aspectZ},
+                                                contributions);
+                                            deviceSources.keepAlive(queue);
+                                            contributions.keepAlive(queue);
+                                            auto weights = deviceDetail::packNegativeWeights(
+                                                queue,
+                                                std::span<Source const>{batch});
+                                            auto tileTarget = tileValueView(tileIndex);
+                                            deviceDetail::accumulate(queue, exec, contributions, weights, tileTarget);
+                                        }
+                                        exactPointPairs += exactPointSources.size();
+                                        exactPointSeconds += std::chrono::duration<double>(
+                                                                 std::chrono::steady_clock::now() - pointStart)
+                                                                 .count();
+                                    }
+
                                     if(!referenceSources.empty())
                                     {
                                         // Reference work is evaluated after the tile loop, in parallel.
                                         referenceWork[tileIndex] = std::move(referenceSources);
                                         stats.referencePairs += referenceWork[tileIndex].size();
-                                    }
-
-                                    if(!diagnosticChosen && !neuralSources.empty()
-                                       && !referenceWork[tileIndex].empty())
-                                    {
-                                        // Compare the three policies on a bounded subset of this tile:
-                                        // up to four neural and four reference sources. This keeps the
-                                        // reference-only diagnostic affordable while using the same
-                                        // production code paths.
-                                        diagnosticChosen = true;
-                                        diagnosticTile = tileIndex;
-                                        diagnosticOrigin = tileOriginPhysical;
-                                        std::size_t const neuralCount
-                                            = std::min<std::size_t>(4u, neuralSources.size());
-                                        std::size_t const referenceCount
-                                            = std::min<std::size_t>(4u, referenceWork[tileIndex].size());
-                                        for(std::size_t k = 0; k < neuralCount; ++k)
-                                        {
-                                            nbRef::Source reference;
-                                            for(int axis = 0; axis < 3; ++axis)
-                                            {
-                                                (&reference.x.x)[axis]
-                                                    = neuralSources[k].r[axis] * cells.dx + tileOriginPhysical[axis];
-                                                (&reference.u.x)[axis] = neuralSources[k].u[axis];
-                                            }
-                                            reference.w = neuralSources[k].weight;
-                                            diagnosticReferenceSources.push_back(reference);
-                                        }
-                                        for(std::size_t k = 0; k < referenceCount; ++k)
-                                            diagnosticReferenceSources.push_back(referenceWork[tileIndex][k]);
-
-                                        for(auto const& reference : diagnosticReferenceSources)
-                                        {
-                                            Source source;
-                                            for(int axis = 0; axis < 3; ++axis)
-                                            {
-                                                source.r[axis]
-                                                    = ((&reference.x.x)[axis] - tileOriginPhysical[axis]) / cells.dx;
-                                                source.u[axis] = (&reference.u.x)[axis];
-                                            }
-                                            source.weight = reference.w;
-                                            source.aY = aspectY;
-                                            source.aZ = aspectZ;
-                                            diagnosticSources.push_back(source);
-                                        }
                                     }
                                 }
 
@@ -915,126 +1117,97 @@ namespace picongpu
                             + std::to_string(stats.zeroWeightPairs)
                             + " != " + std::to_string(stats.globalParticles * grid.tiles.size()) + " pairs.");
 
-                    // Hybrid-vs-forced comparison for one small tile where both routes occur.
-                    if(diagnosticChosen && meta)
-                    {
-                        auto const referenceAll = nbRef::tileFieldParallel(
-                            {diagnosticOrigin[0], diagnosticOrigin[1], diagnosticOrigin[2]},
-                            diagnosticReferenceSources,
-                            cells.dx,
-                            cells.dy,
-                            cells.dz);
-                        std::vector<double> referenceAllSI(tg::outputDimension, 0.0);
-                        for(std::size_t k = 0; k < referenceAllSI.size(); ++k)
-                            referenceAllSI[k] = (k % 6) < 3 ? tg::normalizedEToSI(referenceAll[k], cells.dx)
-                                                            : tg::normalizedBToSI(referenceAll[k], cells.dx);
-
-                        auto hidden = runEncoder(queue, exec, *meta, tensors, diagnosticSources);
-                        std::vector<double> neuralAllLatent(meta->latent, 0.0);
-                        for(std::size_t i = 0; i < diagnosticSources.size(); ++i)
-                            for(std::size_t k = 0; k < meta->latent; ++k)
-                                neuralAllLatent[k]
-                                    -= diagnosticSources[i].weight * static_cast<double>(hidden[i * meta->latent + k]);
-                        std::vector<float> const neuralAllFloat(neuralAllLatent.begin(), neuralAllLatent.end());
-                        auto const neuralAll = decodeFromLatent(
-                            queue,
-                            exec,
-                            *meta,
-                            tensors,
-                            neuralAllFloat,
-                            aspectY,
-                            aspectZ,
-                            FieldNormalization{cells.dx});
-
-                        std::vector<float> const neuralSubFloat(
-                            latents[diagnosticTile].begin(),
-                            latents[diagnosticTile].end());
-                        auto const neuralSub = decodeFromLatent(
-                            queue,
-                            exec,
-                            *meta,
-                            tensors,
-                            neuralSubFloat,
-                            aspectY,
-                            aspectZ,
-                            FieldNormalization{cells.dx});
-
-                        double hybridVsReference = 0.0;
-                        double hybridVsNeural = 0.0;
-                        double scale = 0.0;
-                        for(std::size_t k = 0; k < tg::outputDimension; ++k)
-                        {
-                            double const referenceSubSI
-                                = (k % 6) < 3 ? tg::normalizedEToSI(referenceTiles[diagnosticTile][k], cells.dx)
-                                              : tg::normalizedBToSI(referenceTiles[diagnosticTile][k], cells.dx);
-                            double const hybrid = static_cast<double>(neuralSub[k]) + referenceSubSI;
-                            hybridVsReference = std::max(hybridVsReference, std::abs(hybrid - referenceAllSI[k]));
-                            hybridVsNeural
-                                = std::max(hybridVsNeural, std::abs(hybrid - static_cast<double>(neuralAll[k])));
-                            scale = std::max(
-                                scale,
-                                std::max(std::abs(referenceAllSI[k]), std::abs(static_cast<double>(neuralAll[k]))));
-                        }
-                        stats.diagHybridVsReference = hybridVsReference / std::max(scale, 1e-300);
-                        stats.diagHybridVsNeural = hybridVsNeural / std::max(scale, 1e-300);
-                        stats.diagReferenceScale = scale;
-                        stats.diagAvailable = true;
-                    }
-
                     auto const storeStart = std::chrono::steady_clock::now();
-                    for(std::size_t tileIndex = 0; tileIndex < grid.tiles.size(); ++tileIndex)
+                    // Final decoder pass for the plain neural policy: latent -> bank GEMV directly into the
+                    // device tile accumulator. The banded policy has already accumulated its device results.
+                    if(!isBanded && meta)
                     {
-                        auto const& tile = grid.tiles[tileIndex];
-                        std::vector<float> values(tg::outputDimension, 0.0f);
-                        if(isBanded)
+                        for(std::size_t tileIndex = 0; tileIndex < tileCount; ++tileIndex)
                         {
-                            for(std::size_t k = 0; k < tg::outputDimension; ++k)
-                                values[k] = static_cast<float>(bandedTiles[tileIndex][k]);
-                        }
-                        else if(meta)
-                        {
-                            std::vector<float> const latentFloat(latents[tileIndex].begin(), latents[tileIndex].end());
-                            values = decodeFromLatent(
+                            auto latentTarget = latentRow(tileIndex);
+                            auto fieldTarget = tileValueRow(tileIndex);
+                            deviceDetail::enqueueDecodeBankBatchedRaw(
                                 queue,
                                 exec,
                                 *meta,
                                 tensors,
-                                latentFloat,
+                                latentTarget,
                                 aspectY,
                                 aspectZ,
-                                FieldNormalization{cells.dx});
+                                fieldTarget);
                         }
-                        auto const& referenceTile = referenceTiles[tileIndex];
-                        for(int k = 0; k < tg::tileNz; ++k)
-                            for(int j = 0; j < tg::tileNy; ++j)
-                                for(int i = 0; i < tg::tileNx; ++i)
-                                {
-                                    std::array<int, 3> cell{
-                                        tile.origin[0] + i,
-                                        tile.origin[1] + j,
-                                        tile.origin[2] + k};
-                                    if(!tg::insideLocalDomain(cell, offset, size))
-                                        continue;
-                                    DataSpace<simDim> localCell;
-                                    for(int axis = 0; axis < 3; ++axis)
-                                        localCell[axis] = cell[axis] - offset[axis];
-                                    auto& e = hostE(localCell);
-                                    auto& b = hostB(localCell);
-                                    for(int component = 0; component < 3; ++component)
-                                    {
-                                        std::size_t const index = tg::outputIndex(i, j, k, component);
-                                        std::size_t const indexB = tg::outputIndex(i, j, k, component + 3);
-                                        double const eSI = static_cast<double>(values[index])
-                                                           + tg::normalizedEToSI(referenceTile[index], cells.dx);
-                                        double const bSI = static_cast<double>(values[indexB])
-                                                           + tg::normalizedBToSI(referenceTile[indexB], cells.dx);
-                                        e[component] += static_cast<float_X>(eSI / unitE);
-                                        b[component] += static_cast<float_X>(bSI / unitB);
-                                    }
-                                }
                     }
-                    fieldE->syncToDevice();
-                    fieldB->syncToDevice();
+
+                    // The FP64 reference is still evaluated on the host (it is the validation oracle). Its
+                    // tile sums are uploaded once and added on the device; there is no per-tile host deposit.
+                    bool hasReference = false;
+                    for(auto const& tileValues : referenceTiles)
+                    {
+                        for(double value : tileValues)
+                            if(value != 0.0)
+                            {
+                                hasReference = true;
+                                break;
+                            }
+                        if(hasReference)
+                            break;
+                    }
+                    if(hasReference && tileCount != 0u)
+                    {
+                        auto hostReference = alpaka::onHost::allocHost<float>(
+                            alpaka::Vec{tileCount, std::size_t{tg::outputDimension}});
+                        for(std::size_t tileIndex = 0; tileIndex < tileCount; ++tileIndex)
+                            for(std::size_t k = 0; k < tg::outputDimension; ++k)
+                                hostReference[alpaka::Vec<std::size_t, 2>{tileIndex, k}]
+                                    = static_cast<float>(referenceTiles[tileIndex][k]);
+                        auto deviceReference = alpaka::onHost::allocLike(queue.getDevice(), hostReference);
+                        alpaka::onHost::memcpy(queue, deviceReference, hostReference);
+                        hostReference.keepAlive(queue);
+                        alpaka::nn::onHost::ops::add<float>(
+                            queue,
+                            exec,
+                            deviceReference,
+                            deviceTileValues,
+                            deviceTileValues);
+                    }
+
+                    // One store kernel per tile batch writes the accumulated normalised values into the
+                    // PIConGPU device field data boxes. No host field write and no per-tile queue wait.
+                    auto const guardSize = fieldE->getGridBuffer().getGridLayout().guardSizeND();
+                    auto eBox = fieldE->getDeviceDataBox().shift(guardSize);
+                    auto bBox = fieldB->getDeviceDataBox().shift(guardSize);
+                    FieldNormalization const normalization{cells.dx};
+                    double const scaleE = normalization.scaleE() / unitE;
+                    double const scaleB = normalization.scaleB() / unitB;
+                    std::size_t const tileBatchSize = std::max<std::size_t>(1u, params.tileBatch);
+                    for(std::size_t firstTile = 0; firstTile < tileCount; firstTile += tileBatchSize)
+                    {
+                        auto const storedTiles = std::min(tileBatchSize, tileCount - firstTile);
+                        auto values = alpaka::makeView(
+                            queue.getDevice(),
+                            alpaka::onHost::data(deviceTileValues) + firstTile * tg::outputDimension,
+                            alpaka::Vec{storedTiles, std::size_t{tg::outputDimension}});
+                        TileStoreKernel<decltype(eBox), decltype(bBox)> const kernel{
+                            eBox,
+                            bBox,
+                            offset,
+                            size,
+                            grid.count,
+                            static_cast<int>(firstTile),
+                            static_cast<int>(storedTiles),
+                            scaleE,
+                            scaleB};
+                        auto const total = storedTiles * tg::outputDimension;
+                        queue.enqueue(
+                            picongpu::particles::neuralBunch::detail::makeFrameSpec(total, 128u, exec),
+                            alpaka::KernelBundle{kernel, values});
+                    }
+                    // Single synchronisation point for the whole initializer: every device contribution,
+                    // decode and store above must be complete before the field mirror is refreshed for the
+                    // final diagnostics.
+                    alpaka::onHost::wait(queue);
+                    fieldE->synchronize();
+                    fieldB->synchronize();
                     stats.fieldStoreSeconds
                         += std::chrono::duration<double>(std::chrono::steady_clock::now() - storeStart).count();
 
@@ -1176,6 +1349,27 @@ namespace picongpu
                             % num(bandedSecondsTotal[2]) % num(rate(bandedTotal[0], bandedSecondsTotal[0]))
                             % num(rate(bandedTotal[1], bandedSecondsTotal[1]))
                             % num(rate(bandedTotal[2], bandedSecondsTotal[2]));
+                    }
+                    if(params.useExactDevice)
+                    {
+                        unsigned long long exactLocal = exactDevicePairs;
+                        unsigned long long pointLocal = exactPointPairs;
+                        unsigned long long exactTotal = 0;
+                        unsigned long long pointTotal = 0;
+                        MPI_Allreduce(&exactLocal, &exactTotal, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+                        MPI_Allreduce(&pointLocal, &pointTotal, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+                        double exactSecondsTotal = 0.0;
+                        double pointSecondsTotal = 0.0;
+                        MPI_Allreduce(&exactDeviceSeconds, &exactSecondsTotal, 1, MPI_DOUBLE, MPI_SUM, comm);
+                        MPI_Allreduce(&exactPointSeconds, &pointSecondsTotal, 1, MPI_DOUBLE, MPI_SUM, comm);
+                        auto rate = [](double pairs, double seconds) { return seconds > 0.0 ? pairs / seconds : 0.0; };
+                        log<picLog::PHYSICS>(
+                            "neuralBunch: rank=%1% useExactDevice=true cutoff=%2% cells exactPairs=%3% "
+                            "pointPairs=%4% exactSeconds=%5% pointSeconds=%6% exactPairsPerSecond=%7% "
+                            "pointPairsPerSecond=%8%")
+                            % rank % num(exactLimit) % exactTotal % pointTotal % num(exactSecondsTotal)
+                            % num(pointSecondsTotal) % num(rate(static_cast<double>(exactTotal), exactSecondsTotal))
+                            % num(rate(static_cast<double>(pointTotal), pointSecondsTotal));
                     }
                     unsigned long long neuralPairs = stats.neuralPairs;
                     unsigned long long referencePairs = stats.referencePairs;

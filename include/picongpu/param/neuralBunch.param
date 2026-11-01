@@ -99,6 +99,13 @@ namespace picongpu::neuralBunch
         //! ``banded``: opt into the learned ``mid_correction`` head. Default off: the learned correction is
         //! measurably worse than the point field alone in 4..48 cells.
         bool useMidCorrection = false;
+        //! ``banded``: evaluate near and mid with the validated FP64 GPU quadrature instead of the CPU reference
+        //! or the point field. Exact only for d < the cutoff below; point field beyond.
+        bool useExactDevice = false;
+        //! Distance cutoff for the device quadrature. Safe default 128 cells; <=0 enables aspect scaling.
+        double bandedExactMaxCells = 128.0;
+        //! Aspect scaling uses 48 cells for max(a_y,a_z)<=2 and this value at aspect>=10 (BANDS.md).
+        double bandedExactAspect10Cells = 512.0;
         //! Must stay 0: source time equals injection time (no drift applied).
         int timePolicy = 0;
     };

@@ -63,3 +63,21 @@ target_compile_definitions(
         ALPAKA_CMAKE_TARGET_CUDA_FINALIZE_CALLED
         ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
 )
+
+add_executable(neuralBunchDevicePipelineTest devicePipelineTest.cu)
+set_target_properties(neuralBunchDevicePipelineTest PROPERTIES CUDA_ARCHITECTURES "70;75")
+target_compile_features(neuralBunchDevicePipelineTest PRIVATE cxx_std_20)
+target_include_directories(neuralBunchDevicePipelineTest PRIVATE "${PIConGPUapp_SOURCE_DIR}/..")
+target_link_libraries(
+    neuralBunchDevicePipelineTest
+    PRIVATE alpaka::nn alpakaVendor::alpakaVendor nlohmann_json::nlohmann_json OpenMP::OpenMP_CXX
+)
+alpaka_finalize(neuralBunchDevicePipelineTest)
+target_compile_definitions(
+    neuralBunchDevicePipelineTest
+    PRIVATE
+        ALPAKA_CMAKE_TARGET_HEADERS_FINALIZE_CALLED
+        ALPAKA_CMAKE_TARGET_CUDA_FINALIZE_CALLED
+        ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
+)
+add_test(NAME neuralBunchDevicePipelineTest COMMAND neuralBunchDevicePipelineTest cuda)

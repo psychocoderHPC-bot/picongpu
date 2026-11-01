@@ -48,6 +48,9 @@ namespace picongpu::neuralBunch
         bool useModelForNear = false;
         std::optional<bool> useModelForMid{};
         bool useMidCorrection = false;
+        bool useExactDevice = false;
+        double bandedExactMaxCells = 128.0;
+        double bandedExactAspect10Cells = 512.0;
         int timePolicy = {{{neural_bunch.timePolicy}}};
     };
     {{/neural_bunch_enabled}}
@@ -83,6 +86,9 @@ namespace picongpu::neuralBunch
         bool useModelForNear = false;
         std::optional<bool> useModelForMid{};
         bool useMidCorrection = false;
+        bool useExactDevice = false;
+        double bandedExactMaxCells = 128.0;
+        double bandedExactAspect10Cells = 512.0;
         int timePolicy = 0;
     };
     {{/neural_bunch_enabled}}

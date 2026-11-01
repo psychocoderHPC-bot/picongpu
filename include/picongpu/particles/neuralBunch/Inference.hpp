@@ -292,8 +292,14 @@ namespace picongpu::particles::neuralBunch
             return devicePacked;
         }
 
+        /** Enqueue the encoder chain without waiting for completion.
+         *
+         * This is the device-resident entry point used by the production stage: the returned @p hidden
+         * buffer still has pending work, and the caller keeps it alive until the queue is synchronised.
+         * @p hidden must be a device buffer already sized [sources.size(), layers.back().out].
+         */
         template<typename TQueue, typename TExec, typename TBuffer, typename THidden>
-        void encodeLayers(
+        void enqueueEncodeLayers(
             TQueue& queue,
             TExec exec,
             ModelMetadata const& meta,
@@ -313,7 +319,9 @@ namespace picongpu::particles::neuralBunch
                 throw std::invalid_argument{"encodeLayers: hidden column count must match the last layer out."};
 
             auto deviceSources = packSources(queue, sources);
+            deviceSources.keepAlive(queue);
             auto features = alpaka::onHost::alloc<float>(queue.getDevice(), alpaka::Vec{count, featureDim});
+            features.keepAlive(queue);
             enqueueFeatures(queue, exec, featureKind, count, deviceSources, features);
 
             using Weight = alpaka::nn::onHost::nn::WeightView<decltype(alpaka::makeView(
@@ -352,6 +360,22 @@ namespace picongpu::particles::neuralBunch
                 alpaka::nn::onHost::nn::Activation::silu,
                 alpaka::nn::onHost::nn::Activation::none,
                 hidden);
+        }
+
+        /** Enqueue the encoder chain and wait for it (host convenience, used by the test helpers). */
+        template<typename TQueue, typename TExec, typename TBuffer, typename THidden>
+        void encodeLayers(
+            TQueue& queue,
+            TExec exec,
+            ModelMetadata const& meta,
+            FeatureKind featureKind,
+            std::size_t featureDim,
+            std::vector<EncoderLayer> const& layers,
+            std::vector<TBuffer> const& tensors,
+            std::span<Source const> sources,
+            THidden& hidden)
+        {
+            enqueueEncodeLayers(queue, exec, meta, featureKind, featureDim, layers, tensors, sources, hidden);
             alpaka::onHost::wait(queue);
         }
 

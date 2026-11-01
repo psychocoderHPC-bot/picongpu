@@ -444,7 +444,7 @@ if(PIC_SEARCH_neuralBunch)
         FetchContent_Declare(
             alpakaVendor
             GIT_REPOSITORY https://github.com/psychocoderHPC-bot/alpakaVendor.git
-            GIT_TAG c49342ad8d1ddd5331998279f319be00593c641f
+            GIT_TAG af24cc7b2bd125056e9889e270d3af7bdf972c6f
         )
         FetchContent_MakeAvailable(alpakaVendor)
 
@@ -452,7 +452,7 @@ if(PIC_SEARCH_neuralBunch)
         FetchContent_Declare(
             alpakaNN
             GIT_REPOSITORY https://github.com/psychocoderHPC-bot/alpakaNN.git
-            GIT_TAG c34d940b7f511b2401e895ddc1c2a69ba64d3c5a
+            GIT_TAG d2581e44033d16f741a13d9097f36541a4f2c056
         )
         FetchContent_MakeAvailable(alpakaNN)
 
