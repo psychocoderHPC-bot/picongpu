@@ -47,6 +47,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace picongpu::particles::neuralBunch
@@ -116,11 +117,11 @@ namespace picongpu::particles::neuralBunch
 
         BilinearCell result;
         result.index = {iz0 * ny + iy0, iz0 * ny + iy1, iz1 * ny + iy0, iz1 * ny + iy1};
-        result.weight
-            = {static_cast<float>((1.0 - fy) * (1.0 - fz)),
-               static_cast<float>(fy * (1.0 - fz)),
-               static_cast<float>((1.0 - fy) * fz),
-               static_cast<float>(fy * fz)};
+        result.weight = {
+            static_cast<float>((1.0 - fy) * (1.0 - fz)),
+            static_cast<float>(fy * (1.0 - fz)),
+            static_cast<float>((1.0 - fy) * fz),
+            static_cast<float>(fy * fz)};
         return result;
     }
 
@@ -130,25 +131,28 @@ namespace picongpu::particles::neuralBunch
         inline auto makeFrameSpec(std::size_t extent, std::uint32_t maxThreads, TExec exec)
         {
             using Vec = alpaka::Vec<std::uint32_t, 1>;
-            auto const threads
-                = static_cast<std::uint32_t>(std::max<std::size_t>(1u, std::min<std::size_t>(extent, maxThreads)));
+            auto const threads = static_cast<std::uint32_t>(
+                std::max<std::size_t>(1u, std::min<std::size_t>(extent, maxThreads)));
             auto const frames = static_cast<std::uint32_t>((extent + threads - 1u) / threads);
             return alpaka::onHost::FrameSpec{Vec{frames}, Vec{threads}, exec};
         }
 
-        struct FourierV1Kernel
+        template<FeatureKind Kind>
+        struct FeaturesKernel
         {
             ALPAKA_FN_ACC void operator()(auto const& acc, auto sources, auto features) const
             {
                 auto const count = sources.getExtents()[0];
-                for(auto i : alpaka::onAcc::makeIdxMap(
+                for(auto i :
+                    alpaka::onAcc::makeIdxMap(
                         acc,
                         alpaka::onAcc::worker::threadsInGrid,
                         alpaka::IdxRange{alpaka::Vec{count}}))
                 {
                     auto const row = static_cast<std::size_t>(i[0]);
-                    auto value = [&](std::size_t column) { return sources[alpaka::Vec<std::size_t, 2>{row, column}]; };
-                    FourierV1::fill(
+                    auto value = [&](std::size_t column)
+                    { return sources[alpaka::Vec<std::size_t, 2>{row, column}]; };
+                    fillFeatures<Kind>(
                         &features[alpaka::Vec<std::size_t, 2>{row, 0u}],
                         value(0u),
                         value(1u),
@@ -162,13 +166,44 @@ namespace picongpu::particles::neuralBunch
             }
         };
 
+        template<typename TQueue, typename TExec>
+        void enqueueFeatures(
+            TQueue& queue,
+            TExec exec,
+            FeatureKind kind,
+            std::size_t count,
+            auto const& deviceSources,
+            auto& features)
+        {
+            auto launch = [&](auto tag)
+            {
+                constexpr FeatureKind Kind = decltype(tag)::value;
+                queue.enqueue(
+                    makeFrameSpec(count, 64u, exec),
+                    alpaka::KernelBundle{FeaturesKernel<Kind>{}, deviceSources, features});
+            };
+            switch(kind)
+            {
+            case FeatureKind::fourierV1:
+                launch(std::integral_constant<FeatureKind, FeatureKind::fourierV1>{});
+                break;
+            case FeatureKind::fourierProbeV1:
+                launch(std::integral_constant<FeatureKind, FeatureKind::fourierProbeV1>{});
+                break;
+            case FeatureKind::probeDenseV1:
+                launch(std::integral_constant<FeatureKind, FeatureKind::probeDenseV1>{});
+                break;
+            }
+        }
+
         struct WeightedReduceKernel
         {
             ALPAKA_FN_ACC void operator()(auto const& acc, auto hidden, auto weights, auto latent) const
             {
                 auto const latentCount = latent.getExtents()[0];
                 auto const sourceCount = hidden.getExtents()[0];
-                for(auto i : alpaka::onAcc::makeIdxMap(
+                for(auto i :
+                    alpaka::onAcc::makeIdxMap(
                         acc,
                         alpaka::onAcc::worker::threadsInGrid,
                         alpaka::IdxRange{alpaka::Vec{latentCount}}))
@@ -196,7 +231,8 @@ namespace picongpu::particles::neuralBunch
                 auto const extents = out.getExtents();
                 auto const columns = static_cast<std::size_t>(extents[1]);
                 auto const total = static_cast<std::size_t>(extents[0]) * columns;
-                for(auto i : alpaka::onAcc::makeIdxMap(
+                for(auto i :
+                    alpaka::onAcc::makeIdxMap(
                         acc,
                         alpaka::onAcc::worker::threadsInGrid,
                         alpaka::IdxRange{alpaka::Vec{total}}))
@@ -218,7 +254,8 @@ namespace picongpu::particles::neuralBunch
                 auto const extents = field.getExtents();
                 auto const columns = static_cast<std::size_t>(extents[1]);
                 auto const total = static_cast<std::size_t>(extents[0]) * columns;
-                for(auto i : alpaka::onAcc::makeIdxMap(
+                for(auto i :
+                    alpaka::onAcc::makeIdxMap(
                         acc,
                         alpaka::onAcc::worker::threadsInGrid,
                         alpaka::IdxRange{alpaka::Vec{total}}))
@@ -269,10 +306,9 @@ namespace picongpu::particles::neuralBunch
                 throw std::invalid_argument{"encodeInto: hidden extent must be [N, latent]."};
 
             auto deviceSources = packSources(queue, sources);
-            auto features = alpaka::onHost::alloc<float>(queue.getDevice(), alpaka::Vec{count, meta.featureDim});
-            queue.enqueue(
-                makeFrameSpec(count, 64u, exec),
-                alpaka::KernelBundle{FourierV1Kernel{}, deviceSources, features});
+            auto features
+                = alpaka::onHost::alloc<float>(queue.getDevice(), alpaka::Vec{count, meta.featureDim});
+            enqueueFeatures(queue, exec, meta.featureKind, count, deviceSources, features);
 
             using Weight = alpaka::nn::onHost::nn::WeightView<decltype(alpaka::makeView(
                 queue.getDevice(),
@@ -296,7 +332,7 @@ namespace picongpu::particles::neuralBunch
                     alpaka::onHost::data(weightBuffer),
                     alpaka::Vec{layer.in, layer.out});
                 auto biasView
-                    = alpaka::makeView(queue.getDevice(), alpaka::onHost::data(biasBuffer), alpaka::Vec{layer.out});
+                    = alpaka::makeView(queue.getDevice(), alpaka::onHost::data(biasBuffer), alpaka::Vec<std::size_t, 1>{layer.out});
                 weights.emplace_back(Weight{weightView});
                 biases.emplace_back(Bias{biasView});
             }
@@ -314,7 +350,33 @@ namespace picongpu::particles::neuralBunch
         }
     } // namespace detail
 
-    /** Build the feature matrix on the device and return it on the host (test helper). */
+    /** Build the feature matrix for an explicit kind on the device (test helper). */
+    template<typename TQueue, typename TExec>
+    std::vector<float> computeFeatures(
+        TQueue& queue,
+        TExec exec,
+        FeatureKind kind,
+        std::span<Source const> sources)
+    {
+        auto const count = sources.size();
+        auto const dim = featureDimension(kind);
+        std::vector<float> result(count * dim, 0.0f);
+        if(count == 0u)
+            return result;
+
+        auto deviceSources = detail::packSources(queue, sources);
+        auto features = alpaka::onHost::alloc<float>(queue.getDevice(), alpaka::Vec{count, dim});
+        detail::enqueueFeatures(queue, exec, kind, count, deviceSources, features);
+        auto hostFeatures = alpaka::onHost::allocHost<float>(alpaka::Vec{count, dim});
+        alpaka::onHost::memcpy(queue, hostFeatures, features);
+        alpaka::onHost::wait(queue);
+        for(std::size_t i = 0u; i < count; ++i)
+            for(std::size_t k = 0u; k < dim; ++k)
+                result[i * dim + k] = hostFeatures[alpaka::Vec<std::size_t, 2>{i, k}];
+        return result;
+    }
+
+    /** Build the feature matrix described by model metadata on the device (test helper). */
     template<typename TQueue, typename TExec>
     std::vector<float> computeFeatures(
         TQueue& queue,
@@ -329,15 +391,14 @@ namespace picongpu::particles::neuralBunch
 
         auto deviceSources = detail::packSources(queue, sources);
         auto features = alpaka::onHost::alloc<float>(queue.getDevice(), alpaka::Vec{count, meta.featureDim});
-        queue.enqueue(
-            detail::makeFrameSpec(count, 64u, exec),
-            alpaka::KernelBundle{detail::FourierV1Kernel{}, deviceSources, features});
+        detail::enqueueFeatures(queue, exec, meta.featureKind, count, deviceSources, features);
         auto hostFeatures = alpaka::onHost::allocHost<float>(alpaka::Vec{count, meta.featureDim});
         alpaka::onHost::memcpy(queue, hostFeatures, features);
         alpaka::onHost::wait(queue);
         for(std::size_t i = 0u; i < count; ++i)
             for(std::size_t k = 0u; k < meta.featureDim; ++k)
-                result[i * meta.featureDim + k] = hostFeatures[alpaka::Vec<std::size_t, 2>{i, k}];
+                result[i * meta.featureDim + k]
+                    = hostFeatures[alpaka::Vec<std::size_t, 2>{i, k}];
         return result;
     }
 
@@ -396,7 +457,11 @@ namespace picongpu::particles::neuralBunch
         auto bank3 = bankView(cell.index[3]);
 
         auto interpolated = alpaka::onHost::alloc<float>(queue.getDevice(), alpaka::Vec{meta.latent, kOutDim});
-        detail::InterpolateDecoderKernel const interp{cell.weight[0], cell.weight[1], cell.weight[2], cell.weight[3]};
+        detail::InterpolateDecoderKernel const interp{
+            cell.weight[0],
+            cell.weight[1],
+            cell.weight[2],
+            cell.weight[3]};
         queue.enqueue(
             detail::makeFrameSpec(meta.latent * kOutDim, 256u, exec),
             alpaka::KernelBundle{interp, bank0, bank1, bank2, bank3, interpolated});
@@ -412,7 +477,9 @@ namespace picongpu::particles::neuralBunch
         alpaka::nn::onHost::gemm<float>(queue, deviceLatent, interpolated, field);
 
         detail::NormalizeFieldKernel const normalize{normalization.scaleE(), normalization.scaleB()};
-        queue.enqueue(detail::makeFrameSpec(kOutDim, 256u, exec), alpaka::KernelBundle{normalize, field});
+        queue.enqueue(
+            detail::makeFrameSpec(kOutDim, 256u, exec),
+            alpaka::KernelBundle{normalize, field});
 
         auto hostField = alpaka::onHost::allocHost<float>(alpaka::Vec{std::size_t{1}, kOutDim});
         alpaka::onHost::memcpy(queue, hostField, field);
@@ -444,10 +511,11 @@ namespace picongpu::particles::neuralBunch
         if(sources.empty())
             return std::vector<float>(kOutDim, 0.0f);
 
-        auto hidden = alpaka::onHost::alloc<float>(queue.getDevice(), alpaka::Vec{sources.size(), meta.latent});
+        auto hidden
+            = alpaka::onHost::alloc<float>(queue.getDevice(), alpaka::Vec{sources.size(), meta.latent});
         detail::encodeInto(queue, exec, meta, tensors, sources, hidden);
 
-        auto hostWeights = alpaka::onHost::allocHost<float>(alpaka::Vec{sources.size()});
+        auto hostWeights = alpaka::onHost::allocHost<float>(alpaka::Vec<std::size_t, 1>{sources.size()});
         for(std::size_t i = 0u; i < sources.size(); ++i)
             // signed charge q/e = -w
             hostWeights[alpaka::Vec<std::size_t, 1>{i}] = static_cast<float>(-sources[i].weight);
@@ -455,12 +523,12 @@ namespace picongpu::particles::neuralBunch
         alpaka::onHost::memcpy(queue, deviceWeights, hostWeights);
         hostWeights.keepAlive(queue);
 
-        auto deviceLatent = alpaka::onHost::alloc<float>(queue.getDevice(), alpaka::Vec{meta.latent});
+        auto deviceLatent = alpaka::onHost::alloc<float>(queue.getDevice(), alpaka::Vec<std::size_t, 1>{meta.latent});
         queue.enqueue(
             detail::makeFrameSpec(meta.latent, 128u, exec),
             alpaka::KernelBundle{detail::WeightedReduceKernel{}, hidden, deviceWeights, deviceLatent});
 
-        auto hostLatent = alpaka::onHost::allocHost<float>(alpaka::Vec{meta.latent});
+        auto hostLatent = alpaka::onHost::allocHost<float>(alpaka::Vec<std::size_t, 1>{meta.latent});
         alpaka::onHost::memcpy(queue, hostLatent, deviceLatent);
         alpaka::onHost::wait(queue);
 

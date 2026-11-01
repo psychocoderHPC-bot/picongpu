@@ -30,10 +30,11 @@ namespace picongpu::particles::neuralBunch
         std::map<std::string, std::vector<float>> tensors;
     };
 
-    inline std::vector<float> referenceFeatures(Source const& source)
+    inline std::vector<float> referenceFeatures(FeatureKind kind, Source const& source)
     {
-        std::vector<float> features(kFeatureDim);
-        fourierV1Host(
+        std::vector<float> features(featureDimension(kind));
+        featuresHost(
+            kind,
             features.data(),
             source.r[0],
             source.r[1],
@@ -64,7 +65,7 @@ namespace picongpu::particles::neuralBunch
             }
             else
             {
-                auto const features = referenceFeatures(sources[n]);
+                auto const features = referenceFeatures(meta.featureKind, sources[n]);
                 for(std::size_t k = 0u; k < meta.featureDim; ++k)
                     x[k] = static_cast<double>(features[k]);
             }
@@ -109,7 +110,10 @@ namespace picongpu::particles::neuralBunch
     }
 
     /** Interpolated decoder matrix, [latent, 1536] row-major. */
-    inline std::vector<double> referenceInterpolatedBank(HostArtifact const& artifact, double aY, double aZ)
+    inline std::vector<double> referenceInterpolatedBank(
+        HostArtifact const& artifact,
+        double aY,
+        double aZ)
     {
         auto const& meta = artifact.metadata;
         auto const cell = bilinearCell(meta.aYAnchors, meta.aZAnchors, aY, aZ);

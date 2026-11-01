@@ -26,6 +26,10 @@
 #include <alpaka/alpaka.hpp>
 #include <alpaka/nn/onHost/core/binary.hpp>
 
+#include "Features.hpp"
+
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -41,8 +45,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-
-#include <nlohmann/json.hpp>
 
 namespace picongpu::particles::neuralBunch
 {
@@ -121,11 +123,16 @@ namespace picongpu::particles::neuralBunch
         std::array<std::string, 6> components;
         std::string flatten;
 
-        std::string featureKind;
         int octaveLow{};
         int octaveHigh{};
         std::vector<std::string> featureInputs;
         std::size_t featureDim{};
+        FeatureKind featureKind = FeatureKind::fourierV1;
+        std::vector<std::array<double, 3>> probeCellOffsets;
+        std::array<std::string, 6> probeComponents;
+        std::string probeGrid;
+        std::string probeField;
+        std::string featureOrdering;
 
         std::string encoderKind;
         std::string encoderActivation;
@@ -341,7 +348,11 @@ namespace picongpu::particles::neuralBunch
             buffers.reserve(m_metadata.tensors.size());
             for(auto const& binding : m_metadata.tensors)
             {
-                alpaka::nn::onHost::TensorSpec spec{binding.name, binding.offsetBytes, binding.count, binding.shape};
+                alpaka::nn::onHost::TensorSpec spec{
+                    binding.name,
+                    binding.offsetBytes,
+                    binding.count,
+                    binding.shape};
                 buffers.push_back(
                     alpaka::nn::onHost::loadBinaryTensor<float>(queue, m_binPath.string(), spec, std::string{}));
             }
@@ -393,8 +404,7 @@ namespace picongpu::particles::neuralBunch
             auto const versionJson = required(root, "version", "root");
             auto const version = asInt(versionJson, "version");
             if(version != 1)
-                throw ModelError{
-                    "unsupported artifact version " + std::to_string(version) + " (only 1 is supported)."};
+                throw ModelError{"unsupported artifact version " + std::to_string(version) + " (only 1 is supported)."};
             m_metadata.version = version;
 
             m_metadata.dtype = asString(required(root, "dtype", "root"), "dtype");
@@ -432,8 +442,7 @@ namespace picongpu::particles::neuralBunch
             if(m_metadata.tileNx != kTileNx || m_metadata.tileNy != kTileNy || m_metadata.tileNz != kTileNz)
                 throw ModelError{
                     "unsupported tile geometry " + std::to_string(m_metadata.tileNx) + "x"
-                    + std::to_string(m_metadata.tileNy) + "x" + std::to_string(m_metadata.tileNz)
-                    + " (v1 requires 8x8x4)."};
+                    + std::to_string(m_metadata.tileNy) + "x" + std::to_string(m_metadata.tileNz) + " (v1 requires 8x8x4)."};
 
             auto const components = required(tile, "components", "tile");
             if(!components.is_array() || components.size() != 6u)
@@ -451,46 +460,156 @@ namespace picongpu::particles::neuralBunch
                 throw ModelError{"unsupported tile.flatten convention."};
         }
 
+        static std::vector<std::string> baseInputNames()
+        {
+            return {"r_x", "r_y", "r_z", "u_x", "u_y", "u_z", "gamma", "a_y", "a_z"};
+        }
+
+        static std::string expectedProbeGrid(FeatureKind kind)
+        {
+            if(kind == FeatureKind::fourierProbeV1)
+                return "4x4x2 tile cell centres: x=2i+0.5 (i=0..3), y=(2j+0.5)*a_y (j=0..3), "
+                       "z=(2k+0.5)*a_z (k=0..1)";
+            return "one probe at every tile cell centre: x=i+0.5 (i=0..7), y=(j+0.5)*a_y (j=0..7), "
+                   "z=(k+0.5)*a_z (k=0..3), i fastest then j then k";
+        }
+
+        static std::string expectedProbeField()
+        {
+            return "per unit q/e: E_n=4*pi*eps0*dx^2*E/q, B_n=4*pi*eps0*c*dx^2*B/q; "
+                   "stable uniform-motion decomposition (1/gamma^2 direct, static branch)";
+        }
+
+        static std::string expectedOrdering(FeatureKind kind)
+        {
+            if(kind == FeatureKind::fourierProbeV1)
+                return "9 base, 32 probes x [Ex,Ey,Ez,Bx,By,Bz], 3 axes x octaves -3..1 x (sin,cos)";
+            return "9 base, 256 probes x [Ex,Ey,Ez,Bx,By,Bz] in i-fastest cell order; no Fourier terms";
+        }
+
         void parseFeatures(json const& features)
         {
-            using detail::asInt;
             using detail::asSize;
             using detail::asString;
             using detail::required;
 
-            m_metadata.featureKind = asString(required(features, "kind", "features"), "features.kind");
-            if(m_metadata.featureKind != "fourier_v1")
-                throw ModelError{"unsupported feature kind '" + m_metadata.featureKind + "'."};
-
-            auto const octaves = required(features, "octaves", "features");
-            if(!octaves.is_array() || octaves.size() != 2u)
-                throw ModelError{"features.octaves must contain two integers."};
-            m_metadata.octaveLow = detail::asSignedInt(octaves.at(0), "features.octaves[0]");
-            m_metadata.octaveHigh = detail::asSignedInt(octaves.at(1), "features.octaves[1]");
-            if(m_metadata.octaveLow != -3 || m_metadata.octaveHigh != 6)
-                throw ModelError{"fourier_v1 requires octaves [-3, 6]."};
+            auto const kindName = asString(required(features, "kind", "features"), "features.kind");
+            auto const kind = featureKindFromString(kindName);
+            if(!kind)
+                throw ModelError{"unsupported feature kind '" + kindName + "'."};
+            m_metadata.featureKind = *kind;
 
             auto const inputs = required(features, "inputs", "features");
             if(!inputs.is_array())
                 throw ModelError{"features.inputs must be an array."};
-            std::vector<std::string> const
-                expectedInputs{"r_x", "r_y", "r_z", "u_x", "u_y", "u_z", "gamma", "a_y", "a_z"};
+            auto const expectedInputs = baseInputNames();
             if(inputs.size() != expectedInputs.size())
-                throw ModelError{"features.inputs must list the nine fourier_v1 base inputs."};
+                throw ModelError{"features.inputs must list the nine base inputs."};
             for(std::size_t i = 0; i < expectedInputs.size(); ++i)
             {
                 m_metadata.featureInputs.push_back(asString(inputs.at(i), "features.inputs"));
                 if(m_metadata.featureInputs.back() != expectedInputs[i])
-                    throw ModelError{
-                        "features.inputs[" + std::to_string(i) + "] must be '" + expectedInputs[i] + "'."};
+                    throw ModelError{"features.inputs[" + std::to_string(i) + "] must be '" + expectedInputs[i] + "'."};
             }
 
             m_metadata.featureDim = asSize(required(features, "dim", "features"), "features.dim");
-            auto const expectedDim = expectedInputs.size() + 3u * 10u * 2u;
+            auto const expectedDim = featureDimension(*kind);
             if(m_metadata.featureDim != expectedDim)
                 throw ModelError{
-                    "features.dim must be " + std::to_string(expectedDim) + " for fourier_v1, got "
+                    "features.dim must be " + std::to_string(expectedDim) + " for " + kindName + ", got "
                     + std::to_string(m_metadata.featureDim) + "."};
+
+            auto const octaves = required(features, "octaves", "features");
+            if(!octaves.is_array())
+                throw ModelError{"features.octaves must be an array."};
+            if(*kind == FeatureKind::probeDenseV1)
+            {
+                if(!octaves.empty())
+                    throw ModelError{"probe_dense_v1 requires features.octaves = []."};
+            }
+            else
+            {
+                if(octaves.size() != 2u)
+                    throw ModelError{"features.octaves must contain two integers."};
+                auto const low = detail::asSignedInt(octaves.at(0), "features.octaves[0]");
+                auto const high = detail::asSignedInt(octaves.at(1), "features.octaves[1]");
+                auto const expectedLow = *kind == FeatureKind::fourierV1 ? kOctaveLow : kProbeOctaveLow;
+                auto const expectedHigh = *kind == FeatureKind::fourierV1 ? kOctaveHigh : kProbeOctaveHigh;
+                if(low != expectedLow || high != expectedHigh)
+                    throw ModelError{
+                        std::string{"features.octaves for "} + kindName + " must be [" + std::to_string(expectedLow)
+                        + ", " + std::to_string(expectedHigh) + "]."};
+                m_metadata.octaveLow = low;
+                m_metadata.octaveHigh = high;
+            }
+
+            if(*kind != FeatureKind::fourierV1)
+                parseProbe(features, *kind);
+        }
+
+        void parseProbe(json const& features, FeatureKind kind)
+        {
+            using detail::asFiniteDouble;
+            using detail::required;
+
+            auto const probe = required(features, "probe", "features");
+            if(!probe.is_object())
+                throw ModelError{"features.probe must be an object for probe feature kinds."};
+
+            auto const components = required(probe, "components", "features.probe");
+            std::array<std::string, 6> const expectedComponents{"Ex", "Ey", "Ez", "Bx", "By", "Bz"};
+            if(!components.is_array() || components.size() != 6u)
+                throw ModelError{"features.probe.components must list six components."};
+            for(std::size_t i = 0; i < 6u; ++i)
+            {
+                m_metadata.probeComponents[i]
+                    = detail::asString(components.at(i), "features.probe.components");
+                if(m_metadata.probeComponents[i] != expectedComponents[i])
+                    throw ModelError{
+                        "features.probe.components[" + std::to_string(i) + "] must be '" + expectedComponents[i]
+                        + "'."};
+            }
+
+            auto const offsetsJson = required(probe, "cell_offsets", "features.probe");
+            auto const expectedCount = featureProbeCount(kind);
+            if(!offsetsJson.is_array() || offsetsJson.size() != expectedCount)
+                throw ModelError{
+                    "features.probe.cell_offsets must contain " + std::to_string(expectedCount) + " entries."};
+            auto compiledOffset = [&](std::size_t p, std::size_t c) -> double
+            {
+                return kind == FeatureKind::fourierProbeV1 ? kProbeCellOffsets[p][c] : kDenseCellOffsets[p][c];
+            };
+            for(std::size_t p = 0; p < expectedCount; ++p)
+            {
+                auto const& entry = offsetsJson.at(p);
+                if(!entry.is_array() || entry.size() != 3u)
+                    throw ModelError{"features.probe.cell_offsets[" + std::to_string(p) + "] must be [x,y,z]."};
+                std::array<double, 3> offset{};
+                for(std::size_t c = 0; c < 3u; ++c)
+                {
+                    offset[c] = asFiniteDouble(
+                        entry.at(c),
+                        "features.probe.cell_offsets[" + std::to_string(p) + "]");
+                    if(std::abs(offset[c] - compiledOffset(p, c)) > 1e-12)
+                        throw ModelError{
+                            "features.probe.cell_offsets[" + std::to_string(p)
+                            + "] does not match the compiled probe grid."};
+                }
+                m_metadata.probeCellOffsets.push_back(offset);
+            }
+
+            m_metadata.probeGrid = detail::asString(required(probe, "grid", "features.probe"), "features.probe.grid");
+            if(m_metadata.probeGrid != expectedProbeGrid(kind))
+                throw ModelError{"features.probe.grid does not match the compiled probe grid."};
+            m_metadata.probeField
+                = detail::asString(required(probe, "field", "features.probe"), "features.probe.field");
+            if(m_metadata.probeField != expectedProbeField())
+                throw ModelError{"features.probe.field does not match the compiled point-field formula."};
+
+            m_metadata.featureOrdering
+                = detail::asString(required(features, "ordering", "features"), "features.ordering");
+            if(m_metadata.featureOrdering != expectedOrdering(kind))
+                throw ModelError{"features.ordering does not match the compiled ordering."};
         }
 
         void parseEncoder(json const& encoder)
@@ -502,7 +621,8 @@ namespace picongpu::particles::neuralBunch
             m_metadata.encoderKind = asString(required(encoder, "kind", "encoder"), "encoder.kind");
             if(m_metadata.encoderKind != "mlp")
                 throw ModelError{"unsupported encoder kind '" + m_metadata.encoderKind + "'."};
-            m_metadata.encoderActivation = asString(required(encoder, "activation", "encoder"), "encoder.activation");
+            m_metadata.encoderActivation
+                = asString(required(encoder, "activation", "encoder"), "encoder.activation");
             if(m_metadata.encoderActivation != "silu")
                 throw ModelError{"encoder.activation must be 'silu'."};
             m_metadata.lastLayerActivation
@@ -526,8 +646,8 @@ namespace picongpu::particles::neuralBunch
                 parsed.out = asSize(required(layer, "out", context), context + ".out");
                 if(parsed.in != expectedIn)
                     throw ModelError{
-                        context + ": in=" + std::to_string(parsed.in)
-                        + " does not match the previous out=" + std::to_string(expectedIn) + "."};
+                        context + ": in=" + std::to_string(parsed.in) + " does not match the previous out="
+                        + std::to_string(expectedIn) + "."};
                 if(parsed.out == 0u)
                     throw ModelError{context + ": out must be positive."};
                 m_metadata.layers.push_back(std::move(parsed));
@@ -579,8 +699,7 @@ namespace picongpu::particles::neuralBunch
             for(auto const& entry : bank)
                 m_metadata.bank.push_back(asString(entry, "decoder.bank"));
 
-            auto const entryShape
-                = asShape(required(decoder, "bank_entry_shape", "decoder"), "decoder.bank_entry_shape");
+            auto const entryShape = asShape(required(decoder, "bank_entry_shape", "decoder"), "decoder.bank_entry_shape");
             if(entryShape.size() != 2u)
                 throw ModelError{"decoder.bank_entry_shape must contain two extents."};
             m_metadata.bankEntryShape = {entryShape[0], entryShape[1]};
@@ -645,7 +764,8 @@ namespace picongpu::particles::neuralBunch
             auto const minAnchorZ = m_metadata.aZAnchors.front();
             auto const maxAnchorZ = m_metadata.aZAnchors.back();
             if(std::abs(minAnchorY - m_metadata.aYMin) > 1e-12 || std::abs(maxAnchorY - m_metadata.aYMax) > 1e-12
-               || std::abs(minAnchorZ - m_metadata.aZMin) > 1e-12 || std::abs(maxAnchorZ - m_metadata.aZMax) > 1e-12)
+               || std::abs(minAnchorZ - m_metadata.aZMin) > 1e-12
+               || std::abs(maxAnchorZ - m_metadata.aZMax) > 1e-12)
                 throw ModelError{"decoder axis grids must span the domain a_y/a_z bounds."};
 
             m_metadata.dMinCells = asFiniteDouble(required(domain, "d_min_cells", "domain"), "domain.d_min_cells");
