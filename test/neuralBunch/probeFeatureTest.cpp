@@ -427,6 +427,16 @@ int main()
         rejects(badShare, directory, "validated band force share");
     }
 
+    // A configured neural policy must fail loudly when the artifact is missing.
+    try
+    {
+        (void) nb::Model::load(root / "missing_artifact");
+        check(false, "missing model: expected ModelError");
+    }
+    catch(nb::ModelError const&)
+    {
+    }
+
     fs::remove_all(root);
     if(failures != 0)
     {

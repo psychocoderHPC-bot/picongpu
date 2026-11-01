@@ -8,12 +8,14 @@
 /** User-facing parameters of the neural bunch initializer (Phase A).
  *
  * Phase B implements the deterministic hybrid policy:
- *  - the production default is REFERENCE-ONLY. No shipped artifact carries a
- *    measured ``validation.validated_band``, so the neural path is disabled and
- *    every (source, tile) pair uses the exact FP64 reference kernel;
- *  - a pair uses the neural path only when the artifact declares a validated
- *    band and the pair lies inside it with a safety margin;
- *  - ``allowUnvalidatedNeural`` is a test-only escape hatch and must stay false;
+ *  - the DEFAULT policy is ``neural``: the trained model handles every pair
+ *    inside the artifact's declared domain, the exact FP64 reference handles the
+ *    rest. No shipped artifact carries a ``validation.validated_band``, so the
+ *    neural output is NOT production-validated; the stage warns once per rank;
+ *  - ``validatedNeural`` uses the neural path only inside a measured band;
+ *  - ``referenceOnly`` uses the exact reference and requires no model artifact;
+ *  - ``enableReferenceFallback`` selects reference vs collective failure for
+ *    pairs outside the model domain under the ``neural`` policy.
  *  - ``enableReferenceFallback`` must stay true;
  *  - ``timePolicy`` must stay 0, which means the openPMD source time equals the
  *    injection time (no linear drift is applied);
@@ -52,11 +54,21 @@ namespace picongpu::neuralBunch
         std::uint32_t tileBatch = 1;
         //! Must stay true: the Phase B hybrid policy always uses the reference fallback.
         bool enableReferenceFallback = true;
-        /** TEST-ONLY: ignore the artifact's validation.validated_band and use the
-         * neural path everywhere inside the artifact domain. Never use in production;
-         * the default reference-only policy exists because no artifact carries a
-         * validated 1e-3 band. */
-        bool allowUnvalidatedNeural = false;
+        /** Field-initializer policy (PICMI uses the same enum names).
+         *
+         * - neural (default): use the trained model for every (source, tile) pair
+         *   inside the artifact's declared domain; outside use the exact reference
+         *   when enableReferenceFallback is true, otherwise fail collectively.
+         * - validatedNeural: neural only inside validation.validated_band.
+         * - referenceOnly: exact reference, no model artifact required.
+         */
+        enum class FieldInitializer
+        {
+            neural,
+            validatedNeural,
+            referenceOnly
+        };
+        FieldInitializer fieldInitializer = FieldInitializer::neural;
         //! Must stay 0: source time equals injection time (no drift applied).
         int timePolicy = 0;
     };

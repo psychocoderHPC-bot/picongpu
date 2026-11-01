@@ -185,6 +185,7 @@ namespace picongpu::particles::neuralBunch::tileGeometry
         referenceNear,
         referenceFar,
         referenceUnvalidated,
+        referenceOnly,
         zeroWeight
     };
 
@@ -204,6 +205,8 @@ namespace picongpu::particles::neuralBunch::tileGeometry
             return "reference:far";
         case PairRoute::referenceUnvalidated:
             return "reference:unvalidated";
+        case PairRoute::referenceOnly:
+            return "reference:only";
         case PairRoute::zeroWeight:
             return "skip:zero-weight";
         }
@@ -290,8 +293,14 @@ namespace picongpu::particles::neuralBunch::tileGeometry
         return std::sqrt(best2);
     }
 
-    //! Fractional safety margin on the validated band. A pair must lie at least
-    //! 5% of each band width inside the measured interval to use the neural path.
+    enum class FieldInitializer
+    {
+        neural,
+        validatedNeural,
+        referenceOnly
+    };
+
+    //! Fractional safety margin on the validated band.
     inline constexpr double kBandMarginFraction = 0.05;
 
     namespace detail
@@ -303,13 +312,13 @@ namespace picongpu::particles::neuralBunch::tileGeometry
         }
     } // namespace detail
 
-    /** Deterministic routing.
+    /** Deterministic routing for the three field-initializer policies.
      *
-     * Without a measured validated band the neural path is disabled and every
-     * non-zero-weight pair goes to the reference kernel. With a band, a pair is
-     * neural only when gamma, both aspects and the distance lie inside the band
-     * shrunk by @ref kBandMarginFraction. `allowUnvalidated` is a test-only
-     * override that restores the unvalidated artifact-domain routing.
+     * - referenceOnly: every non-zero-weight pair uses the exact reference.
+     * - neural: the artifact domain decides; outside pairs use the reference
+     *   reasons (the stage fails collectively if fallback is disabled).
+     * - validatedNeural: neural only inside the measured band shrunk by
+     *   @ref kBandMarginFraction; without a band every pair is unvalidated.
      */
     inline PairRoute classify(
         double weight,
@@ -318,12 +327,14 @@ namespace picongpu::particles::neuralBunch::tileGeometry
         double aspectZ,
         double distanceCells,
         DomainBounds const& domain,
-        ValidatedBand const* band = nullptr,
-        bool allowUnvalidated = false)
+        ValidatedBand const* band,
+        FieldInitializer policy)
     {
         if(weight == 0.0)
             return PairRoute::zeroWeight;
-        if(allowUnvalidated)
+        if(policy == FieldInitializer::referenceOnly)
+            return PairRoute::referenceOnly;
+        if(policy == FieldInitializer::neural)
         {
             if(gamma < domain.gammaMin || gamma > domain.gammaMax)
                 return PairRoute::referenceGamma;

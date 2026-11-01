@@ -45,6 +45,7 @@
 #    include <cstdint>
 #    include <cstdlib>
 #    include <limits>
+#    include <optional>
 #    include <sstream>
 #    include <stdexcept>
 #    include <string>
@@ -91,6 +92,7 @@ namespace picongpu
                     std::uint64_t zeroWeightPairs = 0;
                     std::uint64_t forcedReferencePairs = 0;
                     std::uint64_t unvalidatedPairs = 0;
+                    std::uint64_t referenceOnlyPairs = 0;
                     std::uint64_t synthesizedIds = 0;
                     std::vector<std::uint64_t> localIds;
                     std::uint64_t localParticles = 0;
@@ -356,62 +358,88 @@ namespace picongpu
                     double const unitE = sim.unit.eField();
                     double const unitB = sim.unit.bField();
 
-                    Model const model = Model::load(params.modelPath);
-                    ModelMetadata const& meta = model.metadata();
+                    auto& device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
+                    auto queue = device.makeQueue(pmacc::ComputeQueuePolicies);
+                    auto const exec = pmacc::ComputeExecutor;
+                    using TensorBuffers
+                        = decltype(std::declval<Model const&>().loadTensors(std::declval<decltype(queue)&>()));
+
+                    auto const paramPolicy = params.fieldInitializer;
+                    auto const policy = paramPolicy == NeuralBunchParam::FieldInitializer::neural
+                                            ? tg::FieldInitializer::neural
+                                            : (paramPolicy == NeuralBunchParam::FieldInitializer::validatedNeural
+                                                   ? tg::FieldInitializer::validatedNeural
+                                                   : tg::FieldInitializer::referenceOnly);
+                    char const* const policyName
+                        = paramPolicy == NeuralBunchParam::FieldInitializer::neural
+                              ? "neural"
+                              : (paramPolicy == NeuralBunchParam::FieldInitializer::validatedNeural ? "validatedNeural"
+                                                                                                    : "referenceOnly");
+                    bool const isReferenceOnly = paramPolicy == NeuralBunchParam::FieldInitializer::referenceOnly;
+                    std::optional<Model> model;
+                    TensorBuffers tensors;
+                    ModelMetadata const* meta = nullptr;
+                    if(!isReferenceOnly)
+                    {
+                        // A configured neural policy requires the artifact; a load
+                        // failure aborts instead of silently falling back.
+                        model.emplace(Model::load(params.modelPath));
+                        meta = &model->metadata();
+                        tensors = model->loadTensors(queue);
+                    }
 
                     tg::CellSizes const cells{cellSizeSI[0], cellSizeSI[1], cellSizeSI[2]};
                     double const aspectY = cells.aspectY();
                     double const aspectZ = cells.aspectZ();
-                    tg::DomainBounds const domain{
-                        meta.gammaMin,
-                        meta.gammaMax,
-                        meta.aYMin,
-                        meta.aYMax,
-                        meta.aZMin,
-                        meta.aZMax,
-                        meta.dMinCells,
-                        meta.dMaxCells};
-
-                    if(!params.enableReferenceFallback)
-                        throw std::runtime_error(
-                            "neuralBunch: enableReferenceFallback=false is not supported; the Phase B hybrid "
-                            "policy always requires the reference fallback.");
+                    tg::DomainBounds domain{};
                     tg::ValidatedBand validatedBand;
                     tg::ValidatedBand const* band = nullptr;
-                    if(meta.validatedBand)
+                    if(meta)
                     {
-                        auto const& source = *meta.validatedBand;
-                        validatedBand.gammaMin = source.gammaMin;
-                        validatedBand.gammaMax = source.gammaMax;
-                        validatedBand.aYMin = source.aYMin;
-                        validatedBand.aYMax = source.aYMax;
-                        validatedBand.aZMin = source.aZMin;
-                        validatedBand.aZMax = source.aZMax;
-                        validatedBand.dMinCells = source.dMinCells;
-                        validatedBand.dMaxCells = source.dMaxCells;
-                        validatedBand.measuredMaxRelRmsE = source.measuredMaxRelRmsE;
-                        validatedBand.measuredMaxRelRmsCb = source.measuredMaxRelRmsCb;
-                        validatedBand.measuredMinForcePassShare = source.measuredMinForcePassShare;
-                        band = &validatedBand;
+                        domain = tg::DomainBounds{
+                            meta->gammaMin,
+                            meta->gammaMax,
+                            meta->aYMin,
+                            meta->aYMax,
+                            meta->aZMin,
+                            meta->aZMax,
+                            meta->dMinCells,
+                            meta->dMaxCells};
+                        if(meta->validatedBand)
+                        {
+                            auto const& source = *meta->validatedBand;
+                            validatedBand.gammaMin = source.gammaMin;
+                            validatedBand.gammaMax = source.gammaMax;
+                            validatedBand.aYMin = source.aYMin;
+                            validatedBand.aYMax = source.aYMax;
+                            validatedBand.aZMin = source.aZMin;
+                            validatedBand.aZMax = source.aZMax;
+                            validatedBand.dMinCells = source.dMinCells;
+                            validatedBand.dMaxCells = source.dMaxCells;
+                            validatedBand.measuredMaxRelRmsE = source.measuredMaxRelRmsE;
+                            validatedBand.measuredMaxRelRmsCb = source.measuredMaxRelRmsCb;
+                            validatedBand.measuredMinForcePassShare = source.measuredMinForcePassShare;
+                            band = &validatedBand;
+                        }
+                        bool const neuralPolicy = paramPolicy == NeuralBunchParam::FieldInitializer::neural;
+                        if(neuralPolicy && !params.enableReferenceFallback && !tg::aspectCovered(cells, domain))
+                            throw std::runtime_error(
+                                "neuralBunch: simulation cell aspect a_y=" + num(aspectY) + ", a_z=" + num(aspectZ)
+                                + " is outside the model domain a_y=[" + num(domain.aYMin) + "," + num(domain.aYMax)
+                                + "], a_z=[" + num(domain.aZMin) + "," + num(domain.aZMax)
+                                + "] and enableReferenceFallback=false.");
                     }
-                    bool const neuralEnabled = params.allowUnvalidatedNeural || (band != nullptr);
-                    if(neuralEnabled && !tg::aspectCovered(cells, domain))
-                        throw std::runtime_error(
-                            "neuralBunch: simulation cell aspect a_y=" + num(aspectY) + ", a_z=" + num(aspectZ)
-                            + " is outside the model domain a_y=[" + num(domain.aYMin) + "," + num(domain.aYMax)
-                            + "], a_z=[" + num(domain.aZMin) + "," + num(domain.aZMax)
-                            + "]. Refusing to clamp the model domain.");
-
-                    auto& device = pmacc::manager::Device<pmacc::ComputeDevice>::get().current();
-                    auto queue = device.makeQueue(pmacc::ComputeQueuePolicies);
-                    auto const exec = pmacc::ComputeExecutor;
-                    auto const tensors = model.loadTensors(queue);
 
                     auto const grid = tg::enumerateTiles(offset, size);
-                    std::vector<std::vector<double>> latents(grid.tiles.size(), std::vector<double>(meta.latent, 0.0));
+                    std::vector<std::vector<double>> latents;
+                    if(meta)
+                        latents.assign(grid.tiles.size(), std::vector<double>(meta->latent, 0.0));
                     std::vector<std::vector<double>> referenceTiles(
                         grid.tiles.size(),
                         std::vector<double>(tg::outputDimension, 0.0));
+
+                    MPI_Comm const comm = Environment<simDim>::get().GridController().getCommunicator().getMPIComm();
+                    int const rank = Environment<simDim>::get().GridController().getGlobalRank();
 
                     DataConnector& dc = Environment<>::get().DataConnector();
                     auto fieldE = dc.get<FieldE>(FieldE::getName());
@@ -419,32 +447,39 @@ namespace picongpu
                     auto hostE = fieldE->getHostDataBox().shift(fieldE->getGridBuffer().getGridLayout().guardSizeND());
                     auto hostB = fieldB->getHostDataBox().shift(fieldB->getGridBuffer().getGridLayout().guardSizeND());
 
-                    MPI_Comm const comm = Environment<simDim>::get().GridController().getCommunicator().getMPIComm();
-                    int const rank = Environment<simDim>::get().GridController().getGlobalRank();
 
-                    if(params.allowUnvalidatedNeural)
+                    if(paramPolicy == NeuralBunchParam::FieldInitializer::referenceOnly)
                         log<picLog::PHYSICS>(
-                            "neuralBunch: WARNING rank=%1% TEST-ONLY allowUnvalidatedNeural=true ignores the "
-                            "validated band; neural results are not production-validated.")
+                            "neuralBunch: rank=%1% policy=referenceOnly: exact FP64 reference for every pair, "
+                            "no model artifact loaded.")
                             % rank;
-                    else if(band == nullptr)
-                        log<picLog::PHYSICS>(
-                            "neuralBunch: rank=%1% no validation.validated_band in the artifact; neural path "
-                            "DISABLED, all pairs use the FP64 reference. This is the production default.")
-                            % rank;
+                    else if(paramPolicy == NeuralBunchParam::FieldInitializer::validatedNeural)
+                    {
+                        if(band == nullptr)
+                            log<picLog::PHYSICS>(
+                                "neuralBunch: rank=%1% policy=validatedNeural but the artifact has no "
+                                "validation.validated_band; all pairs use the FP64 reference.")
+                                % rank;
+                        else
+                            log<picLog::PHYSICS>(
+                                "neuralBunch: rank=%1% policy=validatedNeural band d=[%2%,%3%] gamma=[%4%,%5%] "
+                                "a_y=[%6%,%7%] a_z=[%8%,%9%] measured E=%10% cB=%11% source='%12%'")
+                                % rank % num(band->dMinCells) % num(band->dMaxCells) % num(band->gammaMin)
+                                % num(band->gammaMax) % num(band->aYMin) % num(band->aYMax) % num(band->aZMin)
+                                % num(band->aZMax) % num(band->measuredMaxRelRmsE) % num(band->measuredMaxRelRmsCb)
+                                % meta->validatedBand->source;
+                    }
                     else
                         log<picLog::PHYSICS>(
-                            "neuralBunch: rank=%1% validated band d=[%2%,%3%] gamma=[%4%,%5%] "
-                            "a_y=[%6%,%7%] a_z=[%8%,%9%] measured E=%10% cB=%11% forcePass=%12% source='%13%'")
-                            % rank % num(band->dMinCells) % num(band->dMaxCells) % num(band->gammaMin)
-                            % num(band->gammaMax) % num(band->aYMin) % num(band->aYMax) % num(band->aZMin)
-                            % num(band->aZMax) % num(band->measuredMaxRelRmsE) % num(band->measuredMaxRelRmsCb)
-                            % num(band->measuredMinForcePassShare) % meta.validatedBand->source;
-
+                            "neuralBunch: WARNING rank=%1% policy=neural (DEFAULT): trained model used inside "
+                            "the artifact domain. The artifact has no validation.validated_band, so the neural "
+                            "output is NOT production-validated. Outside pairs: %2%.")
+                            % rank % (params.enableReferenceFallback ? "exact reference" : "collective error");
 
                     // Validation-only switch: force the reference path for every
                     // non-zero-weight pair on every rank (same environment on all ranks).
                     bool const forceReference = std::getenv("NEURAL_BUNCH_FORCE_REFERENCE") != nullptr;
+                    std::uint64_t outsideDomainPairs = 0;
 
                     bool diagnosticChosen = false;
                     std::size_t diagnosticTile = 0;
@@ -519,7 +554,7 @@ namespace picongpu
                                             ++stats.forcedReferencePairs;
                                             continue;
                                         }
-                                        switch(tg::classify(
+                                        auto const route = tg::classify(
                                             source.weight,
                                             gamma,
                                             aspectY,
@@ -527,7 +562,12 @@ namespace picongpu
                                             distanceCells,
                                             domain,
                                             band,
-                                            params.allowUnvalidatedNeural))
+                                            policy);
+                                        if(paramPolicy == NeuralBunchParam::FieldInitializer::neural
+                                           && !params.enableReferenceFallback && route != tg::PairRoute::neural
+                                           && route != tg::PairRoute::zeroWeight)
+                                            ++outsideDomainPairs;
+                                        switch(route)
                                         {
                                         case tg::PairRoute::neural:
                                             neuralSources.push_back(source);
@@ -552,6 +592,10 @@ namespace picongpu
                                             referenceSources.push_back(referenceSource);
                                             ++stats.unvalidatedPairs;
                                             break;
+                                        case tg::PairRoute::referenceOnly:
+                                            referenceSources.push_back(referenceSource);
+                                            ++stats.referenceOnlyPairs;
+                                            break;
                                         case tg::PairRoute::zeroWeight:
                                             ++stats.zeroWeightPairs;
                                             break;
@@ -561,17 +605,17 @@ namespace picongpu
                                     if(!neuralSources.empty())
                                     {
                                         auto const encodeStart = std::chrono::steady_clock::now();
-                                        auto hidden = runEncoder(queue, exec, meta, tensors, neuralSources);
+                                        auto hidden = runEncoder(queue, exec, *meta, tensors, neuralSources);
                                         stats.inferenceSeconds += std::chrono::duration<double>(
                                                                       std::chrono::steady_clock::now() - encodeStart)
                                                                       .count();
                                         auto& latent = latents[tileIndex];
                                         for(std::size_t i = 0; i < neuralSources.size(); ++i)
-                                            for(std::size_t k = 0; k < meta.latent; ++k)
+                                            for(std::size_t k = 0; k < meta->latent; ++k)
                                             {
                                                 double const contribution
                                                     = -neuralSources[i].weight
-                                                      * static_cast<double>(hidden[i * meta.latent + k]);
+                                                      * static_cast<double>(hidden[i * meta->latent + k]);
                                                 latent[k] += contribution;
                                                 stats.maxLatent = std::max(stats.maxLatent, std::abs(latent[k]));
                                             }
@@ -691,6 +735,17 @@ namespace picongpu
                         stats.globalParticles = sourceMeta.globalCount;
                     }
 
+                    {
+                        unsigned long long localOutside = outsideDomainPairs;
+                        unsigned long long totalOutside = 0;
+                        MPI_Allreduce(&localOutside, &totalOutside, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+                        if(totalOutside != 0)
+                            throw std::runtime_error(
+                                "neuralBunch: policy=neural with enableReferenceFallback=false, but "
+                                + std::to_string(totalOutside)
+                                + " (source, tile) pair(s) are outside the artifact domain.");
+                    }
+
                     if(stats.neuralPairs + stats.referencePairs + stats.zeroWeightPairs
                        != stats.globalParticles * grid.tiles.size())
                         throw std::runtime_error(
@@ -701,7 +756,7 @@ namespace picongpu
                             + " != " + std::to_string(stats.globalParticles * grid.tiles.size()) + " pairs.");
 
                     // Hybrid-vs-forced comparison for one small tile where both routes occur.
-                    if(diagnosticChosen)
+                    if(diagnosticChosen && meta)
                     {
                         auto const referenceAll = nbRef::tileFieldParallel(
                             {diagnosticOrigin[0], diagnosticOrigin[1], diagnosticOrigin[2]},
@@ -714,17 +769,17 @@ namespace picongpu
                             referenceAllSI[k] = (k % 6) < 3 ? tg::normalizedEToSI(referenceAll[k], cells.dx)
                                                             : tg::normalizedBToSI(referenceAll[k], cells.dx);
 
-                        auto hidden = runEncoder(queue, exec, meta, tensors, diagnosticSources);
-                        std::vector<double> neuralAllLatent(meta.latent, 0.0);
+                        auto hidden = runEncoder(queue, exec, *meta, tensors, diagnosticSources);
+                        std::vector<double> neuralAllLatent(meta->latent, 0.0);
                         for(std::size_t i = 0; i < diagnosticSources.size(); ++i)
-                            for(std::size_t k = 0; k < meta.latent; ++k)
+                            for(std::size_t k = 0; k < meta->latent; ++k)
                                 neuralAllLatent[k]
-                                    -= diagnosticSources[i].weight * static_cast<double>(hidden[i * meta.latent + k]);
+                                    -= diagnosticSources[i].weight * static_cast<double>(hidden[i * meta->latent + k]);
                         std::vector<float> const neuralAllFloat(neuralAllLatent.begin(), neuralAllLatent.end());
                         auto const neuralAll = decodeFromLatent(
                             queue,
                             exec,
-                            meta,
+                            *meta,
                             tensors,
                             neuralAllFloat,
                             aspectY,
@@ -737,7 +792,7 @@ namespace picongpu
                         auto const neuralSub = decodeFromLatent(
                             queue,
                             exec,
-                            meta,
+                            *meta,
                             tensors,
                             neuralSubFloat,
                             aspectY,
@@ -770,16 +825,20 @@ namespace picongpu
                     for(std::size_t tileIndex = 0; tileIndex < grid.tiles.size(); ++tileIndex)
                     {
                         auto const& tile = grid.tiles[tileIndex];
-                        std::vector<float> const latentFloat(latents[tileIndex].begin(), latents[tileIndex].end());
-                        auto const values = decodeFromLatent(
-                            queue,
-                            exec,
-                            meta,
-                            tensors,
-                            latentFloat,
-                            aspectY,
-                            aspectZ,
-                            FieldNormalization{cells.dx});
+                        std::vector<float> values(tg::outputDimension, 0.0f);
+                        if(meta)
+                        {
+                            std::vector<float> const latentFloat(latents[tileIndex].begin(), latents[tileIndex].end());
+                            values = decodeFromLatent(
+                                queue,
+                                exec,
+                                *meta,
+                                tensors,
+                                latentFloat,
+                                aspectY,
+                                aspectZ,
+                                FieldNormalization{cells.dx});
+                        }
                         auto const& referenceTile = referenceTiles[tileIndex];
                         for(int k = 0; k < tg::tileNz; ++k)
                             for(int j = 0; j < tg::tileNy; ++j)
@@ -937,9 +996,11 @@ namespace picongpu
                     unsigned long long zeroPairs = stats.zeroWeightPairs;
                     unsigned long long totalPairs = neuralPairs + referencePairs + zeroPairs;
                     MPI_Allreduce(MPI_IN_PLACE, &totalPairs, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
-                    log<picLog::PHYSICS>("neuralBunch: rank=%1% hybrid reasons near=%2% far=%3% gamma=%4% aspect=%5% "
-                                         "zeroWeight=%6% unvalidated=%7% forced=%8% referenceCoverage=%9%")
-                        % rank % nearPairs % farPairs % gammaPairs % aspectPairs % zeroPairs % stats.unvalidatedPairs
+                    log<picLog::PHYSICS>("neuralBunch: rank=%1% policy=%2% pair reasons near=%3% far=%4% gamma=%5% "
+                                         "aspect=%6% zeroWeight=%7% unvalidated=%8% referenceOnly=%9%")
+                        % rank % policyName % nearPairs % farPairs % gammaPairs % aspectPairs % zeroPairs
+                        % stats.unvalidatedPairs % stats.referenceOnlyPairs;
+                    log<picLog::PHYSICS>("neuralBunch: rank=%1% forced=%2% referenceCoverage=%3%") % rank
                         % stats.forcedReferencePairs
                         % num(totalPairs == 0u ? 0.0 : double(referencePairs) / double(totalPairs));
                     log<picLog::PHYSICS>("neuralBunch: rank=%1% referenceMaxAbs=%2% referenceL1=%3% "

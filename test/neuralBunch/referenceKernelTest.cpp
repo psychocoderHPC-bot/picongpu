@@ -220,14 +220,29 @@ namespace
             std::abs(tg::minimumStaggeredDistanceCells(farX, origin, cells) - 2.5) < 1.0e-12,
             "anisotropic hand-computed distance");
 
-        // Classification: no validated band disables the neural path.
+        // Policy routing: default neural uses the artifact domain, validatedNeural
+        // requires a band, referenceOnly needs no model.
         tg::DomainBounds domain;
         check(
-            tg::classify(1.0, 1.0, 2.0, 0.5, 10.0, domain) == tg::PairRoute::referenceUnvalidated,
-            "hybrid: no band routes to reference");
+            tg::classify(1.0, 1.0, 2.0, 0.5, 10.0, domain, nullptr, tg::FieldInitializer::neural)
+                == tg::PairRoute::neural,
+            "policy neural: in-domain pair uses neural");
         check(
-            tg::classify(1.0, 1.0, 2.0, 0.5, 10.0, domain, nullptr, true) == tg::PairRoute::neural,
-            "hybrid: test-only override restores neural");
+            tg::classify(1.0, 1.0, 2.0, 0.5, 3.0, domain, nullptr, tg::FieldInitializer::neural)
+                == tg::PairRoute::referenceNear,
+            "policy neural: out-of-domain near pair uses reference");
+        check(
+            tg::classify(1.0, 101.0, 2.0, 0.5, 10.0, domain, nullptr, tg::FieldInitializer::neural)
+                == tg::PairRoute::referenceGamma,
+            "policy neural: out-of-domain gamma uses reference");
+        check(
+            tg::classify(1.0, 1.0, 2.0, 0.5, 10.0, domain, nullptr, tg::FieldInitializer::referenceOnly)
+                == tg::PairRoute::referenceOnly,
+            "policy referenceOnly");
+        check(
+            tg::classify(1.0, 1.0, 2.0, 0.5, 10.0, domain, nullptr, tg::FieldInitializer::validatedNeural)
+                == tg::PairRoute::referenceUnvalidated,
+            "policy validatedNeural without band routes to reference");
         tg::ValidatedBand band;
         band.dMinCells = 4.0;
         band.dMaxCells = 100.0;
@@ -238,23 +253,25 @@ namespace
         band.aZMin = 0.25;
         band.aZMax = 1.0;
         check(
-            tg::classify(1.0, 10.0, 2.0, 0.5, 10.0, domain, &band) == tg::PairRoute::neural,
-            "hybrid: in-band pair is neural");
+            tg::classify(1.0, 10.0, 2.0, 0.5, 10.0, domain, &band, tg::FieldInitializer::validatedNeural)
+                == tg::PairRoute::neural,
+            "policy validatedNeural: in-band pair is neural");
         check(
-            tg::classify(1.0, 10.0, 2.0, 0.5, 4.1, domain, &band) == tg::PairRoute::referenceNear,
-            "hybrid: near-band margin uses reference");
+            tg::classify(1.0, 10.0, 2.0, 0.5, 4.1, domain, &band, tg::FieldInitializer::validatedNeural)
+                == tg::PairRoute::referenceNear,
+            "policy validatedNeural: near-band margin uses reference");
         check(
-            tg::classify(1.0, 10.0, 2.0, 0.5, 96.0, domain, &band) == tg::PairRoute::referenceFar,
-            "hybrid: far-band margin uses reference");
+            tg::classify(1.0, 10.0, 2.0, 0.5, 96.0, domain, &band, tg::FieldInitializer::validatedNeural)
+                == tg::PairRoute::referenceFar,
+            "policy validatedNeural: far-band margin uses reference");
         check(
-            tg::classify(1.0, 101.0, 2.0, 0.5, 10.0, domain, &band) == tg::PairRoute::referenceGamma,
-            "hybrid: gamma outside band uses reference");
+            tg::classify(1.0, 10.0, 3.9, 0.5, 10.0, domain, &band, tg::FieldInitializer::validatedNeural)
+                == tg::PairRoute::referenceAspect,
+            "policy validatedNeural: aspect outside margin uses reference");
         check(
-            tg::classify(1.0, 10.0, 3.9, 0.5, 10.0, domain, &band) == tg::PairRoute::referenceAspect,
-            "hybrid: aspect outside band margin uses reference");
-        check(
-            tg::classify(0.0, 1.0, 2.0, 0.5, 1.0, domain, &band) == tg::PairRoute::zeroWeight,
-            "hybrid: zero weight skipped");
+            tg::classify(0.0, 1.0, 2.0, 0.5, 1.0, domain, &band, tg::FieldInitializer::validatedNeural)
+                == tg::PairRoute::zeroWeight,
+            "policy: zero weight skipped");
         check(tg::aspectCovered(cells, domain), "hybrid: anisotropic aspect covered");
         tg::CellSizes bad{1.0, 20.0, 1.0};
         check(!tg::aspectCovered(bad, domain), "hybrid: aspect outside model range");

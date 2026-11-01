@@ -110,9 +110,10 @@ A loader MUST verify byte count and SHA-256 before allocating tensor storage.
 `validation.validated_band` is optional and is a v1 additive extension. When it
 is present the loader requires finite values, a non-empty `source`, strictly
 increasing intervals, non-negative measured errors, a force pass share in
-`[0, 1]`, and a band contained in the `domain` bounds. When it is absent the
-runtime disables the neural path and routes every pair to the reference kernel
-(the production default for current artifacts).
+`[0, 1]`, and a band contained in the `domain` bounds. The band is used by the
+`validatedNeural` policy. The default `neural` policy uses the wider `domain`
+bounds and warns that the artifact is not production-validated; `referenceOnly`
+uses the exact reference and requires no artifact.
 
 Additional required rules:
 

@@ -1,8 +1,8 @@
 # Neural bunch field initializer (`PIC_USE_neuralBunch`)
 
-Status: **experimental. The production default is reference-only.** This
-document describes the feature as implemented on this branch and reports the
-measured validation result, including the parts that fail the accuracy gate.
+Status: **experimental. The default field initializer is the neural model.**
+This document describes the feature as implemented on this branch and reports
+the measured validation result, including the parts that fail the accuracy gate.
 
 The feature loads an externally generated electron bunch, adds the fields of
 that bunch at the start of the simulation, and inserts the particles. Fields
@@ -32,8 +32,8 @@ dependency, and the initializer stage compiles to nothing.
 | `modelPath` | `std::string` | Artifact path prefix; the loader reads `<modelPath>.json` and `<modelPath>.bin`. |
 | `chunkSize` | `std::uint64_t` | Global source particles streamed per collective chunk. |
 | `tileBatch` | `std::uint32_t` | Tiles per inference batch (accepted; the current implementation evaluates one tile at a time). |
-| `enableReferenceFallback` | `bool` | Must stay `true`; the hybrid policy always keeps the FP64 fallback. |
-| `allowUnvalidatedNeural` | `bool` | **TEST-ONLY**, default `false`. Ignores the artifact's validated band and enables the neural path inside the artifact domain. Never enable in production. |
+| `fieldInitializer` | enum | `neural` (default), `validatedNeural`, or `referenceOnly`. |
+| `enableReferenceFallback` | `bool` | Under `neural`, route out-of-domain pairs to the exact reference (`true`, default) or fail collectively (`false`). |
 | `timePolicy` | `int` | Must stay `0`: the source time equals the injection time, so no linear drift is applied. |
 
 The initializer rejects unsupported configurations with an actionable error
@@ -96,15 +96,11 @@ The model metadata may carry an optional object:
 
 The loader rejects non-finite values, empty `source`, non-increasing intervals,
 negative measured errors, a force pass share outside `[0, 1]`, and any band that
-is not contained in the artifact `domain` bounds. When the key is absent the
-neural path is disabled; this is the current production default because no
-shipped artifact has a measured band that passes the 1e-3 gate. To enable a
-validated model, add this block to the artifact metadata and re-run the
-validation; nothing else changes.
-
-Test-only: `allowUnvalidatedNeural = true` bypasses the band and restores the
-old artifact-domain routing. The stage logs a loud warning; this switch must
-never be the default.
+is not contained in the artifact `domain` bounds. The band only changes
+behaviour under `fieldInitializer = validatedNeural`. The default `neural`
+policy uses the wider artifact `domain` and warns that the result is not
+production-validated. To run a validated model, add this block and select
+`validatedNeural`; nothing else changes.
 
 ### Measured architecture limit
 
@@ -112,8 +108,9 @@ Every architecture-compatible encoder tested (MLP with 16M parameters, SIREN,
 RBF and output-position probes) plateaus at validation strong-field E relative
 RMS 0.11-0.17 against the 1e-3 acceptance gate. The oracle basis reconstruction
 reaches 1.6e-7, so the limit is the learned encoder, not the feature basis.
-Consequently no validated band exists for any current artifact and production
-runs are reference-only.
+Consequently no validated band exists for any current artifact; the default
+`neural` policy uses the model anyway and warns, while `referenceOnly` and
+`validatedNeural` remain available for safe operation.
 
 ## Model artifact
 
@@ -203,13 +200,13 @@ CUDA 12.5.82, 32x32x16 grid, stationary n=16 bunch, 10 steps.
 **Conclusion**
 
 The pipeline is stable, restart-safe, rank-local and preserves
-count/weight/charge. Because no artifact carries a validated band, the
-production default is reference-only and is the expected output for every
-shipped artifact. The neural path is exercised only with a validated-band
-artifact or the test-only `allowUnvalidatedNeural` switch; it is **not a
-physics pass**. The dominant runtime cost is the reference fallback. Not
-measured: peak host/device memory. Not run: n=64 hybrid, BP5 end-to-end, and
-all-reference gamma=10 over 10 steps.
+count/weight/charge. The default `neural` policy exercises the trained model
+inside the artifact domain and the exact reference elsewhere, but no shipped
+artifact carries a validated band, so the output is **not a physics pass**.
+Use `validatedNeural` for banded operation or `referenceOnly` for the exact
+path. The dominant runtime cost is the reference fallback. Not measured: peak
+host/device memory. Not run: n=64 hybrid, BP5 end-to-end, and all-reference
+gamma=10 over 10 steps.
 
 ## Related tooling
 
