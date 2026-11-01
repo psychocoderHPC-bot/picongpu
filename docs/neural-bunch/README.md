@@ -208,6 +208,74 @@ path. The dominant runtime cost is the reference fallback. Not measured: peak
 host/device memory. Not run: n=64 hybrid, BP5 end-to-end, and all-reference
 gamma=10 over 10 steps.
 
+## PICMI usage
+
+The initializer is available to PICMI simulations through
+`picmi.NeuralBunchInitializer`. Attach it to the simulation with
+`picongpu_neural_bunch`; the destination species is passed to the initializer
+object itself.
+
+```python
+import picmi
+
+electrons = picmi.Species(particle_type="electron", name="electrons")
+
+initializer = picmi.NeuralBunchInitializer(
+    filename="bunch.h5",           # or bunch.bp5
+    iteration=0,
+    source_species="e",            # species name inside the series
+    model_path="model",            # <model_path>.json and .bin
+    chunk_size=1 << 20,
+    tile_batch=1,
+    field_initializer="referenceOnly",  # neural | validatedNeural | referenceOnly
+    enable_reference_fallback=True,
+    time_policy=0,
+    species=electrons,
+)
+
+sim = picmi.Simulation(
+    max_steps=2,
+    solver=picmi.ElectromagneticSolver(grid=grid, method="Yee"),
+    species=[electrons],
+    layouts=[None],
+    picongpu_neural_bunch=initializer,
+)
+```
+
+PICMI derives the cell geometry `dx`/`dy`/`dz` from the grid and the Yee field
+layout from the solver. The generated `neuralBunch.param` maps the destination
+species to `PIC_<species>` (an alias of the generated C++ species) and carries
+the requested values. `filename` and `model_path` may be relative to the
+generated setup directory; they are resolved there and the original inputs plus
+artifact digests are stored in the setup metadata (`pypicongpu_rendering_context.json`).
+
+Options mirror the C++ parameters:
+
+| PICMI field | C++ field | default | meaning |
+| --- | --- | --- | --- |
+| `filename` | `filename` | required | openPMD series path |
+| `iteration` | `iteration` | `0` | iteration inside the series |
+| `source_species` | `species` | `"e"` | particle species inside the series |
+| `model_path` | `modelPath` | required unless `referenceOnly` | artifact path prefix |
+| `chunk_size` | `chunkSize` | `1048576` | source particles per collective chunk |
+| `tile_batch` | `tileBatch` | `1` | tiles per inference batch |
+| `field_initializer` | `fieldInitializer` | `"neural"` | `neural`, `validatedNeural`, `referenceOnly` |
+| `enable_reference_fallback` | `enableReferenceFallback` | `True` | reference outside the model domain |
+| `time_policy` | `timePolicy` | `0` | must stay `0` |
+
+Validation rejects non-3D grids, non-electron destination species, particle
+shapes other than TSC (`"quadratic"`), field solvers without the Yee layout
+(`other:None`), a second initializer for the same species (a density
+`initial_distribution` or a density operation), missing series/artifact files at
+render time, and `time_policy != 0`.
+
+Build with `-DPIC_USE_neuralBunch=ON`. The generated parameter file exists for
+every PICMI setup, but PIConGPU runs the stage only when the feature is
+compiled in, so only setups that actually configure `picongpu_neural_bunch`
+should use that build. See
+[`lib/python/examples/NeuralBunch/`](../../lib/python/examples/NeuralBunch/) for a
+runnable HDF5/ADIOS2 example.
+
 ## Related tooling
 
 Reference implementation, generator, training code, golden vectors and the
