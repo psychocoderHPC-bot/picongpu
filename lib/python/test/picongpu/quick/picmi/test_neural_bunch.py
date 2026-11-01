@@ -91,6 +91,7 @@ class TestNeuralBunchInitializer:
     def test_template_matches_requested_values(self, tmp_path):
         sim, _ = make_simulation(tmp_path)
         rendered = render_neural_bunch(sim)
+        assert "bool enabled = true;" in rendered
         assert "using PIC_electrons = species_electrons;" in rendered
         assert "using Species = PIC_electrons;" in rendered
         assert f'std::string filename = "{tmp_path / "bunch.h5"}";' in rendered
@@ -163,6 +164,7 @@ class TestNeuralBunchInitializer:
         pypic = sim.get_as_pypicongpu()
         context = pypic.get_rendering_context()
         rendered = Renderer.get_rendered_template(Renderer.get_context_preprocessed(context), TEMPLATE.read_text())
+        assert "bool enabled = false;" in rendered
         assert "using Species = species_electrons;" in rendered
         assert "FieldInitializer::referenceOnly" in rendered
 

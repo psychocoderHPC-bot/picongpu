@@ -12,25 +12,27 @@
 
 namespace picongpu::neuralBunch
 {
-    {{#neural_bunch}}
+    {{#neural_bunch_enabled}}
     /* Destination species generated from the PICMI species
-     * {{{destination_species_name}}}. The ``PIC_`` alias keeps the
+     * {{{neural_bunch.destination_species_name}}}. The ``PIC_`` alias keeps the
      * user-facing spelling while the generated C++ type stays
-     * ``{{{destination_species}}}``. */
-    using PIC_{{destination_species_name}} = {{destination_species}};
-    using Species = PIC_{{destination_species_name}};
+     * ``{{{neural_bunch.destination_species}}}``. */
+    using PIC_{{neural_bunch.destination_species_name}} = {{neural_bunch.destination_species}};
+    using Species = PIC_{{neural_bunch.destination_species_name}};
 
-    /* Cell geometry derived from the PICMI grid (metres): dx={{{cell_size_si.x}}},
-     * dy={{{cell_size_si.y}}}, dz={{{cell_size_si.z}}}. */
+    /* Cell geometry derived from the PICMI grid (metres): dx={{{neural_bunch.cell_size_si.x}}},
+     * dy={{{neural_bunch.cell_size_si.y}}}, dz={{{neural_bunch.cell_size_si.z}}}. */
     struct NeuralBunchParam
     {
-        std::string filename = "{{{filename}}}";
-        std::uint64_t iteration = {{{iteration}}};
-        std::string species = "{{{source_species}}}";
-        std::string modelPath = "{{{modelPath}}}";
-        std::uint64_t chunkSize = {{{chunkSize}}};
-        std::uint32_t tileBatch = {{{tileBatch}}};
-        bool enableReferenceFallback = {{#enableReferenceFallback}}true{{/enableReferenceFallback}}{{^enableReferenceFallback}}false{{/enableReferenceFallback}};
+        /* PICMI configured picongpu_neural_bunch, so the stage runs. */
+        bool enabled = true;
+        std::string filename = "{{{neural_bunch.filename}}}";
+        std::uint64_t iteration = {{{neural_bunch.iteration}}};
+        std::string species = "{{{neural_bunch.source_species}}}";
+        std::string modelPath = "{{{neural_bunch.modelPath}}}";
+        std::uint64_t chunkSize = {{{neural_bunch.chunkSize}}};
+        std::uint32_t tileBatch = {{{neural_bunch.tileBatch}}};
+        bool enableReferenceFallback = {{#neural_bunch.enableReferenceFallback}}true{{/neural_bunch.enableReferenceFallback}}{{^neural_bunch.enableReferenceFallback}}false{{/neural_bunch.enableReferenceFallback}};
 
         enum class FieldInitializer
         {
@@ -38,20 +40,21 @@ namespace picongpu::neuralBunch
             validatedNeural,
             referenceOnly
         };
-        FieldInitializer fieldInitializer = FieldInitializer::{{{fieldInitializer}}};
-        int timePolicy = {{{timePolicy}}};
+        FieldInitializer fieldInitializer = FieldInitializer::{{{neural_bunch.fieldInitializer}}};
+        int timePolicy = {{{neural_bunch.timePolicy}}};
     };
-    {{/neural_bunch}}
-    {{^neural_bunch}}
+    {{/neural_bunch_enabled}}
+    {{^neural_bunch_enabled}}
     /* No neural bunch initializer was requested by the PICMI simulation. This
      * placeholder keeps ``neuralBunch.param`` syntactically valid when
-     * PIC_USE_neuralBunch is compiled in. It is reference-only with an empty
-     * source path, so a simulation that actually runs the stage must configure
-     * picongpu_neural_bunch. */
+     * PIC_USE_neuralBunch is compiled in, and leaves the stage disabled. */
     using Species = {{neural_bunch_fallback_species}};
 
     struct NeuralBunchParam
     {
+        /* No picongpu_neural_bunch was configured; keep the stage disabled so a
+         * standard simulation behaves exactly as before. */
+        bool enabled = false;
         std::string filename = "";
         std::uint64_t iteration = 0;
         std::string species = "e";
@@ -69,7 +72,7 @@ namespace picongpu::neuralBunch
         FieldInitializer fieldInitializer = FieldInitializer::referenceOnly;
         int timePolicy = 0;
     };
-    {{/neural_bunch}}
+    {{/neural_bunch_enabled}}
 
     inline NeuralBunchParam const neuralBunchParam{};
 } // namespace picongpu::neuralBunch

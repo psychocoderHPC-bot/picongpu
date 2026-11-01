@@ -25,6 +25,7 @@ dependency, and the initializer stage compiles to nothing.
 
 | field | type | meaning |
 | --- | --- | --- |
+| `enabled` | `bool` | Master switch, **default `false`**. The stage is a no-op when disabled: no file read, no model load, no collective calls. A hand-written setup must set `enabled = true`; PICMI sets it only when `picongpu_neural_bunch` is configured. |
 | `Species` (type alias) | PIConGPU species | Species that receives the particles. Must be an electron species whose name matches `species`. |
 | `filename` | `std::string` | openPMD series path, e.g. `bunch.h5` or `bunch.bp5`. |
 | `iteration` | `std::uint64_t` | Iteration read for both passes. |
@@ -44,7 +45,10 @@ iteration times are all errors.
 ## Two passes
 
 The stage runs from `Simulation::fillSimulation()` in the non-restart branch,
-after `ParticleInit` and before the final field guard exchange.
+after `ParticleInit` and before the final field guard exchange, but only when
+`enabled = true`. With the default `enabled = false` the call returns
+immediately and standard PIConGPU setups are byte-for-byte behaviourally
+unchanged even when the feature is compiled in.
 
 1. **Field pass.** Rank 0 reads the openPMD series and broadcasts bounded global
    source chunks. Each rank enumerates its owned 8x8x4 tiles, classifies every
@@ -269,7 +273,9 @@ shapes other than TSC (`"quadratic"`), field solvers without the Yee layout
 `initial_distribution` or a density operation), missing series/artifact files at
 render time, and `time_policy != 0`.
 
-Build with `-DPIC_USE_neuralBunch=ON`. The generated parameter file exists for
+Build with `-DPIC_USE_neuralBunch=ON`. The generated parameter file emits
+`enabled = true` when `picongpu_neural_bunch` is configured and
+`enabled = false` otherwise. The file exists for
 every PICMI setup, but PIConGPU runs the stage only when the feature is
 compiled in, so only setups that actually configure `picongpu_neural_bunch`
 should use that build. See

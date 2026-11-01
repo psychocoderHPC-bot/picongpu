@@ -1034,6 +1034,11 @@ namespace picongpu
 
             void NeuralBunchInit::operator()(uint32_t const step, MappingDesc const& cellDescription) const
             {
+                if(!neuralBunch::neuralBunchParam.enabled)
+                {
+                    log<picLog::SIMULATION_STATE>("neuralBunch: disabled (enabled=false); stage is a no-op.");
+                    return;
+                }
                 using SpeciesType = pmacc::particles::meta::FindByNameOrType_t<VectorAllSpecies, neuralBunch::Species>;
                 neuralBunchDetail::run<SpeciesType>(neuralBunch::neuralBunchParam, step, cellDescription);
             }

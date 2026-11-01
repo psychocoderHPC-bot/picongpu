@@ -40,6 +40,12 @@ namespace picongpu::neuralBunch
 
     struct NeuralBunchParam
     {
+        /** Master switch. Disabled by default so a standard PIConGPU setup that
+         * compiles the feature in behaves exactly as before: the stage returns
+         * immediately, reads no file and loads no model. A hand-written setup
+         * must set ``enabled = true``; PICMI does so only when
+         * ``picongpu_neural_bunch`` is configured. */
+        bool enabled = false;
         //! openPMD series path, e.g. ``bunch.h5`` or ``bunch.bp5``.
         std::string filename = "bunch.h5";
         //! Iteration inside the openPMD series that is read for both passes.

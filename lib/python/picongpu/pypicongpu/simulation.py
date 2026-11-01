@@ -130,6 +130,11 @@ class Simulation(RenderedObject, BaseModel):
     """
 
     @computed_field
+    def neural_bunch_enabled(self) -> bool:
+        """True when the PICMI simulation configured the bunch initializer."""
+        return self.neural_bunch is not None
+
+    @computed_field
     def neural_bunch_fallback_species(self) -> str:
         """Species alias used by the unconfigured placeholder."""
         return self.species[0].typename if self.species else "void"
