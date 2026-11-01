@@ -15,10 +15,10 @@
  *  - ``validatedNeural`` uses the neural path only inside a measured band;
  *  - ``referenceOnly`` uses the exact reference and requires no model artifact;
  *  - ``banded`` routes by distance: near uses the exact reference unless
- *    ``useModelForNear`` selects the model, mid uses ``mid_correction`` (point
- *    field plus the learned correction) or the neural model when
- *    ``useModelForMid`` is enabled/automatic, far uses the analytic point field
- *    plus an optional ``far_multipole`` Taylor head;
+ *    ``useModelForNear`` selects the model, mid uses the analytic point field
+ *    only unless ``useModelForMid`` or ``useMidCorrection`` explicitly opts
+ *    into a learned head, far uses the analytic point field plus an optional
+ *    ``far_multipole`` Taylor head;
  *  - ``enableReferenceFallback`` selects reference vs collective failure for
  *    pairs outside the model domain under the ``neural`` policy and for
  *    near/mid pairs without a configured model under ``banded``.
@@ -92,8 +92,11 @@ namespace picongpu::neuralBunch
         //! ``banded``: use the configured model encoder/decoder for near pairs instead of the exact reference.
         //! The model is not validated in the near band; enabling this emits a loud warning.
         bool useModelForNear = false;
-        //! ``banded``: use the model for mid pairs. ``std::nullopt`` means "true iff an artifact is configured".
+        //! ``banded``: opt into the primary encoder/decoder for mid pairs. Default: analytic point field only.
         std::optional<bool> useModelForMid{};
+        //! ``banded``: opt into the learned ``mid_correction`` head. Default off: the learned correction is
+        //! measurably worse than the point field alone in 4..48 cells.
+        bool useMidCorrection = false;
         //! Must stay 0: source time equals injection time (no drift applied).
         int timePolicy = 0;
     };

@@ -86,58 +86,53 @@ namespace picongpu::particles::neuralBunch
         return best;
     }
 
-    /** How the banded runtime may use a trained model instead of the exact reference.
+    /** How the banded runtime may use a trained model instead of the band defaults.
      *
-     * ``useModelForMid`` is tri-state: ``std::nullopt`` means "use the model when the artifact provides one",
-     * ``true``/``false`` force the decision. ``useModelForNear`` defaults to false.
+     * The near band defaults to the exact reference; ``useModelForNear`` opts into the model.
+     * The mid band defaults to the analytic point field only; ``useModelForMid`` opts into the primary
+     * encoder/decoder and ``useMidCorrection`` opts into the learned ``mid_correction`` head. Neither
+     * mid model option is applied automatically when an artifact happens to contain a mid section.
      */
     struct BandedModelUse
     {
         bool useModelForNear = false;
         std::optional<bool> useModelForMid{};
+        bool useMidCorrection = false;
     };
 
     enum class BandRoute
     {
+        //! Evaluate with a learned head (near model, primary mid model or mid correction).
         model,
+        //! Evaluate with the analytic point field only (mid default) or point field plus far multipole (far).
+        analytic,
         reference,
         error
     };
 
-    /** Effective model decision for one band. Far is always analytic/model data, never reference. */
-    inline bool bandUsesModel(
-        Band band,
-        BandedModelUse const& use,
-        bool hasNearModel,
-        bool hasMidModel,
-        bool hasPrimaryModel)
-    {
-        if(band == Band::far)
-            return true;
-        if(band == Band::near)
-            return use.useModelForNear && (hasNearModel || hasPrimaryModel);
-        // mid: nullopt = automatic (model iff configured), explicit value is honoured.
-        bool const requested = use.useModelForMid.value_or(hasMidModel || hasPrimaryModel);
-        return requested && (hasMidModel || hasPrimaryModel);
-    }
-
-    /** Route one classified pair. A requested model band without an artifact is a hard error. */
+    /** Route one classified pair. A requested model band without its artifact is a hard error. */
     inline BandRoute routeBandedBand(
         Band band,
         BandedModelUse const& use,
         bool hasNearModel,
-        bool hasMidModel,
+        bool hasMidCorrection,
         bool hasPrimaryModel,
         bool enableReferenceFallback)
     {
         if(band == Band::far)
-            return BandRoute::model;
-        bool const requested
-            = band == Band::near ? use.useModelForNear : use.useModelForMid.value_or(hasMidModel || hasPrimaryModel);
-        if(requested)
-            return bandUsesModel(band, use, hasNearModel, hasMidModel, hasPrimaryModel) ? BandRoute::model
-                                                                                        : BandRoute::error;
-        return enableReferenceFallback ? BandRoute::reference : BandRoute::error;
+            return BandRoute::analytic;
+        if(band == Band::near)
+        {
+            if(use.useModelForNear)
+                return (hasNearModel || hasPrimaryModel) ? BandRoute::model : BandRoute::error;
+            return enableReferenceFallback ? BandRoute::reference : BandRoute::error;
+        }
+        // mid
+        if(use.useMidCorrection)
+            return hasMidCorrection ? BandRoute::model : BandRoute::error;
+        if(use.useModelForMid.value_or(false))
+            return hasPrimaryModel ? BandRoute::model : BandRoute::error;
+        return BandRoute::analytic;
     }
 
     /** True when this band should emit the once-per-rank unvalidated-model warning. */
@@ -145,14 +140,15 @@ namespace picongpu::particles::neuralBunch
         Band band,
         BandedModelUse const& use,
         bool hasNearModel,
-        bool hasMidModel,
+        bool hasMidCorrection,
         bool hasPrimaryModel)
     {
-        if(band == Band::far)
-            return false;
         if(band == Band::near)
             return use.useModelForNear && (hasNearModel || hasPrimaryModel);
-        return bandUsesModel(band, use, hasNearModel, hasMidModel, hasPrimaryModel);
+        if(band == Band::mid)
+            return (use.useMidCorrection && hasMidCorrection)
+                   || (use.useModelForMid.value_or(false) && hasPrimaryModel);
+        return false;
     }
 
     class BandPolicy

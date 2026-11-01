@@ -47,9 +47,11 @@ class NeuralBunchInitializer(BaseModel):
     * ``"referenceOnly"``: the exact FP64 reference is used and no model
       artifact is read.
     * ``"banded"``: distance-banded near/mid/far composition. The near band
-      uses the exact reference (or an optional ``near_model``), the mid band
-      uses ``mid_correction`` or the neural model, and the far band uses the
-      analytic point field plus an optional ``far_multipole`` Taylor head.
+      uses the exact reference by default (or the model when explicitly opted
+      in), the mid band defaults to the analytic point field only, and the far
+      band uses the analytic point field plus an optional ``far_multipole``
+      Taylor head. The learned ``mid_correction`` is opt-in and measured worse
+      than the point field alone.
     """
 
     filename: str = Field(min_length=1)

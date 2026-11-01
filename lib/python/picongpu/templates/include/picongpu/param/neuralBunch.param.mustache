@@ -47,6 +47,7 @@ namespace picongpu::neuralBunch
         double bandedFarMinCells = 48.0;
         bool useModelForNear = false;
         std::optional<bool> useModelForMid{};
+        bool useMidCorrection = false;
         int timePolicy = {{{neural_bunch.timePolicy}}};
     };
     {{/neural_bunch_enabled}}
@@ -81,6 +82,7 @@ namespace picongpu::neuralBunch
         double bandedFarMinCells = 48.0;
         bool useModelForNear = false;
         std::optional<bool> useModelForMid{};
+        bool useMidCorrection = false;
         int timePolicy = 0;
     };
     {{/neural_bunch_enabled}}

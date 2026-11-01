@@ -768,7 +768,9 @@ namespace picongpu::particles::neuralBunch
         std::size_t maxSources = 4096u,
         std::size_t maxBatch = 64u,
         TaylorBatchBackend farBackend = TaylorBatchBackend::automatic,
-        bool usePrimaryModelForNear = false)
+        bool usePrimaryModelForNear = false,
+        bool useModelForMid = false,
+        bool useMidCorrection = false)
     {
         if(sources.size() > maxSources)
             throw std::invalid_argument{
@@ -919,10 +921,10 @@ namespace picongpu::particles::neuralBunch
         {
             auto const midStart = std::chrono::steady_clock::now();
             bool const hasModel = !meta.layers.empty() && !meta.bank.empty();
-            if(!hasModel && !meta.midCorrection.present)
-            {
+            if(useModelForMid && !hasModel)
                 result.midNotImplemented = true;
-            }
+            else if(useMidCorrection && !meta.midCorrection.present)
+                result.midNotImplemented = true;
             else
             {
                 for(std::size_t begin = 0u; begin < midIndices.size(); begin += maxBatch)
@@ -930,7 +932,7 @@ namespace picongpu::particles::neuralBunch
                     auto const end = std::min(begin + maxBatch, midIndices.size());
                     auto batchSources = makeBatch(midIndices, begin, end);
                     std::vector<float> contributions;
-                    if(meta.midCorrection.present)
+                    if(useMidCorrection)
                     {
                         contributions = pointFieldBatched(queue, exec, batchSources, cells);
                         auto const latent = runEncoderLayers(
@@ -953,7 +955,7 @@ namespace picongpu::particles::neuralBunch
                         for(std::size_t i = 0u; i < contributions.size(); ++i)
                             contributions[i] += correction[i];
                     }
-                    else
+                    else if(useModelForMid)
                     {
                         auto const latent = runEncoderLayers(
                             queue,
@@ -966,6 +968,10 @@ namespace picongpu::particles::neuralBunch
                             batchSources);
                         contributions
                             = decodeBankBatchedRaw(queue, exec, meta, tensors, latent, batchSources.size(), aY, aZ);
+                    }
+                    else
+                    {
+                        contributions = pointFieldBatched(queue, exec, batchSources, cells);
                     }
                     accumulate(midIndices, begin, contributions);
                 }

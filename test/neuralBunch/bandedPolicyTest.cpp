@@ -82,9 +82,10 @@ int main()
 
     // Band routing with the model-use options.
     nb::BandedModelUse const nearOff{};
-    nb::BandedModelUse const nearOn{true, {}};
-    nb::BandedModelUse const midOn{false, true};
-    nb::BandedModelUse const midOff{false, false};
+    nb::BandedModelUse const nearOn{true, {}, false};
+    nb::BandedModelUse const midOn{false, true, false};
+    nb::BandedModelUse const midOff{false, false, false};
+    nb::BandedModelUse const correctionOn{false, {}, true};
     using nb::BandRoute;
     check(
         nb::routeBandedBand(nb::Band::near, nearOff, false, false, false, true) == BandRoute::reference,
@@ -102,20 +103,29 @@ int main()
         nb::routeBandedBand(nb::Band::near, nearOn, true, false, false, true) == BandRoute::model,
         "near model uses a near_model section");
     check(
-        nb::routeBandedBand(nb::Band::mid, nearOff, false, false, true, true) == BandRoute::model,
-        "mid is automatic when a model is configured");
+        nb::routeBandedBand(nb::Band::mid, nearOff, false, false, true, true) == BandRoute::analytic,
+        "mid defaults to the analytic point field even with a model");
     check(
-        nb::routeBandedBand(nb::Band::mid, nearOff, false, false, false, true) == BandRoute::reference,
-        "mid automatic without a model falls back to reference");
+        nb::routeBandedBand(nb::Band::mid, nearOff, false, false, false, true) == BandRoute::analytic,
+        "mid defaults to the analytic point field without a model");
     check(
-        nb::routeBandedBand(nb::Band::mid, midOff, false, false, true, true) == BandRoute::reference,
-        "explicit mid model off uses reference");
+        nb::routeBandedBand(nb::Band::mid, midOff, false, false, true, true) == BandRoute::analytic,
+        "explicit mid model off uses the point field");
+    check(
+        nb::routeBandedBand(nb::Band::mid, midOn, false, false, true, true) == BandRoute::model,
+        "explicit mid model uses the primary artifact");
     check(
         nb::routeBandedBand(nb::Band::mid, midOn, false, false, false, true) == BandRoute::error,
         "mid model requested without artifact errors");
     check(
-        nb::routeBandedBand(nb::Band::far, nearOff, false, false, false, false) == BandRoute::model,
-        "far is always analytic model data");
+        nb::routeBandedBand(nb::Band::mid, correctionOn, false, true, false, true) == BandRoute::model,
+        "mid correction is opt-in");
+    check(
+        nb::routeBandedBand(nb::Band::mid, correctionOn, false, false, false, true) == BandRoute::error,
+        "mid correction requested without section errors");
+    check(
+        nb::routeBandedBand(nb::Band::far, nearOff, false, false, false, false) == BandRoute::analytic,
+        "far is analytic point field data");
     check(
         nb::needsUnvalidatedModelWarning(nb::Band::near, nearOn, false, false, true),
         "near model emits the warning");
@@ -123,11 +133,14 @@ int main()
         !nb::needsUnvalidatedModelWarning(nb::Band::near, nearOff, true, false, true),
         "near without model does not emit the warning");
     check(
-        nb::needsUnvalidatedModelWarning(nb::Band::mid, nearOff, false, false, true),
-        "mid automatic model emits the warning");
+        !nb::needsUnvalidatedModelWarning(nb::Band::mid, nearOff, false, false, true),
+        "default mid point field does not emit the warning");
     check(
-        !nb::needsUnvalidatedModelWarning(nb::Band::mid, nearOff, false, false, false),
-        "mid without model does not emit the warning");
+        nb::needsUnvalidatedModelWarning(nb::Band::mid, midOn, false, false, true),
+        "mid primary model emits the warning");
+    check(
+        nb::needsUnvalidatedModelWarning(nb::Band::mid, correctionOn, false, true, false),
+        "mid correction emits the warning");
     check(
         !nb::needsUnvalidatedModelWarning(nb::Band::mid, midOff, false, false, true),
         "explicit mid model off does not emit the warning");

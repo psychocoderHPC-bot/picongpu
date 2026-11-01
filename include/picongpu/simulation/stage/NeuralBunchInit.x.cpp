@@ -407,8 +407,11 @@ namespace picongpu
                     BandPolicy bandPolicy{BandThresholds{params.bandedNearMaxCells, params.bandedFarMinCells}};
                     bool const hasNearModel = meta != nullptr && meta->nearModel.present;
                     bool const hasPrimaryModel = meta != nullptr && !meta->layers.empty() && !meta->bank.empty();
-                    bool const hasMidModel = meta != nullptr && (meta->midCorrection.present || hasPrimaryModel);
-                    BandedModelUse const bandedUse{params.useModelForNear, params.useModelForMid};
+                    bool const hasMidCorrection = meta != nullptr && meta->midCorrection.present;
+                    BandedModelUse const bandedUse{
+                        params.useModelForNear,
+                        params.useModelForMid,
+                        params.useMidCorrection};
                     tg::DomainBounds domain{};
                     tg::ValidatedBand validatedBand;
                     tg::ValidatedBand const* band = nullptr;
@@ -497,19 +500,24 @@ namespace picongpu
                     else if(isBanded)
                     {
                         bool const nearModel = bandedUse.useModelForNear && (hasNearModel || hasPrimaryModel);
-                        bool const midModel
-                            = bandUsesModel(Band::mid, bandedUse, hasNearModel, hasMidModel, hasPrimaryModel);
+                        bool const midCorrection = bandedUse.useMidCorrection && hasMidCorrection;
+                        bool const midModel = bandedUse.useModelForMid.value_or(false) && hasPrimaryModel;
                         log<picLog::PHYSICS>(
                             "neuralBunch: rank=%1% policy=banded near<%2% cells %3%, mid %4%, far>%5% analytic "
                             "point field%6%.")
                             % rank % num(params.bandedNearMaxCells)
                             % (nearModel ? (hasNearModel ? "near_model head" : "model encoder/decoder")
                                          : (params.enableReferenceFallback ? "exact reference" : "missing model"))
-                            % (midModel ? (meta && meta->midCorrection.present ? "point field+mid_correction"
-                                                                               : "model encoder/decoder")
-                                        : (params.enableReferenceFallback ? "exact reference" : "missing model"))
+                            % (midCorrection ? "point field+mid_correction"
+                                             : (midModel ? "model encoder/decoder" : "analytic point field only"))
                             % num(params.bandedFarMinCells)
                             % ((meta && meta->farMultipole.present) ? " + far_multipole" : "");
+                        log<picLog::PHYSICS>(
+                            "neuralBunch: WARNING rank=%1% policy=banded mid-band limitation: the analytic point "
+                            "field has measured held-out mean ~2.5%% and p50 ~0.75%% (not 1e-3) in 4..48 cells; it "
+                            "is exact only beyond the measured thresholds (aspect<=2 ~32-256 cells, aspect~10 "
+                            ">512 cells).")
+                            % rank;
                         log<picLog::PHYSICS>(
                             "neuralBunch: WARNING rank=%1% policy=banded: the far-band analytic point-field-only "
                             "accuracy depends on aspect/gamma; measured thresholds are aspect<=2 ~32-256 cells "
@@ -519,22 +527,23 @@ namespace picongpu
                                Band::near,
                                bandedUse,
                                hasNearModel,
-                               hasMidModel,
+                               hasMidCorrection,
                                hasPrimaryModel))
                             log<picLog::PHYSICS>(
                                 "neuralBunch: WARNING rank=%1% policy=banded useModelForNear=true: near output is "
                                 "NOT validated (near gate failed: in-sample 0.143, held-out 0.200) and the exact "
                                 "reference alternative is prohibitively slow (~29 s per tile).")
                                 % rank;
-                        if(needsUnvalidatedModelWarning(
-                               Band::mid,
-                               bandedUse,
-                               hasNearModel,
-                               hasMidModel,
-                               hasPrimaryModel))
+                        if(bandedUse.useMidCorrection && hasMidCorrection)
                             log<picLog::PHYSICS>(
-                                "neuralBunch: WARNING rank=%1% policy=banded useModelForMid active: mid output is "
-                                "NOT validated and the exact reference alternative is prohibitively slow "
+                                "neuralBunch: WARNING rank=%1% policy=banded useMidCorrection=true: the learned TSC "
+                                "correction is WORSE than the point field alone (held-out mean 4.16%% / p50 1.26%% "
+                                "vs point field 2.47%% / p50 0.75%%) and needs rank 1536; it is NOT validated.")
+                                % rank;
+                        if(bandedUse.useModelForMid.value_or(false) && hasPrimaryModel)
+                            log<picLog::PHYSICS>(
+                                "neuralBunch: WARNING rank=%1% policy=banded useModelForMid=true: mid output is NOT "
+                                "validated and the exact reference alternative is prohibitively slow "
                                 "(~29 s per tile).")
                                 % rank;
                     }
@@ -638,10 +647,10 @@ namespace picongpu
                                                 bandValue,
                                                 bandedUse,
                                                 hasNearModel,
-                                                hasMidModel,
+                                                hasMidCorrection,
                                                 hasPrimaryModel,
                                                 params.enableReferenceFallback);
-                                            if(route == BandRoute::model)
+                                            if(route == BandRoute::model || route == BandRoute::analytic)
                                             {
                                                 bandedSources.push_back(source);
                                                 ++bandedModelPairs;
@@ -737,7 +746,9 @@ namespace picongpu
                                             std::numeric_limits<std::size_t>::max() / tg::outputDimension,
                                             std::max<std::size_t>(64u, params.tileBatch),
                                             TaylorBatchBackend::automatic,
-                                            params.useModelForNear);
+                                            params.useModelForNear,
+                                            params.useModelForMid.value_or(false),
+                                            params.useMidCorrection);
                                         if(bandedResult.nearNotImplemented || bandedResult.midNotImplemented)
                                             throw std::runtime_error(
                                                 "neuralBunch: banded evaluation requested a near/mid model that "
