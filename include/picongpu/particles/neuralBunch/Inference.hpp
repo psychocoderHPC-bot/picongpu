@@ -767,7 +767,8 @@ namespace picongpu::particles::neuralBunch
         FieldNormalization const& normalization = {},
         std::size_t maxSources = 4096u,
         std::size_t maxBatch = 64u,
-        TaylorBatchBackend farBackend = TaylorBatchBackend::automatic)
+        TaylorBatchBackend farBackend = TaylorBatchBackend::automatic,
+        bool usePrimaryModelForNear = false)
     {
         if(sources.size() > maxSources)
             throw std::invalid_argument{
@@ -859,6 +860,26 @@ namespace picongpu::particles::neuralBunch
                         meta.nearModel.decoder,
                         latent,
                         batchSources.size());
+                    accumulate(nearIndices, begin, values);
+                }
+            }
+            else if(usePrimaryModelForNear && !meta.layers.empty() && !meta.bank.empty())
+            {
+                for(std::size_t begin = 0u; begin < nearIndices.size(); begin += maxBatch)
+                {
+                    auto const end = std::min(begin + maxBatch, nearIndices.size());
+                    auto batchSources = makeBatch(nearIndices, begin, end);
+                    auto const latent = runEncoderLayers(
+                        queue,
+                        exec,
+                        meta,
+                        meta.featureKind,
+                        meta.featureDim,
+                        meta.layers,
+                        tensors,
+                        batchSources);
+                    auto const values
+                        = decodeBankBatchedRaw(queue, exec, meta, tensors, latent, batchSources.size(), aY, aZ);
                     accumulate(nearIndices, begin, values);
                 }
             }

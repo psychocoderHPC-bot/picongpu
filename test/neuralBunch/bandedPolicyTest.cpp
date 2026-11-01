@@ -80,6 +80,58 @@ int main()
         taylorFinite = taylorFinite && std::isfinite(value);
     check(taylorFinite, "Taylor values are finite");
 
+    // Band routing with the model-use options.
+    nb::BandedModelUse const nearOff{};
+    nb::BandedModelUse const nearOn{true, {}};
+    nb::BandedModelUse const midOn{false, true};
+    nb::BandedModelUse const midOff{false, false};
+    using nb::BandRoute;
+    check(
+        nb::routeBandedBand(nb::Band::near, nearOff, false, false, false, true) == BandRoute::reference,
+        "near defaults to reference");
+    check(
+        nb::routeBandedBand(nb::Band::near, nearOff, false, false, false, false) == BandRoute::error,
+        "near without fallback and without model errors");
+    check(
+        nb::routeBandedBand(nb::Band::near, nearOn, false, false, false, true) == BandRoute::error,
+        "near model requested without artifact errors");
+    check(
+        nb::routeBandedBand(nb::Band::near, nearOn, false, false, true, true) == BandRoute::model,
+        "near model uses the primary artifact");
+    check(
+        nb::routeBandedBand(nb::Band::near, nearOn, true, false, false, true) == BandRoute::model,
+        "near model uses a near_model section");
+    check(
+        nb::routeBandedBand(nb::Band::mid, nearOff, false, false, true, true) == BandRoute::model,
+        "mid is automatic when a model is configured");
+    check(
+        nb::routeBandedBand(nb::Band::mid, nearOff, false, false, false, true) == BandRoute::reference,
+        "mid automatic without a model falls back to reference");
+    check(
+        nb::routeBandedBand(nb::Band::mid, midOff, false, false, true, true) == BandRoute::reference,
+        "explicit mid model off uses reference");
+    check(
+        nb::routeBandedBand(nb::Band::mid, midOn, false, false, false, true) == BandRoute::error,
+        "mid model requested without artifact errors");
+    check(
+        nb::routeBandedBand(nb::Band::far, nearOff, false, false, false, false) == BandRoute::model,
+        "far is always analytic model data");
+    check(
+        nb::needsUnvalidatedModelWarning(nb::Band::near, nearOn, false, false, true),
+        "near model emits the warning");
+    check(
+        !nb::needsUnvalidatedModelWarning(nb::Band::near, nearOff, true, false, true),
+        "near without model does not emit the warning");
+    check(
+        nb::needsUnvalidatedModelWarning(nb::Band::mid, nearOff, false, false, true),
+        "mid automatic model emits the warning");
+    check(
+        !nb::needsUnvalidatedModelWarning(nb::Band::mid, nearOff, false, false, false),
+        "mid without model does not emit the warning");
+    check(
+        !nb::needsUnvalidatedModelWarning(nb::Band::mid, midOff, false, false, true),
+        "explicit mid model off does not emit the warning");
+
     if(failures != 0)
     {
         std::cerr << failures << " banded policy checks failed\n";

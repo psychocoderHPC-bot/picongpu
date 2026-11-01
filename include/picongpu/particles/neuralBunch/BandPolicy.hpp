@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 
 namespace picongpu::particles::neuralBunch
@@ -83,6 +84,75 @@ namespace picongpu::particles::neuralBunch
             best = std::min(best, std::sqrt(dx * dx + dy * dy + dz * dz));
         }
         return best;
+    }
+
+    /** How the banded runtime may use a trained model instead of the exact reference.
+     *
+     * ``useModelForMid`` is tri-state: ``std::nullopt`` means "use the model when the artifact provides one",
+     * ``true``/``false`` force the decision. ``useModelForNear`` defaults to false.
+     */
+    struct BandedModelUse
+    {
+        bool useModelForNear = false;
+        std::optional<bool> useModelForMid{};
+    };
+
+    enum class BandRoute
+    {
+        model,
+        reference,
+        error
+    };
+
+    /** Effective model decision for one band. Far is always analytic/model data, never reference. */
+    inline bool bandUsesModel(
+        Band band,
+        BandedModelUse const& use,
+        bool hasNearModel,
+        bool hasMidModel,
+        bool hasPrimaryModel)
+    {
+        if(band == Band::far)
+            return true;
+        if(band == Band::near)
+            return use.useModelForNear && (hasNearModel || hasPrimaryModel);
+        // mid: nullopt = automatic (model iff configured), explicit value is honoured.
+        bool const requested = use.useModelForMid.value_or(hasMidModel || hasPrimaryModel);
+        return requested && (hasMidModel || hasPrimaryModel);
+    }
+
+    /** Route one classified pair. A requested model band without an artifact is a hard error. */
+    inline BandRoute routeBandedBand(
+        Band band,
+        BandedModelUse const& use,
+        bool hasNearModel,
+        bool hasMidModel,
+        bool hasPrimaryModel,
+        bool enableReferenceFallback)
+    {
+        if(band == Band::far)
+            return BandRoute::model;
+        bool const requested
+            = band == Band::near ? use.useModelForNear : use.useModelForMid.value_or(hasMidModel || hasPrimaryModel);
+        if(requested)
+            return bandUsesModel(band, use, hasNearModel, hasMidModel, hasPrimaryModel) ? BandRoute::model
+                                                                                        : BandRoute::error;
+        return enableReferenceFallback ? BandRoute::reference : BandRoute::error;
+    }
+
+    /** True when this band should emit the once-per-rank unvalidated-model warning. */
+    inline bool needsUnvalidatedModelWarning(
+        Band band,
+        BandedModelUse const& use,
+        bool hasNearModel,
+        bool hasMidModel,
+        bool hasPrimaryModel)
+    {
+        if(band == Band::far)
+            return false;
+        if(band == Band::near)
+            return use.useModelForNear && (hasNearModel || hasPrimaryModel);
+        return bandUsesModel(band, use, hasNearModel, hasMidModel, hasPrimaryModel);
     }
 
     class BandPolicy
