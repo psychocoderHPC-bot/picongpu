@@ -86,6 +86,7 @@ namespace picongpu::particles::neuralBunch::reference
         int sphere_n = 10; //!< starting angular order for in-support boxes
         int sphere_max_n = 32; //!< maximum angular order
         int sphere_radial_order = 4; //!< radial Gauss order per corner box
+        int in_support_box_order = 256; //!< Gauss order per face of the analytic box field
     };
 
     struct ShapeResult
@@ -353,6 +354,50 @@ namespace picongpu::particles::neuralBunch::reference
             return max_diff / (1.0 + max_val);
         }
 
+        //! Coulomb field at an interior point of the physical TSC support box:
+        //!     J(x_obs) = ∫_Box (x_obs - p)/|x_obs - p|^3 d^3p
+        //! where Box is the box [x_src±1.5·cells] (the TSC support in lab space).
+        //! By the divergence theorem (x_obs - p)/|x_obs - p|^3 = ∇_p(1/|x_obs - p|),
+        //! so J is a smooth surface integral over the six faces.  The integrand
+        //! 1/|x_obs - p| is nonsingular on every face because x_obs is interior,
+        //! so plain Gauss converges spectrally and J is exact to roundoff.  This
+        //! is the analytic singular part of the in-support shape integral.
+        inline Vec3 box_field(Vec3 const& x_obs, Vec3 const& x_src, Vec3 const& cells, int n)
+        {
+            double const ext[3] = {1.5 * cells.x, 1.5 * cells.y, 1.5 * cells.z};
+            double const lo[3] = {x_src.x - ext[0], x_src.y - ext[1], x_src.z - ext[2]};
+            double const hi[3] = {x_src.x + ext[0], x_src.y + ext[1], x_src.z + ext[2]};
+            std::vector<double> xn, wn;
+            gauss_legendre(n, xn, wn);
+            Vec3 out{};
+            for(int axis = 0; axis < 3; ++axis)
+                for(int sgn : {-1, 1})
+                {
+                    double const fixed = (sgn < 0) ? lo[axis] : hi[axis];
+                    double const df = x_obs[axis] - fixed;
+                    int const o0 = (axis + 1) % 3;
+                    int const o1 = (axis + 2) % 3;
+                    double const h0 = 0.5 * (hi[o0] - lo[o0]);
+                    double const m0 = 0.5 * (hi[o0] + lo[o0]);
+                    double const h1 = 0.5 * (hi[o1] - lo[o1]);
+                    double const m1 = 0.5 * (hi[o1] + lo[o1]);
+                    double P = 0.0;
+                    for(int i = 0; i < n; ++i)
+                    {
+                        double const v0 = m0 + h0 * xn[i];
+                        double const d0 = v0 - x_obs[o0];
+                        for(int j = 0; j < n; ++j)
+                        {
+                            double const v1 = m1 + h1 * xn[j];
+                            double const d1 = v1 - x_obs[o1];
+                            P += (h0 * h1) * wn[i] * wn[j] / std::sqrt(d0 * d0 + d1 * d1 + df * df);
+                        }
+                    }
+                    out[axis] += sgn * P;
+                }
+            return out;
+        }
+
         //! Error-controlled box/pyramid quadrature for t inside the support.
         //! The support is split into the 27 TSC sub-boxes.  The box containing
         //! t is split further at t into corner boxes, each covered by three
@@ -496,6 +541,80 @@ namespace picongpu::particles::neuralBunch::reference
             Bout = {acc[3], acc[4], acc[5]};
         }
 
+        //! Smooth-remainder quadrature for the analytic-singularity subtraction:
+        //!     ∫_S (W(s) - w_offset) K(s) d^3 s ,  K(s) = (R0 - s⊙c)/|R0 - s⊙c|^3
+        //! The support box [-1.5,1.5]^3 is split at t (the singularity) into up to
+        //! eight octants, so the integrable 1/r singularity (one power milder than
+        //! the bare 1/r^2 kernel, because W(s)-w_offset vanishes at s=t) sits at an
+        //! octant corner.  Plain Gauss on each octant converges algebraically and
+        //! monotonically, so the n vs 2n order-pair is a genuine (non-saturating)
+        //! error estimate.  Used for the stationary (u = 0) in-support case, where
+        //! w_offset = W(t).
+        inline void remainder_support_integral(
+            Vec3 const& R0,
+            Vec3 const& u,
+            Vec3 const& cells,
+            int n,
+            double w_offset,
+            Vec3& Eout,
+            Vec3& Bout)
+        {
+            double const tb[3] = {R0.x / cells.x, R0.y / cells.y, R0.z / cells.z};
+            // Octant segments per axis: split [-1.5, 1.5] at t (drop zero width).
+            std::array<std::vector<std::array<double, 2>>, 3> seg;
+            for(int a = 0; a < 3; ++a)
+            {
+                if(tb[a] > -1.5)
+                    seg[a].push_back({-1.5, tb[a]});
+                if(tb[a] < 1.5)
+                    seg[a].push_back({tb[a], 1.5});
+            }
+            std::vector<double> xn, wn;
+            gauss_legendre(n, xn, wn);
+            std::array<double, 6> acc{};
+            for(auto const& px : seg[0])
+                for(auto const& py : seg[1])
+                    for(auto const& pz : seg[2])
+                    {
+                        double const hx = 0.5 * (px[1] - px[0]);
+                        double const mx = 0.5 * (px[1] + px[0]);
+                        double const hy = 0.5 * (py[1] - py[0]);
+                        double const my = 0.5 * (py[1] + py[0]);
+                        double const hz = 0.5 * (pz[1] - pz[0]);
+                        double const mz = 0.5 * (pz[1] + pz[0]);
+                        for(int i = 0; i < n; ++i)
+                        {
+                            double const sx = mx + hx * xn[i];
+                            double const wx = hx * wn[i];
+                            for(int j = 0; j < n; ++j)
+                            {
+                                double const sy = my + hy * xn[j];
+                                double const wxy = wx * hy * wn[j];
+                                for(int k = 0; k < n; ++k)
+                                {
+                                    double const sz = mz + hz * xn[k];
+                                    double const W = tsc_shape(sx) * tsc_shape(sy) * tsc_shape(sz);
+                                    double const Ww = W - w_offset;
+                                    if(Ww == 0.0)
+                                        continue;
+                                    Vec3 const R{R0.x - sx * cells.x, R0.y - sy * cells.y, R0.z - sz * cells.z};
+                                    Vec3 E, B;
+                                    point_field(R, u, E, B);
+                                    double const ww = wxy * hz * wn[k] * Ww;
+                                    acc[0] += ww * E.x;
+                                    acc[1] += ww * E.y;
+                                    acc[2] += ww * E.z;
+                                    acc[3] += ww * B.x;
+                                    acc[4] += ww * B.y;
+                                    acc[5] += ww * B.z;
+                                }
+                            }
+                        }
+                    }
+            Eout = {acc[0], acc[1], acc[2]};
+            Bout = {acc[3], acc[4], acc[5]};
+        }
+
         inline std::array<std::vector<Panel>, 3> panels_for(Vec3 const& target, int level)
         {
             return {graded_panels(target.x, level), graded_panels(target.y, level), graded_panels(target.z, level)};
@@ -528,31 +647,82 @@ namespace picongpu::particles::neuralBunch::reference
 
         if(support_dist == 0.0)
         {
-            // Singular point inside the TSC support: split into TSC sub-boxes
-            // and use pyramid coordinates in the box containing t.
-            int nang = settings.sphere_n;
-            int ng = 8;
-            Vec3 E1, B1, E2, B2;
-            detail::box_support_integral(R0, u, cells, nang, settings.sphere_radial_order, ng, E1, B1);
-            for(;;)
+            double const uu2 = dot(u, u);
+            if(uu2 == 0.0)
             {
-                int const nang2 = std::min(nang + 4, settings.sphere_max_n);
-                int const ng2 = std::min(ng + 2, 16);
-                detail::box_support_integral(R0, u, cells, nang2, settings.sphere_radial_order, ng2, E2, B2);
-                std::array<double, 6> a{E1.x, E1.y, E1.z, B1.x, B1.y, B1.z};
-                std::array<double, 6> b{E2.x, E2.y, E2.z, B2.x, B2.y, B2.z};
-                err = detail::richardson_error(a, b);
-                if(err <= settings.tol || (nang2 >= settings.sphere_max_n && ng2 >= 16))
+                // Stationary (Coulomb) source inside the support.  The kernel
+                // (R0 - s)/(R0 - s)^3 is an isotropic 1/r^3 singularity at s = t,
+                // so we split the shape integral analytically:
+                //     E = W(t) * ∫_S K            +   ∫_S (W - W(t)) K
+                //         = S_part  (exact: the field of the uniform support    +  R_part (smooth:
+                //            box at x_obs, via the divergence theorem)            (W - W(t)) kills one
+                //                                                                  power of the 1/r kernel)
+                // S_part is exact to roundoff and R_part is smooth, so the
+                // order-pair estimate on R_part is a genuine (non-saturating)
+                // error estimate instead of the bare 1/r^2 pyramid estimate.
+                Vec3 const t{R0.x / cells.x, R0.y / cells.y, R0.z / cells.z};
+                double const Wt = tsc_shape(t.x) * tsc_shape(t.y) * tsc_shape(t.z);
+                Vec3 const S
+                    = detail::box_field(x_obs, x_src, cells, settings.in_support_box_order)
+                      * (Wt / (cells.x * cells.y * cells.z));
+
+                // R_part via plain Gauss on the octants (split at t), order-doubling
+                // until the order-pair estimate drops below tol.  The 1/r remainder
+                // converges algebraically and monotonically, so the n vs 2n pair is
+                // a genuine (non-saturating) error estimate.
+                int n = 16;
+                int const n_max = 512;
+                Vec3 E1, B1, E2, B2;
+                detail::remainder_support_integral(R0, u, cells, n, Wt, E1, B1);
+                for(;;)
                 {
-                    converged = err <= settings.tol;
-                    E = E2;
-                    B = B2;
-                    break;
+                    int const n2 = std::min(2 * n, n_max);
+                    detail::remainder_support_integral(R0, u, cells, n2, Wt, E2, B2);
+                    std::array<double, 6> a{E1.x, E1.y, E1.z, B1.x, B1.y, B1.z};
+                    std::array<double, 6> b{E2.x, E2.y, E2.z, B2.x, B2.y, B2.z};
+                    err = detail::richardson_error(a, b);
+                    if(err <= settings.tol || n2 >= n_max)
+                    {
+                        converged = err <= settings.tol;
+                        E = S + E2;
+                        B = B2; // B = 0 for a stationary source
+                        break;
+                    }
+                    E1 = E2;
+                    B1 = B2;
+                    n = n2;
                 }
-                E1 = E2;
-                B1 = B2;
-                nang = nang2;
-                ng = ng2;
+            }
+            else
+            {
+                // Singular point inside the TSC support (moving source): split
+                // into TSC sub-boxes and use pyramid coordinates in the box
+                // containing t.  (The isotropic analytic subtraction above is
+                // exact only for u = 0; the relativistic kernel is anisotropic.)
+                int nang = settings.sphere_n;
+                int ng = 8;
+                Vec3 E1, B1, E2, B2;
+                detail::box_support_integral(R0, u, cells, nang, settings.sphere_radial_order, ng, E1, B1);
+                for(;;)
+                {
+                    int const nang2 = std::min(nang + 4, settings.sphere_max_n);
+                    int const ng2 = std::min(ng + 2, 16);
+                    detail::box_support_integral(R0, u, cells, nang2, settings.sphere_radial_order, ng2, E2, B2);
+                    std::array<double, 6> a{E1.x, E1.y, E1.z, B1.x, B1.y, B1.z};
+                    std::array<double, 6> b{E2.x, E2.y, E2.z, B2.x, B2.y, B2.z};
+                    err = detail::richardson_error(a, b);
+                    if(err <= settings.tol || (nang2 >= settings.sphere_max_n && ng2 >= 16))
+                    {
+                        converged = err <= settings.tol;
+                        E = E2;
+                        B = B2;
+                        break;
+                    }
+                    E1 = E2;
+                    B1 = B2;
+                    nang = nang2;
+                    ng = ng2;
+                }
             }
         }
         else
