@@ -34,6 +34,7 @@ from .grid import AnyGrid
 from .laser import AnyLaser
 from .memory import MemoryConfig
 from .movingwindow import MovingWindow
+from .neural_bunch import AnyNeuralBunchInitializer
 from .output import AnyPlugin, OpenPMDPlugin
 from .precision_config import PrecisionConfig
 from .rendering import RenderedObject
@@ -118,6 +119,25 @@ class Simulation(RenderedObject, BaseModel):
     synchrotron_params: SynchrotronParams = SynchrotronParams()
     collisional_physics: CollisionalPhysicsSetup = CollisionalPhysicsSetup()
     particle_filters: list[ParticleFunctor] = Field(default_factory=list)
+
+    neural_bunch: AnyNeuralBunchInitializer | None = None
+    """
+    External electron-bunch initializer rendered into ``neuralBunch.param``.
+
+    ``None`` renders a reference-only placeholder so the generated parameter
+    file stays syntactically valid when the feature is compiled in but not
+    requested by the PICMI simulation.
+    """
+
+    @computed_field
+    def neural_bunch_enabled(self) -> bool:
+        """True when the PICMI simulation configured the bunch initializer."""
+        return self.neural_bunch is not None
+
+    @computed_field
+    def neural_bunch_fallback_species(self) -> str:
+        """Species alias used by the unconfigured placeholder."""
+        return self.species[0].typename if self.species else "void"
 
     min_weighting: Annotated[
         float, BeforeValidator(_default_min_weighting), AfterValidator(_validate_min_weighting)
@@ -208,3 +228,7 @@ class Simulation(RenderedObject, BaseModel):
         for plugin in self.output or []:
             if isinstance(plugin, OpenPMDPlugin):
                 plugin.setup_dir = Path(setup_dir)
+        if self.neural_bunch is not None:
+            # Resolve relative source/artifact paths against the generated setup
+            # directory and verify them before any template is rendered.
+            self.neural_bunch.resolve_paths(setup_dir)

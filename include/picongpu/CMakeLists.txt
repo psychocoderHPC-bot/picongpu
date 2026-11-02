@@ -324,8 +324,7 @@ endif()
 # the project policy above so that unused parameters and the CUDA-only `#pragma
 # unroll` directives do not fail the build when alpaka enables -Werror.
 if(CMAKE_CUDA_COMPILER)
-    set(CMAKE_CUDA_FLAGS
-        "${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-unused-parameter -Xcompiler -Wno-unknown-pragmas")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-unused-parameter -Xcompiler -Wno-unknown-pragmas")
 endif()
 
 # The HIP device pass is compiled by clang with its own warning set. alpaka's
@@ -338,12 +337,12 @@ if(CMAKE_HIP_COMPILER AND NOT CMAKE_CUDA_COMPILER)
     target_compile_options(
         picongpu_warning_policy
         INTERFACE
-        -Wno-unused-parameter
-        -Wno-unknown-pragmas
-        -Wno-unused-local-typedefs
-        # clang-only diagnostics for pre-existing upstream code that GCC does not emit
-        -Wno-deprecated-copy
-        -Wno-delete-non-abstract-non-virtual-dtor
+            -Wno-unused-parameter
+            -Wno-unknown-pragmas
+            -Wno-unused-local-typedefs
+            # clang-only diagnostics for pre-existing upstream code that GCC does not emit
+            -Wno-deprecated-copy
+            -Wno-delete-non-abstract-non-virtual-dtor
     )
 endif()
 
@@ -410,6 +409,68 @@ if(NOT PIC_ENABLE_OPENPMD)
 endif()
 
 pic_dependency_set_status(openPMD ${openPMD_FOUND})
+
+################################################################################
+# neuralBunch
+################################################################################
+
+pic_dependency(neuralBunch "Neural bunch field initializer (requires openPMD and alpakaNN)" AUTO)
+
+if(PIC_SEARCH_neuralBunch)
+    if(NOT PIC_HAVE_openPMD)
+        message(STATUS "neuralBunch requires openPMD - NOT BUILDING the neural bunch initializer")
+        pic_dependency_set_status(neuralBunch FALSE)
+    else()
+        include(FetchContent)
+
+        # alpakaVendor and alpakaNN are pinned to the neural-bunch runtime branches. The
+        # vendored alpaka::alpaka target already exists from find_package(PMacc), so the
+        # vendor is configured with the extern provider and no second alpaka is added.
+        set(alpakaV_ALPAKA_PROVIDER "extern" CACHE STRING "alpaka source provider used by alpakaVendor" FORCE)
+        set(alpakaV_TESTS OFF CACHE BOOL "Disable alpakaVendor tests." FORCE)
+        set(alpakaV_DOCS OFF CACHE BOOL "Disable alpakaVendor docs." FORCE)
+        # The vendor is configured before alpakaNN, so its mandatory BLAS backend must be
+        # derived here from the alpaka backends selected by PMacc (same logic as
+        # alpakaNN/cmake/alpakaNNVendorBackends.cmake).
+        set(alpakaV_DEP_OPENBLAS ON CACHE BOOL "OpenBLAS host backend (required by alpakaNN)." FORCE)
+        if(alpaka_DEP_CUDA)
+            set(alpakaV_DEP_CUBLAS ON CACHE BOOL "cuBLAS CUDA backend (required by alpakaNN)." FORCE)
+            set(alpakaV_DEP_CUFFT ON CACHE BOOL "cuFFT CUDA backend." FORCE)
+        endif()
+        if(alpaka_DEP_HIP)
+            set(alpakaV_DEP_ROCBLAS ON CACHE BOOL "rocBLAS HIP backend (required by alpakaNN)." FORCE)
+            set(alpakaV_DEP_ROCFFT ON CACHE BOOL "rocFFT HIP backend." FORCE)
+        endif()
+        FetchContent_Declare(
+            alpakaVendor
+            GIT_REPOSITORY https://github.com/psychocoderHPC-bot/alpakaVendor.git
+            GIT_TAG af24cc7b2bd125056e9889e270d3af7bdf972c6f
+        )
+        FetchContent_MakeAvailable(alpakaVendor)
+
+        set(alpakaNN_BUILD_TESTS OFF CACHE BOOL "Disable alpakaNN tests." FORCE)
+        FetchContent_Declare(
+            alpakaNN
+            GIT_REPOSITORY https://github.com/psychocoderHPC-bot/alpakaNN.git
+            GIT_TAG d2581e44033d16f741a13d9097f36541a4f2c056
+        )
+        FetchContent_MakeAvailable(alpakaNN)
+
+        if(TARGET alpaka::nn AND TARGET alpakaVendor::alpakaVendor)
+            message(STATUS "Found alpakaNN: neural bunch initializer enabled")
+            set(PIC_ENABLE_NEURAL_BUNCH 1)
+            add_definitions(-DPIC_ENABLE_NEURAL_BUNCH=1)
+            pic_dependency_set_status(neuralBunch TRUE)
+        else()
+            message(STATUS "alpakaNN/alpakaVendor targets are missing - NOT BUILDING the neural bunch initializer")
+            pic_dependency_set_status(neuralBunch FALSE)
+        endif()
+    endif()
+endif()
+
+if(NOT PIC_ENABLE_NEURAL_BUNCH)
+    add_definitions(-DPIC_ENABLE_NEURAL_BUNCH=0)
+endif()
 
 ################################################################################
 # JSON
@@ -604,14 +665,9 @@ target_link_libraries(picongpu-hostonly PUBLIC ${HOST_LIBS})
 # needs the alpaka include path. Add the directories directly instead of linking
 # the alpaka targets, which would require alpaka_finalize() and enable language
 # separation for this host-only target.
-target_include_directories(
-    picongpu-hostonly
-    PRIVATE $<TARGET_PROPERTY:alpaka::alpaka,INTERFACE_INCLUDE_DIRECTORIES>
-)
+target_include_directories(picongpu-hostonly PRIVATE $<TARGET_PROPERTY:alpaka::alpaka,INTERFACE_INCLUDE_DIRECTORIES>)
 
-add_executable(picongpu
-     ${ACCSRCFILES}
-)
+add_executable(picongpu ${ACCSRCFILES})
 target_include_directories(picongpu PRIVATE ${PIC_SOURCE_DIRS})
 
 target_link_libraries(picongpu PUBLIC ${LIBS} ${HOST_LIBS} picongpu-hostonly)
@@ -623,6 +679,21 @@ if(PIC_HAVE_FFTW3)
     target_link_libraries(picongpu PRIVATE PkgConfig::FFTW3)
     target_compile_definitions(picongpu PUBLIC "-DPIC_ENABLE_FFTW3=1")
 endif(PIC_HAVE_FFTW3)
+
+if(PIC_HAVE_neuralBunch)
+    target_link_libraries(picongpu PUBLIC alpaka::nn alpakaVendor::alpakaVendor)
+    target_compile_definitions(picongpu PUBLIC "-DPIC_ENABLE_NEURAL_BUNCH=1")
+    # The reference fallback is parallelised over the independent tile outputs.
+    # The host-only translation unit needs OpenMP explicitly; nvcc host code gets
+    # -fopenmp from alpaka but picongpu-hostonly does not.
+    find_package(OpenMP REQUIRED COMPONENTS CXX)
+    target_link_libraries(picongpu-hostonly PUBLIC OpenMP::OpenMP_CXX)
+endif(PIC_HAVE_neuralBunch)
+
+if(PIC_HAVE_neuralBunch)
+    enable_testing()
+    add_subdirectory("${PIConGPUapp_SOURCE_DIR}/../../test/neuralBunch" "${CMAKE_BINARY_DIR}/test_neuralBunch")
+endif(PIC_HAVE_neuralBunch)
 
 # Including <nlohmann/json.hpp> will throw loads of warnings. Quiet them.
 # (Doesn't work for nvcc??)
