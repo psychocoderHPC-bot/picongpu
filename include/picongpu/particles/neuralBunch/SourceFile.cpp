@@ -25,7 +25,6 @@ namespace picongpu::particles::neuralBunch
     {
         constexpr double electronMassSI = 9.1093837015e-31; // kg
         constexpr double speedOfLightSI = 299792458.0; // m/s
-        constexpr double positionFractionTolerance = 1.0e-5;
 
         template<typename T>
         struct IsComplex : std::false_type
@@ -287,7 +286,6 @@ namespace picongpu::particles::neuralBunch
             double massUnitSI;
             double charge;
             double mass;
-            double cellSizeSI[3];
             int momentumMacroWeighted;
             int momentumWeightingPower;
             int weightingMacroWeighted;
@@ -296,8 +294,6 @@ namespace picongpu::particles::neuralBunch
             int hasIds;
             int hasCharge;
             int hasMass;
-            int hasCellSize;
-            int positionAbsolute;
         };
 
         void encode(SourceMetadata const& m, MetaWire& w)
@@ -313,7 +309,6 @@ namespace picongpu::particles::neuralBunch
                 w.positionUnitSI[i] = m.positionUnitSI[i];
                 w.positionOffsetUnitSI[i] = m.positionOffsetUnitSI[i];
                 w.momentumUnitSI[i] = m.momentumUnitSI[i];
-                w.cellSizeSI[i] = m.cellSizeSI[i];
             }
             w.weightingUnitSI = m.weightingUnitSI;
             w.chargeUnitSI = m.chargeUnitSI;
@@ -328,8 +323,6 @@ namespace picongpu::particles::neuralBunch
             w.hasIds = m.hasIds;
             w.hasCharge = m.hasCharge;
             w.hasMass = m.hasMass;
-            w.hasCellSize = m.hasCellSize;
-            w.positionAbsolute = m.positionAbsolute;
         }
 
         void decode(MetaWire const& w, SourceMetadata& m)
@@ -344,7 +337,6 @@ namespace picongpu::particles::neuralBunch
                 m.positionUnitSI[i] = w.positionUnitSI[i];
                 m.positionOffsetUnitSI[i] = w.positionOffsetUnitSI[i];
                 m.momentumUnitSI[i] = w.momentumUnitSI[i];
-                m.cellSizeSI[i] = w.cellSizeSI[i];
             }
             m.weightingUnitSI = w.weightingUnitSI;
             m.chargeUnitSI = w.chargeUnitSI;
@@ -359,9 +351,6 @@ namespace picongpu::particles::neuralBunch
             m.hasIds = w.hasIds != 0;
             m.hasCharge = w.hasCharge != 0;
             m.hasMass = w.hasMass != 0;
-            m.hasCellSize = w.hasCellSize != 0;
-            m.positionAbsolute = w.positionAbsolute != 0;
-            m.positionConvention = m.positionAbsolute ? "absolute" : "additive";
         }
     } // namespace
 
@@ -463,23 +452,31 @@ namespace picongpu::particles::neuralBunch
                     path + ": position/" + name);
             }
 
-            // --- positionOffset (required by this reader, see README) ---
-            openPMD::Record offsetRecord = requireRecord("positionOffset");
-            if(offsetRecord.empty())
-                fail(path + ": record 'positionOffset' has no x/y/z components");
-            for(int axis = 0; axis < 3; ++axis)
+            // --- positionOffset (optional; absent means a zero offset) ---
+            if(particles.contains("positionOffset"))
             {
-                std::string const name = std::string(1, "xyz"[axis]);
-                if(!offsetRecord.contains(name))
-                    fail(path + ": record 'positionOffset' is missing component '" + name + "'");
-                impl_->positionOffset[axis] = offsetRecord[name];
-                meta.positionOffsetUnitSI[axis] = checkedUnitSI(
-                    *impl_->positionOffset[axis],
-                    offsetRecord,
-                    lengthDimensions,
-                    path + ": positionOffset/" + name);
+                openPMD::Record offsetRecord = particles["positionOffset"];
+                if(offsetRecord.empty())
+                    fail(path + ": record 'positionOffset' has no x/y/z components");
+                for(int axis = 0; axis < 3; ++axis)
+                {
+                    std::string const name = std::string(1, "xyz"[axis]);
+                    if(!offsetRecord.contains(name))
+                        fail(path + ": record 'positionOffset' is missing component '" + name + "'");
+                    impl_->positionOffset[axis] = offsetRecord[name];
+                    meta.positionOffsetUnitSI[axis] = checkedUnitSI(
+                        *impl_->positionOffset[axis],
+                        offsetRecord,
+                        lengthDimensions,
+                        path + ": positionOffset/" + name);
+                }
+                meta.hasPositionOffset = true;
             }
-            meta.hasPositionOffset = true;
+            else
+            {
+                for(int axis = 0; axis < 3; ++axis)
+                    meta.positionOffsetUnitSI[axis] = 1.0;
+            }
 
             // --- momentum (required, vector) ---
             openPMD::Record momentumRecord = requireRecord("momentum");
@@ -565,16 +562,15 @@ namespace picongpu::particles::neuralBunch
             for(int axis = 0; axis < 3; ++axis)
             {
                 auto const positionExtent = impl_->position[axis]->getExtent();
-                auto const offsetExtent = impl_->positionOffset[axis]->getExtent();
                 auto const momentumExtent = impl_->momentum[axis]->getExtent();
-                if(positionExtent.size() != 1 || positionExtent[0] != meta.globalCount)
-                    fail(
-                        path + ": position component " + std::string(1, "xyz"[axis])
-                        + " extent does not match position/x");
-                if(offsetExtent.size() != 1 || offsetExtent[0] != meta.globalCount)
-                    fail(
-                        path + ": positionOffset component " + std::string(1, "xyz"[axis])
-                        + " extent does not match position/x");
+                if(impl_->positionOffset[axis])
+                {
+                    auto const offsetExtent = impl_->positionOffset[axis]->getExtent();
+                    if(offsetExtent.size() != 1 || offsetExtent[0] != meta.globalCount)
+                        fail(
+                            path + ": positionOffset component " + std::string(1, "xyz"[axis])
+                            + " extent does not match position/x");
+                }
                 if(momentumExtent.size() != 1 || momentumExtent[0] != meta.globalCount)
                     fail(
                         path + ": momentum component " + std::string(1, "xyz"[axis])
@@ -590,36 +586,10 @@ namespace picongpu::particles::neuralBunch
                     fail(path + ": id extent does not match position/x");
             }
 
-            // --- decide the position convention from metadata only ---
-            bool sameUnits = true;
-            for(int axis = 0; axis < 3; ++axis)
-            {
-                double const p = meta.positionUnitSI[axis];
-                double const o = meta.positionOffsetUnitSI[axis];
-                if(std::fabs(p - o) > 1.0e-12 * std::max(1.0, std::max(std::fabs(p), std::fabs(o))))
-                    sameUnits = false;
-            }
-            meta.positionAbsolute = !sameUnits;
-            meta.positionConvention = meta.positionAbsolute ? "absolute" : "additive";
-            if(!meta.positionAbsolute)
-            {
-                // OpenPMD/PIConGPU: position unitSI is the cell size. In this
-                // representation position must stay inside one cell.
-                for(int axis = 0; axis < 3; ++axis)
-                    meta.cellSizeSI[axis] = meta.positionUnitSI[axis];
-            }
-            else
-            {
-                // Absolute-coordinate variant: positionOffset unitSI is the
-                // cell size, position is already the physical coordinate.
-                for(int axis = 0; axis < 3; ++axis)
-                {
-                    meta.cellSizeSI[axis] = meta.positionOffsetUnitSI[axis];
-                    if(!std::isfinite(meta.cellSizeSI[axis]) || meta.cellSizeSI[axis] <= 0.0)
-                        fail(path + ": positionOffset unitSI is not a positive cell size");
-                }
-            }
-            meta.hasCellSize = true;
+            // No position convention is inferred from the unit scales: the
+            // openPMD rule x = position * positionUnitSI
+            //                   + positionOffset * positionOffsetUnitSI
+            // is applied per particle in readChunk().
 
             if(meta.globalCount > std::numeric_limits<std::size_t>::max() / 128u)
                 fail(path + ": particle count does not fit the host address space");
@@ -702,8 +672,13 @@ namespace picongpu::particles::neuralBunch
         }
         for(int axis = 0; axis < 3; ++axis)
         {
-            std::string const suffix = std::string("positionOffset/") + "xyz"[axis];
-            requests.push_back({*d.positionOffset[axis], &rawOffset[axis], d.path + ": " + suffix});
+            if(d.positionOffset[axis])
+            {
+                std::string const suffix = std::string("positionOffset/") + "xyz"[axis];
+                requests.push_back({*d.positionOffset[axis], &rawOffset[axis], d.path + ": " + suffix});
+            }
+            else
+                rawOffset[axis].assign(static_cast<std::size_t>(n), 0.0);
         }
         for(int axis = 0; axis < 3; ++axis)
         {
@@ -800,29 +775,8 @@ namespace picongpu::particles::neuralBunch
             {
                 double const positionRaw = rawPosition[axis][static_cast<std::size_t>(i)];
                 double const offsetRaw = rawOffset[axis][static_cast<std::size_t>(i)];
-                double physical = 0.0;
-                if(meta.positionAbsolute)
-                {
-                    physical = positionRaw * meta.positionUnitSI[axis];
-                    double const cellSize = meta.cellSizeSI[axis];
-                    double const ratio = physical / cellSize;
-                    double const fraction = ratio - offsetRaw;
-                    if(fraction < -1.0e-6 || fraction >= 1.0 + 1.0e-6)
-                        fail(
-                            d.path + ": positionOffset/x at global index " + std::to_string(begin + i)
-                            + " is inconsistent with floor(position/cellSize) for the absolute-position "
-                              "convention");
-                }
-                else
-                {
-                    if(positionRaw < -positionFractionTolerance || positionRaw > 1.0 + positionFractionTolerance)
-                        fail(
-                            d.path + ": position/" + std::string(1, "xyz"[axis]) + " at global index "
-                            + std::to_string(begin + i) + " is " + num(positionRaw)
-                            + " but unitSI equals the positionOffset cell size; the additive openPMD "
-                              "convention requires position inside [0,1). Rejecting non-standard file.");
-                    physical = (positionRaw + offsetRaw) * meta.positionUnitSI[axis];
-                }
+                double const physical = positionRaw * meta.positionUnitSI[axis]
+                                        + offsetRaw * meta.positionOffsetUnitSI[axis];
                 double const u = rawMomentum[axis][static_cast<std::size_t>(i)] * meta.momentumUnitSI[axis]
                                  / (restMass * speedOfLightSI * factor);
                 out.position[3 * static_cast<std::size_t>(i) + axis] = physical;

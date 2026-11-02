@@ -64,20 +64,16 @@ namespace picongpu::particles::neuralBunch
         bool hasIds = false;
         bool hasCharge = false;
         bool hasMass = false;
-        bool hasCellSize = false;
-        double cellSizeSI[3] = {0.0, 0.0, 0.0};
 
-        /** Position convention detected from metadata, never from the path.
+        /** Physical position follows the openPMD rule component-wise:
          *
-         * - additive: position and positionOffset share a per-axis unitSI, so
-         *   physical = (position + positionOffset) * unitSI (openPMD /
-         *   PIConGPU convention, MODEL-FORMAT).
-         * - absolute: the per-axis unitSI values differ, so position already
-         *   carries the physical coordinate: physical = position * unitSI.
-         *   positionOffset is range-checked for consistency.
+         *     x = position * positionUnitSI + positionOffset * positionOffsetUnitSI
+         *
+         * Both terms are always applied, even when the two unitSI values are
+         * equal. A missing positionOffset record contributes a zero offset.
+         * The reader does not infer a "convention" from the unit scales and
+         * does not restrict the raw position range.
          */
-        bool positionAbsolute = false;
-        std::string positionConvention = "additive";
     };
 
     /** Host struct-of-arrays for one bounded chunk. */

@@ -102,3 +102,15 @@ if(alpaka_DEP_CUDA)
     )
     add_test(NAME neuralBunchDevicePipelineTest COMMAND neuralBunchDevicePipelineTest cuda)
 endif(alpaka_DEP_CUDA)
+
+# openPMD position-decode test: independent, equal and absent offset units.
+add_executable(
+    neuralBunchSourceFileTest
+    sourceFileTest.cpp
+    "${PIConGPUapp_SOURCE_DIR}/particles/neuralBunch/SourceFile.cpp"
+)
+target_compile_features(neuralBunchSourceFileTest PRIVATE cxx_std_20)
+target_include_directories(neuralBunchSourceFileTest PRIVATE "${PIConGPUapp_SOURCE_DIR}/..")
+target_compile_definitions(neuralBunchSourceFileTest PRIVATE PIC_ENABLE_NEURAL_BUNCH=1)
+target_link_libraries(neuralBunchSourceFileTest PRIVATE MPI::MPI_CXX openPMD::openPMD)
+add_test(NAME neuralBunchSourceFileTest COMMAND neuralBunchSourceFileTest)
