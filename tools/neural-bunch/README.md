@@ -4,6 +4,53 @@ Python tooling and measured notes for the `PIC_USE_neuralBunch` PIConGPU
 feature. The runtime contract and the field formulas are shared with
 [`model-format.md`](model-format.md).
 
+## Runtime status (measured)
+
+The feature is experimental and `enabled = false` by default; a standard setup
+is unchanged (KHI and LWFA were run with the feature compiled in and disabled).
+When enabled, the default policy is `banded`: the exact FP64 reference in the
+near band (`d < 4` cells, host or device quadrature) and the analytic point
+field in the mid (`4 .. 48`) and far (`>= 48`) bands. `neural`,
+`validatedNeural` and `referenceOnly` remain selectable. The learned
+`mid_correction` came out worse than the point field alone and is opt-in; the
+Taylor far head is opt-in too and off by default.
+
+With the default `tileWideField = true` the whole point-field loop runs in one
+tile-centric device kernel (one block per tile, 256 threads per 1536-output
+group, deterministic ascending source order). The kernel skips near pairs
+instead of integrating them exactly; it is disabled automatically for
+`useExactDevice`, `useModelForNear`, `useModelForMid`, `useMidCorrection`, the
+validation-only all-reference switch, and any non-`banded` policy. In the
+default configuration all field math is on the device; the host only does MPI,
+openPMD decoding, model load and hash verification, and particle frame
+bookkeeping.
+
+Measured cost: 5.2 ns per point-field pair; 5.71e8 pairs/s for the tile kernel
+probe on 4 V100; 1M particles on a 32x32x16 grid initialize in 17.6 s; 1M
+particles on 256x1024x256 reached >10.7 min before the allocation ended,
+<=3.7e8 pairs/s aggregate, 12-15 min projected. A persistent cuBLAS handle cut
+a batched decoder call from 310 us to 5 us, and the host per-pair classification
+is gone from the default path.
+
+Measured accuracy, preregistered `S0` metric (`S0 = 16 * max_cell ||G||`, per-case
+rel RMS `||pred - ref|| / max(||ref||, S0)`, worst of E/B) plus per-point slices:
+the point field gives gamma 2 mean 5.7e-4, gamma 10 mean 4.1e-3 / median 1.1e-3,
+and gamma 100 mean 16 % (median 7.5e-2). The gamma dependence is physical: at
+gamma 100 the point field is a pancake of thickness about `r/gamma`, comparable
+to the 3-cell TSC support, so the shape integral differs from the point field.
+The device quadrature matches the host reference to 4.9e-7 max relative error;
+the host reference costs 5.7 us per smooth pair and 7.5 ms per in-support pair.
+The learned model is about 15 % and is not the default. The trilinear force
+stencil around a particle is never 4 cells clear of every source, so the point
+field does not cover force at the particles; that needs the exact shape
+quadrature. No learned artifact reaches the 1e-3 gate: architecture-compatible
+encoders floor at 0.11-0.17 while the oracle basis reconstructs at 1.6e-7, which
+locates the limit in the encoder rather than the feature basis.
+
+Plots, cost tables and per-slice metrics are development artifacts under
+`/tmp/alpaka-orchestration/neural-bunch/` (`plots-y/`, `plots-exp/`,
+`mid-exp/`, `research/BANDS.md`, `validation/`) and are not committed.
+
 ## Pipeline stages
 
 1. **Reference** (`reference/`) - independent FP64 implementation of the
@@ -11,7 +58,10 @@ feature. The runtime contract and the field formulas are shared with
    PIConGPU TSC shape on an 8x8x4 Yee tile. The Python module
    (`convkernel.py`) is the numerical oracle; `reference/cpp/` is the
    header-only C++20 port used by the runtime fallback. Golden tiles and the
-   aspect/near vector sets pin the C++ port to the Python reference.
+   aspect/near vector sets pin the C++ port to the Python reference. The runtime
+   analytic point field (`pointFieldDx`), the banded policy and the FP64 device
+   quadrature are maintained in `include/picongpu/particles/neuralBunch/`; the
+   quadrature was ported from the NALA prototype (`nala/ExactShapeField.hpp`).
 2. **Generator** (`generator/`) - seeded synthetic electron bunches written as
    openPMD 2.0 series (HDF5 or ADIOS2/BP5), for external-particle tests and
    independent I/O checks. `inspect_bunch.py` reads them back with the same
