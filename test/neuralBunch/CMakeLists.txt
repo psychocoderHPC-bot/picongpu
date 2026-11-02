@@ -101,4 +101,22 @@ if(alpaka_DEP_CUDA)
             ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
     )
     add_test(NAME neuralBunchDevicePipelineTest COMMAND neuralBunchDevicePipelineTest cuda)
+
+    # Standalone far-field experiment (new files only, not wired into the stage).
+    add_executable(neuralBunchFarFieldTest farFieldTest.cu)
+    target_compile_features(neuralBunchFarFieldTest PRIVATE cxx_std_20)
+    target_include_directories(neuralBunchFarFieldTest PRIVATE "${PIConGPUapp_SOURCE_DIR}/..")
+    target_link_libraries(
+        neuralBunchFarFieldTest
+        PRIVATE alpaka::nn alpakaVendor::alpakaVendor nlohmann_json::nlohmann_json OpenMP::OpenMP_CXX
+    )
+    alpaka_finalize(neuralBunchFarFieldTest)
+    target_compile_definitions(
+        neuralBunchFarFieldTest
+        PRIVATE
+            ALPAKA_CMAKE_TARGET_HEADERS_FINALIZE_CALLED
+            ALPAKA_CMAKE_TARGET_CUDA_FINALIZE_CALLED
+            ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
+    )
+    add_test(NAME neuralBunchFarFieldTest COMMAND neuralBunchFarFieldTest)
 endif(alpaka_DEP_CUDA)
