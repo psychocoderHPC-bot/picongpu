@@ -104,9 +104,22 @@ namespace
         series.flush();
     }
 
+    /** File extension of an available openPMD backend that can store particle data.
+     *
+     * The test must not assume HDF5: openPMD may be built with ADIOS2 only.
+     */
+    std::string seriesExtension()
+    {
+        auto const available = openPMD::getFileExtensions();
+        for(std::string const& preferred : {"h5", "bp5", "bp4"})
+            if(std::find(available.begin(), available.end(), preferred) != available.end())
+                return preferred;
+        return available.empty() ? std::string{"h5"} : available.front();
+    }
+
     void runFixture(fs::path const& root, Fixture const& f)
     {
-        fs::path const path = root / (f.name + ".h5");
+        fs::path const path = root / (f.name + "." + seriesExtension());
         try
         {
             writeFixture(path, f);

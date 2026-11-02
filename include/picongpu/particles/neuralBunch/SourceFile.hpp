@@ -139,8 +139,8 @@ namespace picongpu::particles::neuralBunch
 
         /** Rank-0 only: read [begin, begin + count). Clamped to the dataset.
          *
-         * Throws SourceError if called on a non-zero rank, on non-finite
-         * decoded data, or on a position convention violation.
+         * Throws SourceError if called on a non-zero rank or on non-finite
+         * decoded data.
          */
         void readChunk(std::uint64_t begin, std::uint64_t count, ParticleChunk& out);
 
