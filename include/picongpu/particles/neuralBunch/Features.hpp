@@ -32,16 +32,8 @@ namespace picongpu::particles::neuralBunch
     inline constexpr int kOctaveHigh = 6;
     inline constexpr double kPi = 3.141592653589793238462643383279502884;
 
-    inline constexpr std::array<char const*, 9> kFeatureInputNames{
-        "r_x",
-        "r_y",
-        "r_z",
-        "u_x",
-        "u_y",
-        "u_z",
-        "gamma",
-        "a_y",
-        "a_z"};
+    inline constexpr std::array<char const*, 9>
+        kFeatureInputNames{"r_x", "r_y", "r_z", "u_x", "u_y", "u_z", "gamma", "a_y", "a_z"};
 
     /** 2^j for j = -3 .. 6, indexed by j + 3. */
     inline constexpr std::array<double, 10> kOctaveScale{0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0};
@@ -250,6 +242,16 @@ namespace picongpu::particles::neuralBunch
     ALPAKA_FN_HOST_ACC inline PointFieldDx pointFieldDx(Vec3d const& R, Vec3d const& u)
     {
         double const uu2 = u.x * u.x + u.y * u.y + u.z * u.z;
+        if(uu2 == 0.0)
+        {
+            // Fast path for stationary sources (the common probe/initial-state case).
+            double const r2 = R.x * R.x + R.y * R.y + R.z * R.z;
+            double const r23 = r2 * alpaka::math::sqrt(r2);
+            double const inv = 1.0 / r23;
+            PointFieldDx staticResult;
+            staticResult.E = {R.x * inv, R.y * inv, R.z * inv};
+            return staticResult;
+        }
         double const invG2 = 1.0 / (1.0 + uu2);
         double const speed = alpaka::math::sqrt(uu2);
         bool const isStatic = speed == 0.0;
@@ -261,7 +263,8 @@ namespace picongpu::particles::neuralBunch
         double const rPar = R.x * bhat.x + R.y * bhat.y + R.z * bhat.z;
         Vec3d const rPerp{R.x - rPar * bhat.x, R.y - rPar * bhat.y, R.z - rPar * bhat.z};
         double const perp2 = rPerp.x * rPerp.x + rPerp.y * rPerp.y + rPerp.z * rPerp.z;
-        double const denom = alpaka::math::pow(rPar * rPar + perp2 * invG2, 1.5);
+        double const denomBase = rPar * rPar + perp2 * invG2;
+        double const denom = denomBase * alpaka::math::sqrt(denomBase);
 
         Vec3d const eMov{invG2 * R.x / denom, invG2 * R.y / denom, invG2 * R.z / denom};
         Vec3d const bMov{
@@ -270,7 +273,7 @@ namespace picongpu::particles::neuralBunch
             beta.x * eMov.y - beta.y * eMov.x};
 
         double const r2 = R.x * R.x + R.y * R.y + R.z * R.z;
-        double const r23 = alpaka::math::pow(r2, 1.5);
+        double const r23 = r2 * alpaka::math::sqrt(r2);
         Vec3d const eStatic{R.x / r23, R.y / r23, R.z / r23};
 
         PointFieldDx result;
@@ -280,11 +283,7 @@ namespace picongpu::particles::neuralBunch
     }
 
     /** Append axis-major Fourier terms (sin then cos per octave) for the given octave range. */
-    ALPAKA_FN_HOST_ACC inline void appendFourierTerms(
-        float* out,
-        double const r[3],
-        int octaveLow,
-        int octaveHigh)
+    ALPAKA_FN_HOST_ACC inline void appendFourierTerms(float* out, double const r[3], int octaveLow, int octaveHigh)
     {
         constexpr double scales[10]{0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0};
         std::size_t k = 0u;
@@ -330,8 +329,7 @@ namespace picongpu::particles::neuralBunch
             out[8] = static_cast<float>(aZ);
 
             std::size_t write = 9u;
-            std::size_t const probes
-                = Kind == FeatureKind::fourierProbeV1 ? kProbeCount : kDenseCount;
+            std::size_t const probes = Kind == FeatureKind::fourierProbeV1 ? kProbeCount : kDenseCount;
             for(std::size_t p = 0u; p < probes; ++p)
             {
                 // Computed inline: namespace-scope constexpr arrays are not usable in device code.

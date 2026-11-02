@@ -313,3 +313,20 @@ sources. Particle insertion stays on the host: openPMD decoding, MPI, the
 host-side frame allocation, `IdProvider::getNewIdHost`, and
 `splitIntoListOfFrames` all run there, and the initializer only uploads the
 decoded source arrays.
+
+## Tile-wide analytic point field
+
+`fieldInitializer = banded` with `tileWideField = true` (the default) and no
+near/mid model or exact quadrature runs one device kernel per source chunk.
+The chunk is uploaded once (`pos/dx`, `u`, `q/e`); each block owns one tile
+and 256 output slots, so a tile uses six blocks (1536 threads). Every thread
+walks the chunk sources in ascending order and accumulates the validated
+`pointFieldDx` contribution, which keeps the source order fixed. The
+MODEL-FORMAT minimum staggered distance is evaluated on the device. Set
+`tileWideBandStats = false` on production runs to skip that distance pass.
+`chunkSize` bounds the uploaded source scratch; 65536 is a safe value when the
+particle heap has already claimed most of the device memory.
+
+The legacy per-tile path remains the accuracy path when `useExactDevice`,
+`useModelForNear`, `useModelForMid` or `useMidCorrection` is enabled; it keeps
+the per-pair host classification and is intended for small validation runs.

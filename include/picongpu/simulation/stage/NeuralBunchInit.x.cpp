@@ -21,6 +21,7 @@
 #    include "picongpu/particles/neuralBunch/ReferenceTile.hpp"
 #    include "picongpu/particles/neuralBunch/SourceFile.hpp"
 #    include "picongpu/particles/neuralBunch/TileGeometry.hpp"
+#    include "picongpu/particles/neuralBunch/TileWideField.hpp"
 #    include "picongpu/particles/param.hpp"
 #    include "picongpu/plugins/output/WriteSpeciesCommon.hpp"
 
@@ -604,9 +605,7 @@ namespace picongpu
                             alpaka::onHost::data(deviceLatents) + tile * latentDim,
                             alpaka::Vec{std::size_t{1}, latentDim});
                     };
-                    std::vector<std::vector<double>> referenceTiles(
-                        tileCount,
-                        std::vector<double>(tg::outputDimension, 0.0));
+                    std::vector<std::vector<double>> referenceTiles;
                     std::array<std::uint64_t, 3> bandedPairs{};
                     std::array<double, 3> bandedBandSeconds{};
                     std::uint64_t bandedMissingModelPairs = 0;
@@ -716,6 +715,27 @@ namespace picongpu
 
                     std::vector<std::vector<nbRef::Source>> referenceWork(grid.tiles.size());
 
+                    // Tile-centric analytic path: the whole (source, tile) loop runs on the device when no
+                    // near/mid model or exact quadrature is requested. The legacy per-tile path stays the
+                    // accuracy path for the exact/model bands.
+                    bool const useTileWide = isBanded && params.tileWideField && !params.useExactDevice
+                                             && !params.useModelForNear && !params.useModelForMid.value_or(false)
+                                             && !params.useMidCorrection && !forceReference;
+                    if(!useTileWide)
+                        referenceTiles.assign(tileCount, std::vector<double>(tg::outputDimension, 0.0));
+                    auto deviceBandCounts = alpaka::onHost::alloc<std::uint32_t>(
+                        queue.getDevice(),
+                        alpaka::Vec{tileCount, std::size_t{3}});
+                    if(useTileWide)
+                        alpaka::nn::onHost::ops::fill(queue, exec, deviceBandCounts, 0u);
+                    double tileWideSeconds = 0.0;
+                    if(useTileWide)
+                        log<picLog::PHYSICS>(
+                            "neuralBunch: rank=%1% policy=banded tileWideField=true: analytic near/mid/far "
+                            "point field, one block per tile, device distance classification (no per-pair "
+                            "host work).")
+                            % rank;
+
                     {
                         SourceReader reader(params.filename, params.iteration, params.species, comm);
                         SourceMetadata const& sourceMeta = reader.metadata();
@@ -734,6 +754,65 @@ namespace picongpu
                             [&](ParticleChunk const& chunk)
                             {
                                 stats.decodedBytes += chunk.size() * decodedBytesPerParticle;
+                                if(useTileWide)
+                                {
+                                    auto const wideStart = std::chrono::steady_clock::now();
+                                    std::size_t valid = 0u;
+                                    for(std::size_t i = 0; i < chunk.size(); ++i)
+                                        valid += chunk.valid[i] ? 1u : 0u;
+                                    auto hostPositions
+                                        = alpaka::onHost::allocHost<double>(alpaka::Vec{valid, std::size_t{3}});
+                                    auto hostVelocities
+                                        = alpaka::onHost::allocHost<double>(alpaka::Vec{valid, std::size_t{3}});
+                                    auto hostCharges = alpaka::onHost::allocHost<double>(alpaka::Vec{valid});
+                                    std::size_t target = 0u;
+                                    for(std::size_t i = 0; i < chunk.size(); ++i)
+                                    {
+                                        if(!chunk.valid[i])
+                                            continue;
+                                        for(std::size_t axis = 0; axis < 3u; ++axis)
+                                        {
+                                            hostPositions[alpaka::Vec<std::size_t, 2>{target, axis}]
+                                                = chunk.position[3 * i + axis] / cells.dx;
+                                            hostVelocities[alpaka::Vec<std::size_t, 2>{target, axis}]
+                                                = chunk.u[3 * i + axis];
+                                        }
+                                        hostCharges[alpaka::Vec<std::size_t, 1>{target}] = -chunk.weight[i];
+                                        if(chunk.weight[i] == 0.0)
+                                            stats.zeroWeightPairs += tileCount;
+                                        ++target;
+                                    }
+                                    auto devicePositions = alpaka::onHost::allocLike(queue.getDevice(), hostPositions);
+                                    auto deviceVelocities
+                                        = alpaka::onHost::allocLike(queue.getDevice(), hostVelocities);
+                                    auto deviceCharges = alpaka::onHost::allocLike(queue.getDevice(), hostCharges);
+                                    alpaka::onHost::memcpy(queue, devicePositions, hostPositions);
+                                    alpaka::onHost::memcpy(queue, deviceVelocities, hostVelocities);
+                                    alpaka::onHost::memcpy(queue, deviceCharges, hostCharges);
+                                    hostPositions.keepAlive(queue);
+                                    hostVelocities.keepAlive(queue);
+                                    hostCharges.keepAlive(queue);
+                                    enqueueTileWidePointField(
+                                        queue,
+                                        exec,
+                                        devicePositions,
+                                        deviceVelocities,
+                                        deviceCharges,
+                                        valid,
+                                        Vec3d{1.0, aspectY, aspectZ},
+                                        offset,
+                                        grid.count,
+                                        0.0,
+                                        params.bandedNearMaxCells,
+                                        params.bandedFarMinCells,
+                                        params.tileWideBandStats,
+                                        deviceTileValues,
+                                        deviceBandCounts);
+                                    tileWideSeconds
+                                        += std::chrono::duration<double>(std::chrono::steady_clock::now() - wideStart)
+                                               .count();
+                                    return;
+                                }
                                 for(std::size_t tileIndex = 0; tileIndex < grid.tiles.size(); ++tileIndex)
                                 {
                                     std::array<double, 3> tileOriginPhysical{};
@@ -1084,6 +1163,27 @@ namespace picongpu
                         stats.ioSeconds
                             += std::chrono::duration<double>(std::chrono::steady_clock::now() - ioStart).count();
                         stats.globalParticles = sourceMeta.globalCount;
+                        if(useTileWide && tileCount != 0u)
+                        {
+                            if(params.tileWideBandStats)
+                            {
+                                auto hostBandCounts
+                                    = alpaka::onHost::allocHost<std::uint32_t>(alpaka::Vec{tileCount, std::size_t{3}});
+                                alpaka::onHost::memcpy(queue, hostBandCounts, deviceBandCounts);
+                                alpaka::onHost::wait(queue);
+                                for(std::size_t tile = 0; tile < tileCount; ++tile)
+                                    for(std::size_t band = 0; band < 3u; ++band)
+                                        bandedPairs[band] += hostBandCounts[alpaka::Vec<std::size_t, 2>{tile, band}];
+                                bandedModelPairs = bandedPairs[0] + bandedPairs[1] + bandedPairs[2];
+                            }
+                            else
+                            {
+                                // Without per-band counters every non-zero pair went through the tile-wide
+                                // kernel; keep the pair partition exact.
+                                bandedModelPairs = stats.globalParticles * tileCount - stats.zeroWeightPairs;
+                            }
+                            bandedBandSeconds[1] += tileWideSeconds;
+                        }
                     }
 
                     {

@@ -51,6 +51,8 @@ namespace picongpu::neuralBunch
         bool useExactDevice = false;
         double bandedExactMaxCells = 128.0;
         double bandedExactAspect10Cells = 512.0;
+        bool tileWideField = true;
+        bool tileWideBandStats = true;
         int timePolicy = {{{neural_bunch.timePolicy}}};
     };
     {{/neural_bunch_enabled}}
@@ -89,6 +91,8 @@ namespace picongpu::neuralBunch
         bool useExactDevice = false;
         double bandedExactMaxCells = 128.0;
         double bandedExactAspect10Cells = 512.0;
+        bool tileWideField = true;
+        bool tileWideBandStats = true;
         int timePolicy = 0;
     };
     {{/neural_bunch_enabled}}

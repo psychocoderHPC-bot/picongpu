@@ -11,6 +11,7 @@
 #include "picongpu/particles/neuralBunch/DeviceBanded.hpp"
 #include "picongpu/particles/neuralBunch/Inference.hpp"
 #include "picongpu/particles/neuralBunch/PointField.hpp"
+#include "picongpu/particles/neuralBunch/TileWideField.hpp"
 
 #include <alpaka/alpaka.hpp>
 #include <alpaka/nn/onHost/matrix/gemv.hpp>
@@ -128,6 +129,113 @@ int main(int argc, char** argv)
                     weightedMaxError,
                     std::abs(hostTile[alpaka::Vec<std::size_t, 1>{slot}] - expectedTile[slot]));
             check(weightedMaxError < 1.0e-2, "weightedAdd accumulates the batch deterministically", weightedMaxError);
+
+
+            // 4) tile-wide kernel: device vs host point field, and device band routing.
+            {
+                std::vector<nb::Source> wideSources(3u);
+                wideSources[0].r[0] = 1.0;
+                wideSources[0].r[1] = 1.0;
+                wideSources[0].r[2] = 1.0;
+                wideSources[0].u[1] = 0.3;
+                wideSources[0].weight = 0.7;
+                wideSources[1].r[0] = 12.0;
+                wideSources[1].r[1] = -6.0;
+                wideSources[1].r[2] = 4.0;
+                wideSources[1].u[0] = -0.2;
+                wideSources[1].u[2] = 0.1;
+                wideSources[1].weight = 1.3;
+                wideSources[2].r[0] = 100.0;
+                wideSources[2].r[1] = 80.0;
+                wideSources[2].r[2] = -60.0;
+                wideSources[2].u[1] = 0.5;
+                wideSources[2].weight = -0.4;
+                nb::Vec3d const wideCells{1.0, 1.3, 0.7};
+
+                auto hostPositions
+                    = alpaka::onHost::allocHost<double>(alpaka::Vec{wideSources.size(), std::size_t{3}});
+                auto hostVelocities
+                    = alpaka::onHost::allocHost<double>(alpaka::Vec{wideSources.size(), std::size_t{3}});
+                auto hostCharges = alpaka::onHost::allocHost<double>(alpaka::Vec{wideSources.size()});
+                for(std::size_t i = 0u; i < wideSources.size(); ++i)
+                {
+                    for(std::size_t axis = 0u; axis < 3u; ++axis)
+                    {
+                        hostPositions[alpaka::Vec<std::size_t, 2>{i, axis}] = wideSources[i].r[axis];
+                        hostVelocities[alpaka::Vec<std::size_t, 2>{i, axis}] = wideSources[i].u[axis];
+                    }
+                    hostCharges[alpaka::Vec<std::size_t, 1>{i}] = -wideSources[i].weight;
+                }
+                auto devicePositions = alpaka::onHost::allocLike(device, hostPositions);
+                auto deviceVelocities = alpaka::onHost::allocLike(device, hostVelocities);
+                auto deviceCharges = alpaka::onHost::allocLike(device, hostCharges);
+                alpaka::onHost::memcpy(queue, devicePositions, hostPositions);
+                alpaka::onHost::memcpy(queue, deviceVelocities, hostVelocities);
+                alpaka::onHost::memcpy(queue, deviceCharges, hostCharges);
+                hostPositions.keepAlive(queue);
+                hostVelocities.keepAlive(queue);
+                hostCharges.keepAlive(queue);
+
+                auto deviceWideValues = alpaka::onHost::alloc<float>(device, alpaka::Vec{std::size_t{1}, slots});
+                auto deviceWideBands
+                    = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::size_t{1}, std::size_t{3}});
+                alpaka::nn::onHost::ops::fill(queue, exec, deviceWideValues, 0.0f);
+                alpaka::nn::onHost::ops::fill(queue, exec, deviceWideBands, 0u);
+                nb::enqueueTileWidePointField(
+                    queue,
+                    exec,
+                    devicePositions,
+                    deviceVelocities,
+                    deviceCharges,
+                    wideSources.size(),
+                    wideCells,
+                    std::array<int, 3>{0, 0, 0},
+                    std::array<int, 3>{1, 1, 1},
+                    0.0,
+                    4.0,
+                    48.0,
+                    true,
+                    deviceWideValues,
+                    deviceWideBands);
+                auto hostWideValues = alpaka::onHost::allocHost<float>(alpaka::Vec{std::size_t{1}, slots});
+                auto hostWideBands
+                    = alpaka::onHost::allocHost<std::uint32_t>(alpaka::Vec{std::size_t{1}, std::size_t{3}});
+                alpaka::onHost::memcpy(queue, hostWideValues, deviceWideValues);
+                alpaka::onHost::memcpy(queue, hostWideBands, deviceWideBands);
+                alpaka::onHost::wait(queue);
+
+                std::vector<double> expectedWide(slots, 0.0);
+                for(std::size_t i = 0u; i < wideSources.size(); ++i)
+                {
+                    auto const reference = nb::pointFieldTileHost(
+                        nb::Vec3d{wideSources[i].r[0], wideSources[i].r[1], wideSources[i].r[2]},
+                        nb::Vec3d{wideSources[i].u[0], wideSources[i].u[1], wideSources[i].u[2]},
+                        wideCells);
+                    for(std::size_t slot = 0u; slot < slots; ++slot)
+                        expectedWide[slot] += -wideSources[i].weight * static_cast<double>(reference[slot]);
+                }
+                double wideMaxDiff = 0.0;
+                double wideScale = 1.0;
+                for(std::size_t slot = 0u; slot < slots; ++slot)
+                {
+                    auto const actual = hostWideValues[alpaka::Vec<std::size_t, 2>{0u, slot}];
+                    wideMaxDiff = std::max(wideMaxDiff, std::abs(actual - expectedWide[slot]));
+                    wideScale = std::max(wideScale, std::abs(expectedWide[slot]));
+                }
+                check(
+                    wideMaxDiff / wideScale <= 1.0e-6,
+                    "tile-wide device point field matches the host reference",
+                    wideMaxDiff / wideScale);
+                auto const bandSum = hostWideBands[alpaka::Vec<std::size_t, 2>{0u, 0u}]
+                                     + hostWideBands[alpaka::Vec<std::size_t, 2>{0u, 1u}]
+                                     + hostWideBands[alpaka::Vec<std::size_t, 2>{0u, 2u}];
+                check(bandSum == wideSources.size(), "tile-wide device band routing is exhaustive", bandSum);
+                check(
+                    hostWideBands[alpaka::Vec<std::size_t, 2>{0u, 0u}] >= 1u
+                        && hostWideBands[alpaka::Vec<std::size_t, 2>{0u, 2u}] >= 1u,
+                    "tile-wide device band routing separates near and far",
+                    0.0);
+            }
 
             // 3) batched point field matches the host per-source evaluation.
             std::vector<nb::Source> sources(3u);
