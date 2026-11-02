@@ -311,6 +311,7 @@ namespace picongpu::particles::neuralBunch::farfield
         double charge{};
         double meanU[3]{};
         double gamma{1.0};
+        double maxVelDev{0.0}; // max |u - meanU| over the node (host diagnostic)
         double moments[kMaxTerms]{};
     };
 
@@ -337,6 +338,10 @@ namespace picongpu::particles::neuralBunch::farfield
         double separationFactor = 1.0;
         /** Minimum accepted d_gamma; guards degenerate all-coincident nodes. */
         double minimumSeparation = 0.5;
+        /** Fraction of |meanU| above which a node's velocity spread triggers a
+         * velocity-octant split so each far node carries a tighter velocity
+         * distribution. 0.0 disables velocity splitting. */
+        double velocitySplitFraction = 0.0;
     };
 
     struct Statistics
@@ -349,6 +354,9 @@ namespace picongpu::particles::neuralBunch::farfield
         std::size_t usedFarNodes = 0;
         std::size_t maxFarNodesPerTile = 0;
         std::size_t maxNearSourcesPerTile = 0;
+        /** Max over tiles of |nearSources + sum(far-node sources) - S| (0 = disjoint). */
+        std::size_t disjointMaxDeviation = 0;
+        std::size_t disjointTilesChecked = 0;
 
         std::size_t farSourceEquivalent() const
         {
@@ -370,6 +378,7 @@ namespace picongpu::particles::neuralBunch::farfield
         std::vector<int> nearOffsets; // tileCount + 1
         std::vector<std::uint32_t> nearSources; // source indices
         std::vector<std::uint8_t> tileIsFarEmpty; // tileCount
+        std::vector<std::size_t> nodeSourceCount; // per-node source count (host)
         Statistics statistics;
     };
 
@@ -382,6 +391,7 @@ namespace picongpu::particles::neuralBunch::farfield
             std::size_t begin{};
             std::size_t end{};
             bool leaf{true};
+            bool velocityNode{false}; // created by velocity splitting; never admitted whole
         };
 
         inline double dot(double const a[3], double const b[3])
@@ -452,6 +462,24 @@ namespace picongpu::particles::neuralBunch::farfield
             }
             node.radius = std::sqrt(radius2);
 
+            // Diagnostic: max per-source velocity deviation from the node mean.
+            if(absWeight > 0.0)
+            {
+                double dev2 = 0.0;
+                for(std::size_t slot = begin; slot < end; ++slot)
+                {
+                    std::size_t const source = perm[slot];
+                    double d2 = 0.0;
+                    for(int axis = 0; axis < 3; ++axis)
+                    {
+                        double const d = cloud.velocities[3 * source + axis] - node.meanU[axis];
+                        d2 += d * d;
+                    }
+                    dev2 = std::max(dev2, d2);
+                }
+                node.maxVelDev = std::sqrt(dev2);
+            }
+
             // Moments sum q * d^alpha for |alpha| <= kMaxOrder.
             for(std::size_t slot = begin; slot < end; ++slot)
             {
@@ -474,6 +502,121 @@ namespace picongpu::particles::neuralBunch::farfield
             return node;
         }
 
+        /** Finalize a node as a leaf, or split it by velocity octant when its
+         * velocity spread exceeds ``velocitySplitFraction * |meanU|``.
+         *
+         * Velocity children keep the parent's spatial region but carry a tighter
+         * velocity distribution, so each far expansion is more accurate in u.
+         * Every source stays counted exactly once: the velocity octants partition
+         * the node's source range, and a velocity node is never admitted whole
+         * (see ``collectTile``).
+         */
+        inline void finalizeNode(
+            SourceCloud const& cloud,
+            TreeParameters const& parameters,
+            std::vector<std::uint32_t>& perm,
+            std::vector<HostNode>& nodes,
+            int nodeIndex,
+            std::size_t begin,
+            std::size_t end,
+            double const spatialCenter[3],
+            int depth)
+        {
+            std::size_t const count = end - begin;
+            NodeAggregate const agg = aggregateRange(cloud, perm, begin, end, spatialCenter);
+            nodes[nodeIndex].begin = begin;
+            nodes[nodeIndex].end = end;
+            nodes[nodeIndex].aggregate = agg;
+
+            double const meanSpeed = std::sqrt(
+                agg.meanU[0] * agg.meanU[0] + agg.meanU[1] * agg.meanU[1] + agg.meanU[2] * agg.meanU[2]);
+            bool const wantVelSplit = parameters.velocitySplitFraction > 0.0 && count > 1u
+                                      && depth < parameters.maxDepth
+                                      && agg.maxVelDev > parameters.velocitySplitFraction * meanSpeed;
+            if(!wantVelSplit)
+            {
+                nodes[nodeIndex].leaf = true;
+                return;
+            }
+
+            // Abs-weighted velocity centroid for the octant partition.
+            double cent[3]{0.0, 0.0, 0.0};
+            double absW = 0.0;
+            for(std::size_t slot = begin; slot < end; ++slot)
+            {
+                std::size_t const source = perm[slot];
+                double const w = std::abs(cloud.charges[source]);
+                absW += w;
+                for(int axis = 0; axis < 3; ++axis)
+                    cent[axis] += w * cloud.velocities[3 * source + axis];
+            }
+            if(absW > 0.0)
+                for(int axis = 0; axis < 3; ++axis)
+                    cent[axis] /= absW;
+
+            std::array<std::size_t, 8> counts{};
+            for(std::size_t slot = begin; slot < end; ++slot)
+            {
+                std::size_t const source = perm[slot];
+                int oct = 0;
+                for(int axis = 0; axis < 3; ++axis)
+                    if(cloud.velocities[3 * source + axis] >= cent[axis])
+                        oct |= 1 << axis;
+                ++counts[static_cast<std::size_t>(oct)];
+            }
+            int nonEmpty = 0;
+            for(int oct = 0; oct < 8; ++oct)
+                if(counts[static_cast<std::size_t>(oct)] > 0u)
+                    ++nonEmpty;
+            if(nonEmpty <= 1)
+            {
+                nodes[nodeIndex].leaf = true; // degenerate split: keep as a leaf
+                return;
+            }
+
+            std::array<std::vector<std::uint32_t>, 8> buckets;
+            for(std::size_t slot = begin; slot < end; ++slot)
+            {
+                std::size_t const source = perm[slot];
+                int oct = 0;
+                for(int axis = 0; axis < 3; ++axis)
+                    if(cloud.velocities[3 * source + axis] >= cent[axis])
+                        oct |= 1 << axis;
+                buckets[static_cast<std::size_t>(oct)].push_back(source);
+            }
+            std::array<std::size_t, 8> offsets{};
+            offsets[0] = begin;
+            for(int oct = 1; oct < 8; ++oct)
+                offsets[static_cast<std::size_t>(oct)]
+                    = offsets[static_cast<std::size_t>(oct - 1)]
+                      + counts[static_cast<std::size_t>(oct - 1)];
+            for(int oct = 0; oct < 8; ++oct)
+                std::copy(buckets[static_cast<std::size_t>(oct)].begin(),
+                          buckets[static_cast<std::size_t>(oct)].end(),
+                          perm.begin() + offsets[static_cast<std::size_t>(oct)]);
+
+            nodes[nodeIndex].leaf = false;
+            nodes[nodeIndex].velocityNode = true;
+            for(int oct = 0; oct < 8; ++oct)
+            {
+                if(counts[static_cast<std::size_t>(oct)] == 0u)
+                    continue;
+                int const childIndex = static_cast<int>(nodes.size());
+                nodes.emplace_back();
+                nodes[nodeIndex].child[oct] = childIndex;
+                finalizeNode(
+                    cloud,
+                    parameters,
+                    perm,
+                    nodes,
+                    childIndex,
+                    offsets[static_cast<std::size_t>(oct)],
+                    offsets[static_cast<std::size_t>(oct)] + counts[static_cast<std::size_t>(oct)],
+                    spatialCenter,
+                    depth + 1);
+            }
+        }
+
         inline void buildTree(
             SourceCloud const& cloud,
             TreeParameters const& parameters,
@@ -493,9 +636,7 @@ namespace picongpu::particles::neuralBunch::farfield
                                   && depth < parameters.maxDepth && count > 8u;
             if(!canSplit)
             {
-                nodes[static_cast<std::size_t>(nodeIndex)].leaf = true;
-                nodes[static_cast<std::size_t>(nodeIndex)].aggregate
-                    = aggregateRange(cloud, perm, begin, end, cubeCenter);
+                finalizeNode(cloud, parameters, perm, nodes, nodeIndex, begin, end, cubeCenter, depth);
                 return;
             }
 
@@ -524,9 +665,7 @@ namespace picongpu::particles::neuralBunch::farfield
             {
                 if(counts[octant] == count)
                 {
-                    nodes[static_cast<std::size_t>(nodeIndex)].leaf = true;
-                    nodes[static_cast<std::size_t>(nodeIndex)].aggregate
-                        = aggregateRange(cloud, perm, begin, end, cubeCenter);
+                    finalizeNode(cloud, parameters, perm, nodes, nodeIndex, begin, end, cubeCenter, depth);
                     return;
                 }
             }
@@ -622,7 +761,8 @@ namespace picongpu::particles::neuralBunch::farfield
                 = std::sqrt(dot(relative, relative) + along * along);
             double const threshold
                 = parameters.separationFactor * aggregate.radius + tileRadius;
-            bool const admitted = dGamma > threshold && dGamma > parameters.minimumSeparation;
+            bool const admitted = !node.velocityNode && dGamma > threshold
+                                  && dGamma > parameters.minimumSeparation;
 
             if(admitted)
             {
@@ -689,8 +829,12 @@ namespace picongpu::particles::neuralBunch::farfield
 
         lists.statistics.nodeCount = hostNodes.size();
         lists.nodes.resize(hostNodes.size());
+        lists.nodeSourceCount.resize(hostNodes.size());
         for(std::size_t i = 0; i < hostNodes.size(); ++i)
+        {
             lists.nodes[i] = hostNodes[i].aggregate;
+            lists.nodeSourceCount[i] = hostNodes[i].end - hostNodes[i].begin;
+        }
         std::vector<std::uint8_t> usedNode(hostNodes.size(), 0);
 
         double const tileRadius = detail::tileHalfDiagonal(cells);
@@ -740,6 +884,30 @@ namespace picongpu::particles::neuralBunch::farfield
         lists.statistics.nearSourceEvaluations = nearTotal;
         for(std::uint8_t used : usedNode)
             lists.statistics.usedFarNodes += used;
+
+        // Disjointness: for every tile, near sources plus the sources of the
+        // admitted far nodes must cover the whole cloud exactly once.
+        if(cloud.count > 0)
+        {
+            std::size_t maxDeviation = 0;
+            for(std::size_t tile = 0; tile < tileCount; ++tile)
+            {
+                std::size_t farSources = 0;
+                for(int k = lists.farOffsets[static_cast<std::size_t>(tile)];
+                     k < lists.farOffsets[static_cast<std::size_t>(tile) + 1];
+                     ++k)
+                    farSources += lists.nodeSourceCount[static_cast<std::size_t>(lists.farNodes[k])];
+                std::size_t const nearSources
+                    = static_cast<std::size_t>(lists.nearOffsets[static_cast<std::size_t>(tile) + 1])
+                      - lists.nearOffsets[static_cast<std::size_t>(tile)];
+                std::size_t const total = farSources + nearSources;
+                std::size_t const deviation
+                    = total > cloud.count ? total - cloud.count : cloud.count - total;
+                maxDeviation = std::max(maxDeviation, deviation);
+            }
+            lists.statistics.disjointMaxDeviation = maxDeviation;
+            lists.statistics.disjointTilesChecked = tileCount;
+        }
 
         return lists;
     }

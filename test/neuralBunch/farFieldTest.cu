@@ -34,8 +34,10 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <random>
+#include <sstream>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -360,7 +362,47 @@ namespace
         return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     }
 
-    void benchmarkCase(std::size_t sourceCount, std::array<int, 3> const& tileCounts)
+    /** Persist the direct field (the reference for every far configuration of a
+     * case) so the O(S*tiles) direct kernel runs once per case, not once per run. */
+    bool loadDirectReference(std::string const& file, double& directSeconds, std::vector<float>& values)
+    {
+        std::ifstream in(file, std::ios::binary);
+        if(!in)
+            return false;
+        double ds = 0.0;
+        in.read(reinterpret_cast<char*>(&ds), sizeof(double));
+        in.seekg(0, std::ios::end);
+        std::streamoff const size = in.tellg();
+        in.seekg(8, std::ios::beg);
+        std::size_t const nvals = size > static_cast<std::streamoff>(8)
+                                       ? static_cast<std::size_t>(size - 8) / sizeof(float)
+                                       : 0;
+        values.assign(nvals, 0.0f);
+        if(values.empty())
+            return false;
+        in.read(reinterpret_cast<char*>(values.data()),
+                static_cast<std::streamsize>(values.size() * sizeof(float)));
+        if(!in)
+            return false;
+        directSeconds = ds;
+        return true;
+    }
+
+    void saveDirectReference(std::string const& file, double directSeconds, std::vector<float> const& values)
+    {
+        std::ofstream out(file, std::ios::binary);
+        out.write(reinterpret_cast<char const*>(&directSeconds), sizeof(double));
+        out.write(reinterpret_cast<char const*>(values.data()),
+                  static_cast<std::streamsize>(values.size() * sizeof(float)));
+    }
+
+    void benchmarkCase(
+        std::size_t sourceCount,
+        std::array<int, 3> const& tileCounts,
+        std::string const& refFile,
+        double sep,
+        double splitFrac,
+        std::vector<int> const& orders)
     {
         std::cout << std::unitbuf;
         std::array<int, 3> const offset{0, 0, 0};
@@ -372,17 +414,30 @@ namespace
         auto const cloud = buffers.cloud();
         ff::TreeParameters parameters;
         parameters.leafCapacity = 16;
-        parameters.separationFactor = 2.0;
+        parameters.separationFactor = sep;
+        parameters.velocitySplitFraction = splitFrac;
         double const buildStart = now();
         auto const lists = ff::buildInteractionLists(cloud, parameters, cells, offset, tileCounts);
         double const buildSeconds = now() - buildStart;
+        double const farFraction
+            = lists.statistics.directSourceEvaluations > 0
+                ? 1.0 - static_cast<double>(lists.statistics.nearSourceEvaluations)
+                          / static_cast<double>(lists.statistics.directSourceEvaluations)
+                : 0.0;
+        double maxVelDev = 0.0;
+        for(auto const& node : lists.nodes)
+            maxVelDev = std::max(maxVelDev, node.maxVelDev);
         std::cout << "bench_sources " << sourceCount << " tiles " << tiles << " nodes " << lists.nodes.size()
                   << " far_node_tile_interactions " << lists.statistics.farNodeInteractions
                   << " near_source_pairs " << lists.statistics.nearSourceEvaluations
                   << " direct_source_pairs " << lists.statistics.directSourceEvaluations
                   << " max_far_nodes_per_tile " << lists.statistics.maxFarNodesPerTile
                   << " max_near_sources_per_tile " << lists.statistics.maxNearSourcesPerTile
-                  << " host_build_seconds " << buildSeconds << '\n';
+                  << " host_build_seconds " << buildSeconds << " far_fraction " << farFraction
+                  << " max_vel_dev " << maxVelDev
+                  << " disjoint_max_dev " << lists.statistics.disjointMaxDeviation
+                  << " disjoint_tiles " << lists.statistics.disjointTilesChecked
+                  << " sep " << sep << " split " << splitFrac << '\n';
 
         auto checkCuda = [](cudaError_t status, char const* what)
         {
@@ -510,16 +565,32 @@ namespace
             checkCuda(cudaDeviceSynchronize(), "direct");
             return now() - start;
         };
-        // The direct kernel is O(S * tiles); large cases get a single timed run
-        // (no warm-up repetition) so the proof stays inside a sane wall time.
-        int const directReps = sourceCount >= 50000u ? 1 : 2;
-        if(sourceCount < 50000u)
-            (void) runDirect();
+        // The direct field is the reference for every far configuration of this
+        // (source, tile) case, so it is computed once and cached to `refFile`.
+        std::vector<float> direct;
         double directSeconds = 1.0e300;
-        for(int rep = 0; rep < directReps; ++rep)
-            directSeconds = std::min(directSeconds, runDirect());
-        auto const direct = hostFetch();
-        std::cout << "direct_seconds " << directSeconds << " direct_reps " << directReps << "\n";
+        int const directReps = sourceCount >= 50000u ? 1 : 2;
+        bool const haveRef = !refFile.empty() && loadDirectReference(refFile, directSeconds, direct);
+        if(!haveRef)
+        {
+            // The direct kernel is O(S * tiles); large cases get a single timed
+            // run (no warm-up repetition) so the proof stays inside a sane wall time.
+            if(sourceCount < 50000u)
+                (void) runDirect();
+            for(int rep = 0; rep < directReps; ++rep)
+                directSeconds = std::min(directSeconds, runDirect());
+            direct = hostFetch();
+            if(!refFile.empty())
+                saveDirectReference(refFile, directSeconds, direct);
+        }
+        if(direct.size() != tiles * slots)
+        {
+            std::cerr << "direct reference size mismatch: " << direct.size() << " != " << tiles * slots
+                      << " (wrong --ref for this case?)\n";
+            std::exit(EXIT_FAILURE);
+        }
+        std::cout << "direct_seconds " << directSeconds << " direct_reps " << directReps
+                  << " direct_cached " << (haveRef ? 1 : 0) << "\n";
 
         auto runFar = [&](int order)
         {
@@ -541,8 +612,23 @@ namespace
                     deviceVelocities,
                     deviceCharges,
                     deviceTileValues);
-            else
+            else if(order == 4)
                 farTileKernel<4><<<grid, block, 0, 0>>>(
+                    static_cast<int>(slots),
+                    cells,
+                    deviceOffset,
+                    deviceTileCounts,
+                    deviceNodes,
+                    deviceFarOffsets,
+                    deviceFarIndices,
+                    deviceNearOffsets,
+                    deviceNearIndices,
+                    devicePositions,
+                    deviceVelocities,
+                    deviceCharges,
+                    deviceTileValues);
+            else
+                farTileKernel<6><<<grid, block, 0, 0>>>(
                     static_cast<int>(slots),
                     cells,
                     deviceOffset,
@@ -560,7 +646,7 @@ namespace
             return now() - start;
         };
 
-        for(int const order : {2, 4})
+        for(int const order : orders)
         {
             (void) runFar(order);
             double best = 1.0e300;
@@ -605,8 +691,48 @@ int main(int argc, char** argv)
         return EXIT_SUCCESS;
     }
 
-    std::size_t const sources = argc > 2 ? static_cast<std::size_t>(std::stoull(argv[2])) : 100000u;
+    // Default = best measured configuration (T28): tightening the admissibility
+    // factor to 3.0 brings the cB gate under 1e-3 on both the dense 1e5 and
+    // 2000-source cases while keeping E well under the gate, and order 2 is the
+    // lowest-error order (higher orders worsen E on the dense case). Override
+    // with --sep / --split / --orders to reproduce the full experiment grid.
+    std::size_t sources = 100000u;
+    std::string refFile;
+    double sep = 3.0;
+    double splitFrac = 0.0;
+    std::vector<int> orders{2};
+    for(int i = 2; i < argc; ++i)
+    {
+        std::string const arg = argv[i];
+        auto const next = [&]() -> std::string
+        {
+            if(i + 1 >= argc)
+            {
+                std::cerr << "missing value for " << arg << '\n';
+                std::exit(EXIT_FAILURE);
+            }
+            ++i;
+            return argv[i];
+        };
+        if(arg == "--ref")
+            refFile = next();
+        else if(arg == "--sep")
+            sep = std::stod(next());
+        else if(arg == "--split")
+            splitFrac = std::stod(next());
+        else if(arg == "--orders")
+        {
+            orders.clear();
+            std::stringstream ss(next());
+            std::string item;
+            while(std::getline(ss, item, ','))
+                if(!item.empty())
+                    orders.push_back(std::stoi(item));
+        }
+        else
+            sources = static_cast<std::size_t>(std::stoull(arg));
+    }
     std::array<int, 3> const tileCounts{16, 16, 32}; // 128 x 128 x 128 cells
-    benchmarkCase(sources, tileCounts);
+    benchmarkCase(sources, tileCounts, refFile, sep, splitFrac, orders);
     return EXIT_SUCCESS;
 }
