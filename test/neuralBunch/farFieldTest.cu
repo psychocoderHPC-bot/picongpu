@@ -47,6 +47,7 @@ namespace ff = picongpu::particles::neuralBunch::farfield;
 
 namespace
 {
+    constexpr double kPi = 3.14159265358979323846;
     int failures = 0;
 
     void check(bool const condition, char const* message)
@@ -70,12 +71,37 @@ namespace
         }
     };
 
-    /** Compact Gaussian bunch at the domain centre plus a small velocity spread. */
+    /** Velocity distribution profiles for the bunch.
+     *
+     * Positions are always the same compact Gaussian (radius ``bunchRadius`` at the
+     * domain centre); only the velocity field changes per profile, so the geometry
+     * is comparable across profiles. ``u`` is the normalised momentum (gamma*beta,
+     * c = 1), so a profile's mean gamma is ``sqrt(1 + |u|^2)``.
+     */
+    enum class Profile
+    {
+        Default, // meanU (0.5, 0.2, -0.1), isotropic spread (the legacy cold case)
+        Axial,   // single velocity along +z at the requested gamma
+        Oblique, // single velocity at 45 deg from +z (in the x-z plane) at the requested gamma
+        Broad    // gamma uniform in [gammaMin, gammaMax], direction within coneDeg of +z
+    };
+
+    struct BunchSpec
+    {
+        Profile profile{Profile::Default};
+        double gamma{10.0}; // Axial/Oblique target gamma
+        double spread{0.02}; // Default isotropic delta-u
+        double coneDeg{10.0}; // Broad: half-angle of the direction cone
+        double gammaMin{1.0}; // Broad
+        double gammaMax{100.0}; // Broad
+    };
+
+    /** Compact Gaussian bunch at the domain centre with a profile-driven velocity. */
     CloudBuffers makeBunch(
         std::size_t count,
         std::array<int, 3> const& tileCounts,
         double bunchRadius,
-        double velocitySpread,
+        BunchSpec const& spec,
         std::uint32_t seed)
     {
         CloudBuffers buffers;
@@ -85,10 +111,13 @@ namespace
         std::mt19937 rng(seed);
         std::normal_distribution<double> gaussian(0.0, 1.0);
         std::uniform_real_distribution<double> uniform(-1.0, 1.0);
+        std::uniform_real_distribution<double> uniform01(0.0, 1.0);
         double const extent[3]{
             0.5 * tileCounts[0] * nb::tileGeometry::tileNx,
             0.5 * tileCounts[1] * nb::tileGeometry::tileNy,
             0.5 * tileCounts[2] * nb::tileGeometry::tileNz};
+        double const singleSpeed = std::sqrt(spec.gamma * spec.gamma - 1.0);
+        double const coneRad = spec.coneDeg * kPi / 180.0;
         for(std::size_t i = 0; i < count; ++i)
         {
             double x = 0.0;
@@ -103,9 +132,40 @@ namespace
             buffers.positions[3 * i + 0] = extent[0] + bunchRadius * x;
             buffers.positions[3 * i + 1] = extent[1] + bunchRadius * y;
             buffers.positions[3 * i + 2] = extent[2] + bunchRadius * z;
-            buffers.velocities[3 * i + 0] = 0.5 + velocitySpread * uniform(rng);
-            buffers.velocities[3 * i + 1] = 0.2 + velocitySpread * uniform(rng);
-            buffers.velocities[3 * i + 2] = -0.1 + velocitySpread * uniform(rng);
+            switch(spec.profile)
+            {
+                case Profile::Axial:
+                    buffers.velocities[3 * i + 0] = 0.0;
+                    buffers.velocities[3 * i + 1] = 0.0;
+                    buffers.velocities[3 * i + 2] = singleSpeed;
+                    break;
+                case Profile::Oblique:
+                {
+                    double const inv = 1.0 / std::sqrt(2.0);
+                    buffers.velocities[3 * i + 0] = singleSpeed * inv;
+                    buffers.velocities[3 * i + 1] = 0.0;
+                    buffers.velocities[3 * i + 2] = singleSpeed * inv;
+                    break;
+                }
+                case Profile::Broad:
+                {
+                    double const g = spec.gammaMin + (spec.gammaMax - spec.gammaMin) * uniform01(rng);
+                    double const speed = std::sqrt(g * g - 1.0);
+                    double const theta = coneRad * std::sqrt(uniform01(rng));
+                    double const phi = 2.0 * kPi * uniform01(rng);
+                    double const st = std::sin(theta);
+                    buffers.velocities[3 * i + 0] = speed * st * std::cos(phi);
+                    buffers.velocities[3 * i + 1] = speed * st * std::sin(phi);
+                    buffers.velocities[3 * i + 2] = speed * std::cos(theta);
+                    break;
+                }
+                case Profile::Default:
+                default:
+                    buffers.velocities[3 * i + 0] = 0.5 + spec.spread * uniform(rng);
+                    buffers.velocities[3 * i + 1] = 0.2 + spec.spread * uniform(rng);
+                    buffers.velocities[3 * i + 2] = -0.1 + spec.spread * uniform(rng);
+                    break;
+            }
             buffers.charges[i] = (i % 7u == 0u) ? -0.5 : -1.0;
         }
         return buffers;
@@ -207,7 +267,7 @@ namespace
         std::array<int, 3> const tileCounts{2, 2, 2};
         std::array<int, 3> const offset{0, 0, 0};
         nb::Vec3d const cells{1.0, 1.0, 1.0};
-        auto const buffers = makeBunch(sourceCount, tileCounts, 2.0, 0.02, 20261102u);
+        auto const buffers = makeBunch(sourceCount, tileCounts, 2.0, BunchSpec{}, 20261102u);
         auto const cloud = buffers.cloud();
         std::size_t const tiles = static_cast<std::size_t>(tileCounts[0]) * tileCounts[1] * tileCounts[2];
         std::size_t const slots = nb::tileGeometry::outputDimension;
@@ -396,12 +456,30 @@ namespace
                   static_cast<std::streamsize>(values.size() * sizeof(float)));
     }
 
+    char const* profileName(Profile p)
+    {
+        switch(p)
+        {
+            case Profile::Axial:
+                return "axial";
+            case Profile::Oblique:
+                return "oblique";
+            case Profile::Broad:
+                return "broad";
+            case Profile::Default:
+            default:
+                return "default";
+        }
+    }
+
     void benchmarkCase(
         std::size_t sourceCount,
         std::array<int, 3> const& tileCounts,
         std::string const& refFile,
         double sep,
         double splitFrac,
+        ff::VelocitySplitMode splitMode,
+        BunchSpec const& spec,
         std::vector<int> const& orders)
     {
         std::cout << std::unitbuf;
@@ -410,12 +488,13 @@ namespace
         std::size_t const tiles = static_cast<std::size_t>(tileCounts[0]) * tileCounts[1] * tileCounts[2];
         std::size_t const slots = nb::tileGeometry::outputDimension;
 
-        auto const buffers = makeBunch(sourceCount, tileCounts, 2.0, 0.02, 424242u);
+        auto const buffers = makeBunch(sourceCount, tileCounts, 2.0, spec, 424242u);
         auto const cloud = buffers.cloud();
         ff::TreeParameters parameters;
         parameters.leafCapacity = 16;
         parameters.separationFactor = sep;
         parameters.velocitySplitFraction = splitFrac;
+        parameters.velocitySplitMode = splitMode;
         double const buildStart = now();
         auto const lists = ff::buildInteractionLists(cloud, parameters, cells, offset, tileCounts);
         double const buildSeconds = now() - buildStart;
@@ -427,6 +506,9 @@ namespace
         double maxVelDev = 0.0;
         for(auto const& node : lists.nodes)
             maxVelDev = std::max(maxVelDev, node.maxVelDev);
+        std::cout << "profile " << profileName(spec.profile) << " gamma " << spec.gamma
+                  << " spread " << spec.spread << " cone " << spec.coneDeg << " gmin " << spec.gammaMin
+                  << " gmax " << spec.gammaMax << '\n';
         std::cout << "bench_sources " << sourceCount << " tiles " << tiles << " nodes " << lists.nodes.size()
                   << " far_node_tile_interactions " << lists.statistics.farNodeInteractions
                   << " near_source_pairs " << lists.statistics.nearSourceEvaluations
@@ -435,9 +517,11 @@ namespace
                   << " max_near_sources_per_tile " << lists.statistics.maxNearSourcesPerTile
                   << " host_build_seconds " << buildSeconds << " far_fraction " << farFraction
                   << " max_vel_dev " << maxVelDev
+                  << " velocity_split_nodes " << lists.statistics.velocitySplitNodes
                   << " disjoint_max_dev " << lists.statistics.disjointMaxDeviation
                   << " disjoint_tiles " << lists.statistics.disjointTilesChecked
-                  << " sep " << sep << " split " << splitFrac << '\n';
+                  << " sep " << sep << " split " << splitFrac
+                  << " split_mode " << static_cast<int>(splitMode) << '\n';
 
         auto checkCuda = [](cudaError_t status, char const* what)
         {
@@ -700,6 +784,8 @@ int main(int argc, char** argv)
     std::string refFile;
     double sep = 3.0;
     double splitFrac = 0.0;
+    ff::VelocitySplitMode splitMode = ff::VelocitySplitMode::Frac;
+    BunchSpec spec;
     std::vector<int> orders{2};
     for(int i = 2; i < argc; ++i)
     {
@@ -720,6 +806,48 @@ int main(int argc, char** argv)
             sep = std::stod(next());
         else if(arg == "--split")
             splitFrac = std::stod(next());
+        else if(arg == "--split-mode")
+        {
+            std::string const m = next();
+            if(m == "frac")
+                splitMode = ff::VelocitySplitMode::Frac;
+            else if(m == "abs")
+                splitMode = ff::VelocitySplitMode::Abs;
+            else if(m == "gamma")
+                splitMode = ff::VelocitySplitMode::Gamma;
+            else
+            {
+                std::cerr << "unknown --split-mode " << m << " (frac|abs|gamma)\n";
+                std::exit(EXIT_FAILURE);
+            }
+        }
+        else if(arg == "--profile")
+        {
+            std::string const p = next();
+            if(p == "default")
+                spec.profile = Profile::Default;
+            else if(p == "axial")
+                spec.profile = Profile::Axial;
+            else if(p == "oblique")
+                spec.profile = Profile::Oblique;
+            else if(p == "broad")
+                spec.profile = Profile::Broad;
+            else
+            {
+                std::cerr << "unknown --profile " << p << " (default|axial|oblique|broad)\n";
+                std::exit(EXIT_FAILURE);
+            }
+        }
+        else if(arg == "--gamma")
+            spec.gamma = std::stod(next());
+        else if(arg == "--spread")
+            spec.spread = std::stod(next());
+        else if(arg == "--cone")
+            spec.coneDeg = std::stod(next());
+        else if(arg == "--gmin")
+            spec.gammaMin = std::stod(next());
+        else if(arg == "--gmax")
+            spec.gammaMax = std::stod(next());
         else if(arg == "--orders")
         {
             orders.clear();
@@ -733,6 +861,6 @@ int main(int argc, char** argv)
             sources = static_cast<std::size_t>(std::stoull(arg));
     }
     std::array<int, 3> const tileCounts{16, 16, 32}; // 128 x 128 x 128 cells
-    benchmarkCase(sources, tileCounts, refFile, sep, splitFrac, orders);
+    benchmarkCase(sources, tileCounts, refFile, sep, splitFrac, splitMode, spec, orders);
     return EXIT_SUCCESS;
 }

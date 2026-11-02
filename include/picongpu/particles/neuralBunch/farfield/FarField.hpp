@@ -330,6 +330,16 @@ namespace picongpu::particles::neuralBunch::farfield
         std::size_t count{};
     };
 
+    /** How the velocity-split threshold is interpreted. The trigger is
+     * ``maxVelDev > velocitySplitThreshold(parameters, node)`` (see below); this
+     * selects the threshold scale. The legacy behaviour is ``Frac``. */
+    enum class VelocitySplitMode
+    {
+        Frac = 1, // threshold = velocitySplitFraction * |meanU|  (legacy)
+        Abs = 2, // threshold = velocitySplitFraction (absolute, in u units)
+        Gamma = 3 // threshold = velocitySplitFraction / gamma (bounds gamma*maxVelDev)
+    };
+
     struct TreeParameters
     {
         int leafCapacity = 16;
@@ -338,11 +348,30 @@ namespace picongpu::particles::neuralBunch::farfield
         double separationFactor = 1.0;
         /** Minimum accepted d_gamma; guards degenerate all-coincident nodes. */
         double minimumSeparation = 0.5;
-        /** Fraction of |meanU| above which a node's velocity spread triggers a
-         * velocity-octant split so each far node carries a tighter velocity
-         * distribution. 0.0 disables velocity splitting. */
+        /** Numeric velocity-split threshold. 0.0 disables velocity splitting.
+         * Its scale is set by ``velocitySplitMode``. */
         double velocitySplitFraction = 0.0;
+        /** Scale of ``velocitySplitFraction`` (see VelocitySplitMode). */
+        VelocitySplitMode velocitySplitMode = VelocitySplitMode::Frac;
     };
+
+    /** Velocity-split threshold for one node under the selected mode. */
+    inline double velocitySplitThreshold(TreeParameters const& parameters, NodeAggregate const& node)
+    {
+        double const meanSpeed
+            = std::sqrt(node.meanU[0] * node.meanU[0] + node.meanU[1] * node.meanU[1]
+                        + node.meanU[2] * node.meanU[2]);
+        switch(parameters.velocitySplitMode)
+        {
+            case VelocitySplitMode::Abs:
+                return parameters.velocitySplitFraction;
+            case VelocitySplitMode::Gamma:
+                return parameters.velocitySplitFraction / node.gamma;
+            case VelocitySplitMode::Frac:
+            default:
+                return parameters.velocitySplitFraction * meanSpeed;
+        }
+    }
 
     struct Statistics
     {
@@ -357,6 +386,8 @@ namespace picongpu::particles::neuralBunch::farfield
         /** Max over tiles of |nearSources + sum(far-node sources) - S| (0 = disjoint). */
         std::size_t disjointMaxDeviation = 0;
         std::size_t disjointTilesChecked = 0;
+        /** Number of nodes split by velocity octant (velocity-split trigger count). */
+        std::size_t velocitySplitNodes = 0;
 
         std::size_t farSourceEquivalent() const
         {
@@ -528,11 +559,9 @@ namespace picongpu::particles::neuralBunch::farfield
             nodes[nodeIndex].end = end;
             nodes[nodeIndex].aggregate = agg;
 
-            double const meanSpeed = std::sqrt(
-                agg.meanU[0] * agg.meanU[0] + agg.meanU[1] * agg.meanU[1] + agg.meanU[2] * agg.meanU[2]);
+            double const threshold = velocitySplitThreshold(parameters, agg);
             bool const wantVelSplit = parameters.velocitySplitFraction > 0.0 && count > 1u
-                                      && depth < parameters.maxDepth
-                                      && agg.maxVelDev > parameters.velocitySplitFraction * meanSpeed;
+                                      && depth < parameters.maxDepth && agg.maxVelDev > threshold;
             if(!wantVelSplit)
             {
                 nodes[nodeIndex].leaf = true;
@@ -834,6 +863,8 @@ namespace picongpu::particles::neuralBunch::farfield
         {
             lists.nodes[i] = hostNodes[i].aggregate;
             lists.nodeSourceCount[i] = hostNodes[i].end - hostNodes[i].begin;
+            if(hostNodes[i].velocityNode)
+                ++lists.statistics.velocitySplitNodes;
         }
         std::vector<std::uint8_t> usedNode(hostNodes.size(), 0);
 
