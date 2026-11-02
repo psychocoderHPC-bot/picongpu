@@ -99,7 +99,9 @@ namespace picongpu::neuralBunch
         //! near threshold: the analytic point field skips every (source, tile) pair within this distance and the exact
         //! device quadrature evaluates them, so a target inside a source's TSC support is never evaluated with the
         //! singular point kernel. Raising it widens the exact band into the mid band at a cost (see the far-field note
-        //! on ``bandedFarMinCells``). The exact behaviour is the default.
+        //! on ``bandedFarMinCells``). The exact behaviour is the default. A value of 0 disables the near-band split:
+        //! the point field evaluates every pair and the exact near pass does not run (legacy point-field-only
+        //! semantics).
         double bandedNearMaxCells = 4.0;
         //! ``banded``: distances above this many cells use the analytic far field (with ``far_multipole``). The point
         //! field's leading error scales as ~ (source extent / distance)^2, so it falls below the 1e-3 gate only beyond

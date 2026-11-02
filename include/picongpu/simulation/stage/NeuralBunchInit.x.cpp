@@ -836,6 +836,13 @@ namespace picongpu
                                     // device quadrature, adding into the same deviceTileValues accumulator. Only the
                                     // genuinely near set (a source is near O(1) tiles) touches the quadrature, so this
                                     // stays a small fraction of the O(N_s * N_tiles) point-field work.
+                                    //
+                                    // The point field gates its near-box skip on the same ``> 0`` test, so a zero
+                                    // threshold makes it evaluate every pair. Run this pass only when the threshold
+                                    // is positive: otherwise its box (which at threshold 0 still selects the in-tile
+                                    // sources) would add those pairs a second time. A zero threshold therefore keeps
+                                    // the legacy point-field-only semantics.
+                                    if(params.bandedNearMaxCells > 0.0)
                                     {
                                         auto const nearStart = std::chrono::steady_clock::now();
                                         double const dx0 = cellSizeSI[0];
