@@ -976,29 +976,31 @@ namespace picongpu
                                             alpaka::onHost::memcpy(queue, deviceNearSrc, hostNearSrc);
                                             alpaka::onHost::memcpy(queue, deviceNearW, hostNearW);
                                             alpaka::onHost::memcpy(queue, deviceTileOffset, hostTileOffset);
-                                            hostNearSrc.keepAlive(queue);
-                                            hostNearW.keepAlive(queue);
-                                            hostTileOffset.keepAlive(queue);
-                                            // The in-support quadrature local frame is reserved per resident thread,
-                                            // so cap the launch the same way the per-tile path did (hoisted out of
-                                            // the per-tile loop, so it is computed once per chunk, not per tile).
-                                            auto const freeBytes = device.getFreeGlobalMemBytes();
-                                            std::size_t const exactMaxThreads = std::clamp<std::size_t>(
-                                                freeBytes / (4u * 24u * 1024u),
-                                                512u,
-                                                65536u);
-                                            enqueueNearExactAllTiles<double>(
-                                                queue,
-                                                exec,
-                                                deviceNearSrc,
-                                                deviceNearW,
-                                                deviceTileOffset,
-                                                tileCount,
-                                                cellsDx,
-                                                ExactSettings{},
-                                                deviceTileValues,
-                                                exactMaxThreads);
-                                            tileWideNearExactPairs += totalNear;
+                                             hostNearSrc.keepAlive(queue);
+                                             hostNearW.keepAlive(queue);
+                                             hostTileOffset.keepAlive(queue);
+                                             // Warp-parallel near pass: one warp per (tile, slot) work item, grid =
+                                             // tileCount*1536/4 blocks x 128 threads. The kernel has no per-thread
+                                             // local memory, so the grid scales with the near work and the device
+                                             // caps residency itself; the legacy free-memory thread cap (which left a
+                                             // 28-SM part at 28 blocks x 128 threads for this pass) is gone.
+                                             std::size_t const nearWorkItems = tileCount * kTileSlotCount;
+                                             log<picLog::PHYSICS>(
+                                                 "neuralBunch: rank=%1% tileWideField near->exact launch: %2% "
+                                                 "(tile, slot) work items, %3% blocks x 128 threads, one warp per item.")
+                                                 % rank % nearWorkItems
+                                                 % ((nearWorkItems + 3u) / 4u);
+                                             enqueueNearExactAllTilesWarp<double>(
+                                                 queue,
+                                                 exec,
+                                                 deviceNearSrc,
+                                                 deviceNearW,
+                                                 deviceTileOffset,
+                                                 tileCount,
+                                                 cellsDx,
+                                                 ExactSettings{},
+                                                 deviceTileValues);
+                                             tileWideNearExactPairs += totalNear;
                                         }
                                         tileWideNearExactSeconds += std::chrono::duration<double>(
                                                                         std::chrono::steady_clock::now() - nearStart)

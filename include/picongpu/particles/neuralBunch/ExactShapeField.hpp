@@ -1048,6 +1048,438 @@ namespace picongpu::particles::neuralBunch
         };
     } // namespace detail
 
+    /** Number of graded panels for one base panel [a, b] refined around @p target at @p level.
+     *
+     * Reproduces the panel count of exactBuildGradedPanels without materializing the panel list: the
+     * graded points have a known sorted order (a, then the clamped target-off_k in decreasing k, then the
+     * clamped target+off_k in increasing k, then b; or a, a+h*2^-level, ..., a+h/2, b left of the panel;
+     * a, b-h*2^-level, ..., b-h/2, b right of it), so the strict-increase count is O(level) and uses the
+     * same expressions as the materialized build.
+     */
+    ALPAKA_FN_HOST_ACC inline int exactGradedPanelCount(double target, double a, double b, int level)
+    {
+        double const h = b - a;
+        if(target < a - h || target > b + h)
+            return 1;
+        if(target < a || target > b)
+            return level + 1;
+        int count = 0;
+        double prev = a;
+        // sorted order of the graded points: a, clamp(t-off_k) ascending in k (off_k decreasing),
+        // then clamp(t+off_k) ascending = descending in k, then b
+        for(int k = 0; k <= level; ++k)
+        {
+            double const off = h * 0.5 * alpaka::math::pow(2.0, -static_cast<double>(k));
+            double const v = alpaka::math::max(a, target - off);
+            if(v > prev)
+            {
+                ++count;
+                prev = v;
+            }
+        }
+        for(int k = level; k >= 0; --k)
+        {
+            double const off = h * 0.5 * alpaka::math::pow(2.0, -static_cast<double>(k));
+            double const v = alpaka::math::min(b, target + off);
+            if(v > prev)
+            {
+                ++count;
+                prev = v;
+            }
+        }
+        if(b > prev)
+            ++count;
+        return count;
+    }
+
+    /** Bounds of the panelIndex-th graded panel of base panel [a, b] refined around @p target at @p level.
+     *
+     * O(level) and expression-identical to exactBuildGradedPanels, including its deliberate
+     * double->float->double round trip of the stored bounds (ExactPanel is float), so the bounds (and hence
+     * the quadrature nodes and weights) are bit-identical to the materialized build. The panel count is
+     * determined in double precision, as in the materialized build's strict-increase test.
+     */
+    ALPAKA_FN_HOST_ACC inline void exactGradedPanelBounds(
+        double target,
+        double a,
+        double b,
+        int level,
+        int panelIndex,
+        double& lo,
+        double& hi)
+    {
+        // exactBuildGradedPanels stores the bounds as float and the consumer reads them back as double.
+        auto const fr = [](double v) -> double { return static_cast<double>(static_cast<float>(v)); };
+        double const h = b - a;
+        if(target < a - h || target > b + h)
+        {
+            lo = fr(a);
+            hi = fr(b);
+            return;
+        }
+        if(target < a)
+        {
+            // sorted points: a, a + h*2^-level, ..., a + h/2, b; panel p is [pt_p, pt_{p+1}] with
+            // pt_0 = a, pt_k = a + h*2^-(level-k+1) for 1 <= k <= level, pt_{level+1} = b
+            if(panelIndex == level)
+            {
+                lo = fr(a + h * 0.5);
+                hi = fr(b);
+                return;
+            }
+            lo = panelIndex == 0
+                     ? fr(a)
+                     : fr(a + h * alpaka::math::pow(2.0, -static_cast<double>(level - panelIndex + 1)));
+            hi = fr(a + h * alpaka::math::pow(2.0, -static_cast<double>(level - panelIndex)));
+            return;
+        }
+        if(target > b)
+        {
+            // sorted points: a, b - h*2^-level, ..., b - h/2, b; panel p is [pt_p, pt_{p+1}] with
+            // pt_0 = a, pt_k = b - h*2^-(level-k+1) for 1 <= k <= level, pt_{level+1} = b
+            if(panelIndex == level)
+            {
+                lo = fr(b - h * 0.5);
+                hi = fr(b);
+                return;
+            }
+            lo = panelIndex == 0
+                     ? fr(a)
+                     : fr(b - h * alpaka::math::pow(2.0, -static_cast<double>(level - panelIndex + 1)));
+            hi = fr(b - h * alpaka::math::pow(2.0, -static_cast<double>(level - panelIndex)));
+            return;
+        }
+        // target inside [a, b]: walk the sorted points
+        // a, max(a, t-off_k) ascending in k, min(b, t+off_k) descending in k, b
+        int panel = 0;
+        double cur = a;
+        for(int k = 0; k <= level; ++k)
+        {
+            double const off = h * 0.5 * alpaka::math::pow(2.0, -static_cast<double>(k));
+            double const v = alpaka::math::max(a, target - off);
+            if(v > cur)
+            {
+                if(panel == panelIndex)
+                {
+                    lo = fr(cur);
+                    hi = fr(v);
+                    return;
+                }
+                ++panel;
+                cur = v;
+            }
+        }
+        for(int k = level; k >= 0; --k)
+        {
+            double const off = h * 0.5 * alpaka::math::pow(2.0, -static_cast<double>(k));
+            double const v = alpaka::math::min(b, target + off);
+            if(v > cur)
+            {
+                if(panel == panelIndex)
+                {
+                    lo = fr(cur);
+                    hi = fr(v);
+                    return;
+                }
+                ++panel;
+                cur = v;
+            }
+        }
+        lo = fr(cur);
+        hi = fr(b);
+    }
+
+    namespace detail
+    {
+        /** Per-lane Kahan pair with the exact per-term update of ExactAccumulator6::add for the double path. */
+        struct WarpKahan
+        {
+            double sum = 0.0;
+            double compensation = 0.0;
+
+            ALPAKA_FN_ACC void add(double value)
+            {
+                double const y = value - compensation;
+                double const t = sum + y;
+                compensation = (t - sum) - y;
+                sum = t;
+            }
+        };
+
+        /** Xor-tree reduction of one value across the whole warp; every lane must participate and all lanes
+         *  observe the reduced value. */
+        ALPAKA_FN_ACC inline double warpReduceSum(auto const& acc, double value)
+        {
+            auto const width = static_cast<std::uint32_t>(alpaka::onAcc::warp::getSize(acc));
+            for(std::uint32_t offset = width / 2u; offset > 0u; offset >>= 1u)
+                value += alpaka::onAcc::warp::shflXor(acc, value, offset, width);
+            return value;
+        }
+
+        ALPAKA_FN_ACC inline double pointFieldComponent(PointFieldDx const& field, int component)
+        {
+            if(component < 3)
+                return component == 0 ? field.E.x : (component == 1 ? field.E.y : field.E.z);
+            return component == 3 ? field.B.x : (component == 4 ? field.B.y : field.B.z);
+        }
+
+        /** Warp-cooperative graded smooth integral: the (z-panel, node) innermost loop runs across the
+         *  lanes, each lane accumulating its slice in @p lane (Kahan). The term set, nodes, weights and
+         *  per-term arithmetic are the same as exactGradedSmoothIntegral; only the summation order
+         *  (reordered by the lane split) and the accumulation into a single component differ. Panel bounds
+         *  come from exactGradedPanelBounds (bit-identical to the materialized build), evaluated per
+         *  warp iteration instead of being stored in a per-thread array. */
+        ALPAKA_FN_ACC void exactGradedSmoothComponentWarp(
+            auto const& acc,
+            Vec3d const& R0,
+            Vec3d const& u,
+            Vec3d const& cells,
+            int level,
+            int order,
+            int component,
+            GaussTable const& table,
+            WarpKahan& lane)
+        {
+            auto const laneIdx = static_cast<std::size_t>(alpaka::onAcc::warp::getLaneIdx(acc));
+            auto const warpSize = static_cast<std::size_t>(alpaka::onAcc::warp::getSize(acc));
+            int const index = exactOrderIndex(order);
+            double const target[3]{R0.x / cells.x, R0.y / cells.y, R0.z / cells.z};
+            constexpr double baseA[3]{-1.5, -0.5, 0.5};
+            constexpr double baseB[3]{-0.5, 0.5, 1.5};
+            int countPerBase[3][3]{};
+            int pc[3]{};
+            for(int axis = 0; axis < 3; ++axis)
+            {
+                for(int p = 0; p < 3; ++p)
+                    countPerBase[axis][p] = exactGradedPanelCount(target[axis], baseA[p], baseB[p], level);
+                pc[axis] = countPerBase[axis][0] + countPerBase[axis][1] + countPerBase[axis][2];
+            }
+            auto const panelOf = [](int const c[3], int globalIndex, int& base, int& local)
+            {
+                if(globalIndex < c[0])
+                {
+                    base = 0;
+                    local = globalIndex;
+                }
+                else if(globalIndex < c[0] + c[1])
+                {
+                    base = 1;
+                    local = globalIndex - c[0];
+                }
+                else
+                {
+                    base = 2;
+                    local = globalIndex - c[0] - c[1];
+                }
+            };
+            double const* const gaussNodes = table.nodes[index];
+            double const* const gaussWeights = table.weights[index];
+            for(int px = 0; px < pc[0]; ++px)
+            {
+                int baseX = 0, localX = 0;
+                panelOf(countPerBase[0], px, baseX, localX);
+                double aX = 0.0, bX = 0.0;
+                exactGradedPanelBounds(target[0], baseA[baseX], baseB[baseX], level, localX, aX, bX);
+                double const halfX = 0.5 * (bX - aX);
+                double const midX = 0.5 * (bX + aX);
+                for(int nx = 0; nx < order; ++nx)
+                {
+                    double const sx = halfX * gaussNodes[nx] + midX;
+                    double const wx = halfX * gaussWeights[nx] * exactTscShape(sx);
+                    if(wx == 0.0)
+                        continue;
+                    double const rx = R0.x - sx * cells.x;
+                    for(int py = 0; py < pc[1]; ++py)
+                    {
+                        int baseY = 0, localY = 0;
+                        panelOf(countPerBase[1], py, baseY, localY);
+                        double aY = 0.0, bY = 0.0;
+                        exactGradedPanelBounds(target[1], baseA[baseY], baseB[baseY], level, localY, aY, bY);
+                        double const halfY = 0.5 * (bY - aY);
+                        double const midY = 0.5 * (bY + aY);
+                        for(int ny = 0; ny < order; ++ny)
+                        {
+                            double const sy = halfY * gaussNodes[ny] + midY;
+                            double const wxy = wx * (halfY * gaussWeights[ny] * exactTscShape(sy));
+                            if(wxy == 0.0)
+                                continue;
+                            double const ry = R0.y - sy * cells.y;
+                            std::size_t const innerCount = static_cast<std::size_t>(pc[2]) * order;
+                            for(std::size_t e = laneIdx; e < innerCount; e += warpSize)
+                            {
+                                int const pz = static_cast<int>(e / order);
+                                int const nz = static_cast<int>(e % order);
+                                int baseZ = 0, localZ = 0;
+                                panelOf(countPerBase[2], pz, baseZ, localZ);
+                                double aZ = 0.0, bZ = 0.0;
+                                exactGradedPanelBounds(target[2], baseA[baseZ], baseB[baseZ], level, localZ, aZ, bZ);
+                                double const halfZ = 0.5 * (bZ - aZ);
+                                double const midZ = 0.5 * (bZ + aZ);
+                                double const sz = halfZ * gaussNodes[nz] + midZ;
+                                double const weight = wxy * (halfZ * gaussWeights[nz] * exactTscShape(sz));
+                                if(weight == 0.0)
+                                    continue;
+                                Vec3d const R{rx, ry, R0.z - sz * cells.z};
+                                auto const field = pointFieldDx(R, u);
+                                lane.add(weight * pointFieldComponent(field, component));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /** Warp-cooperative in-support box integral at the FINE orders: the (iv, radial) innermost loop of
+         *  each corner face runs across the lanes (nang*nr evaluations), the ng x ng block of a non-containing
+         *  box is split over (a1, a2). Term set, nodes, weights and per-term arithmetic are the same as
+         *  exactBoxIntegral; only the summation order and the accumulation into a single component differ. */
+        ALPAKA_FN_ACC void exactBoxComponentWarp(
+            auto const& acc,
+            Vec3d const& R0,
+            Vec3d const& u,
+            Vec3d const& cells,
+            int nang,
+            int nr,
+            int ng,
+            int component,
+            GaussTable const& table,
+            WarpKahan& lane)
+        {
+            auto const laneIdx = static_cast<std::size_t>(alpaka::onAcc::warp::getLaneIdx(acc));
+            auto const warpSize = static_cast<std::size_t>(alpaka::onAcc::warp::getSize(acc));
+            int const ia = exactOrderIndex(nang);
+            int const ir = exactOrderIndex(nr);
+            int const ig = exactOrderIndex(ng);
+            double const t[3]{R0.x / cells.x, R0.y / cells.y, R0.z / cells.z};
+            double const boxLo[3]{-1.5, -1.5, -1.5};
+            double const* const nodesA = table.nodes[ia];
+            double const* const weightsA = table.weights[ia];
+            double const* const nodesR = table.nodes[ir];
+            double const* const weightsR = table.weights[ir];
+            double const* const nodesG = table.nodes[ig];
+            double const* const weightsG = table.weights[ig];
+
+            for(int ix = 0; ix < 3; ++ix)
+                for(int iy = 0; iy < 3; ++iy)
+                    for(int iz = 0; iz < 3; ++iz)
+                    {
+                        double const lo[3]{boxLo[0] + ix, boxLo[1] + iy, boxLo[2] + iz};
+                        double const hi[3]{lo[0] + 1.0, lo[1] + 1.0, lo[2] + 1.0};
+                        bool contains = true;
+                        for(int a = 0; a < 3; ++a)
+                            contains = contains && lo[a] <= t[a] && t[a] <= hi[a];
+
+                        if(!contains)
+                        {
+                            for(int a0 = 0; a0 < ng; ++a0)
+                            {
+                                double const s0 = 0.5 * (lo[0] + hi[0]) + 0.5 * (hi[0] - lo[0]) * nodesG[a0];
+                                double const w0 = 0.5 * (hi[0] - lo[0]) * weightsG[a0];
+                                double const W0 = exactTscShape(s0);
+                                if(W0 == 0.0)
+                                    continue;
+                                std::size_t const innerCount = static_cast<std::size_t>(ng) * ng;
+                                for(std::size_t e = laneIdx; e < innerCount; e += warpSize)
+                                {
+                                    int const a1 = static_cast<int>(e / ng);
+                                    int const a2 = static_cast<int>(e % ng);
+                                    double const s1 = 0.5 * (lo[1] + hi[1]) + 0.5 * (hi[1] - lo[1]) * nodesG[a1];
+                                    double const s2 = 0.5 * (lo[2] + hi[2]) + 0.5 * (hi[2] - lo[2]) * nodesG[a2];
+                                    double const W = W0 * exactTscShape(s1) * exactTscShape(s2);
+                                    if(W == 0.0)
+                                        continue;
+                                    double const w1 = 0.5 * (hi[1] - lo[1]) * weightsG[a1];
+                                    double const w2 = 0.5 * (hi[2] - lo[2]) * weightsG[a2];
+                                    Vec3d const R{
+                                        R0.x - s0 * cells.x,
+                                        R0.y - s1 * cells.y,
+                                        R0.z - s2 * cells.z};
+                                    auto const field = pointFieldDx(R, u);
+                                    lane.add(w0 * w1 * w2 * W * pointFieldComponent(field, component));
+                                }
+                            }
+                            continue;
+                        }
+
+                        double segLo[3][2]{};
+                        double segHi[3][2]{};
+                        double segSign[3][2]{};
+                        int segCount[3]{};
+                        for(int a = 0; a < 3; ++a)
+                        {
+                            if(lo[a] < t[a])
+                            {
+                                segLo[a][segCount[a]] = lo[a];
+                                segHi[a][segCount[a]] = t[a];
+                                segSign[a][segCount[a]] = -1.0;
+                                ++segCount[a];
+                            }
+                            if(t[a] < hi[a])
+                            {
+                                segLo[a][segCount[a]] = t[a];
+                                segHi[a][segCount[a]] = hi[a];
+                                segSign[a][segCount[a]] = 1.0;
+                                ++segCount[a];
+                            }
+                        }
+                        for(int cx = 0; cx < segCount[0]; ++cx)
+                            for(int cy = 0; cy < segCount[1]; ++cy)
+                                for(int cz = 0; cz < segCount[2]; ++cz)
+                                {
+                                    double const L[3]{
+                                        segHi[0][cx] - segLo[0][cx],
+                                        segHi[1][cy] - segLo[1][cy],
+                                        segHi[2][cz] - segLo[2][cz]};
+                                    if(L[0] <= 0.0 || L[1] <= 0.0 || L[2] <= 0.0)
+                                        continue;
+                                    double const sgn[3]{segSign[0][cx], segSign[1][cy], segSign[2][cz]};
+                                    double const V = L[0] * L[1] * L[2];
+                                    for(int face = 0; face < 3; ++face)
+                                    {
+                                        for(int iu = 0; iu < nang; ++iu)
+                                        {
+                                            double const uu = 0.5 * (nodesA[iu] + 1.0);
+                                            double const wu = 0.5 * weightsA[iu];
+                                            std::size_t const innerCount = static_cast<std::size_t>(nang) * nr;
+                                            for(std::size_t e = laneIdx; e < innerCount; e += warpSize)
+                                            {
+                                                int const iv = static_cast<int>(e / nr);
+                                                int const irr = static_cast<int>(e % nr);
+                                                double const vv = 0.5 * (nodesA[iv] + 1.0);
+                                                double const wv = 0.5 * weightsA[iv];
+                                                double const q0 = face == 0
+                                                     ? sgn[0] * L[0]
+                                                     : (face == 1 ? sgn[0] * vv * L[0] : sgn[0] * uu * L[0]);
+                                                double const q1 = face == 0
+                                                     ? sgn[1] * uu * L[1]
+                                                     : (face == 1 ? sgn[1] * L[1] : sgn[1] * vv * L[1]);
+                                                double const q2 = face == 0
+                                                     ? sgn[2] * vv * L[2]
+                                                     : (face == 1 ? sgn[2] * uu * L[2] : sgn[2] * L[2]);
+                                                double const r = 0.5 * (nodesR[irr] + 1.0);
+                                                double const weight = 0.5 * weightsR[irr] * wu * wv * V * r * r;
+                                                Vec3d const s{
+                                                    t[0] + r * q0,
+                                                    t[1] + r * q1,
+                                                    t[2] + r * q2};
+                                                double const W
+                                                    = exactTscShape(s.x) * exactTscShape(s.y) * exactTscShape(s.z);
+                                                if(W == 0.0)
+                                                    continue;
+                                                Vec3d const R{
+                                                    -r * q0 * cells.x,
+                                                    -r * q1 * cells.y,
+                                                    -r * q2 * cells.z};
+                                                auto const field = pointFieldDx(R, u);
+                                                lane.add(weight * W * pointFieldComponent(field, component));
+                                            }
+                                        }
+                                    }
+                                }
+                    }
+        }
+    } // namespace detail
+
     /** Enqueue the exact near pass for every tile in a single device launch.
      *
      * @p deviceNearSrc is [S,6] with (relativeDx, u) per near (source, tile) pair, @p deviceNearW is [S] with
@@ -1057,6 +1489,9 @@ namespace picongpu::particles::neuralBunch
      * the resident thread count exactly as the per-tile path (the in-support quadrature local frame is
      * reserved per resident thread), so the launch stack is bounded the same way. No per-tile host
      * round-trip: the near list is one H2D transfer and the quadrature is one launch.
+     *
+     * NOTE (T48): superseded by enqueueNearExactAllTilesWarp for the tile-wide stage path; kept because the
+     * per-tile API and its launch-stack bound are part of the useExactDevice fallback surface.
      */
     template<typename T_Type = double, typename TQueue, typename TExec, typename TNearSrc, typename TNearW, typename TOffset, typename TAccumulator>
     void enqueueNearExactAllTiles(
@@ -1085,6 +1520,160 @@ namespace picongpu::particles::neuralBunch
             alpaka::onHost::FrameSpec{Vec{blocks}, Vec{blockSize}, exec},
             alpaka::KernelBundle{
                 detail::NearExactAllTilesKernel<T_Type>{settings, GaussTable::create(), cells},
+                deviceNearSrc,
+                deviceNearW,
+                deviceTileOffset,
+                accumulator});
+    }
+
+    /** One component of the exact TSC-integrated field at one point, evaluated by one warp in cooperation.
+     *
+     * Same distance policy, quadrature orders and per-term arithmetic as exactShapeFieldPoint; the innermost
+     * Gauss loops run across the lanes (per-lane Kahan, xor-tree combine). Two deliberate differences, both
+     * confined to the near pass (which only consumes the value, never the error estimate):
+     *  - only @p component is accumulated (the other five are dead work there),
+     *  - in-support points use the fine box integral only; the coarse Richardson evaluation is skipped.
+     * The result therefore equals the exactShapeFieldPoint value up to the summation-order change of the
+     * lane split (last-ulp level); it is warp-uniform on return.
+     */
+    ALPAKA_FN_ACC double exactShapeFieldComponentWarp(
+        auto const& acc,
+        Vec3d const& R0,
+        Vec3d const& u,
+        Vec3d const& cells,
+        int component,
+        ExactSettings const& settings,
+        GaussTable const& table)
+    {
+        detail::WarpKahan lane;
+        double const distance = exactSupportDistance(R0, cells);
+        if(distance == 0.0)
+        {
+            detail::exactBoxComponentWarp(
+                acc,
+                R0,
+                u,
+                cells,
+                settings.nearAngularOrderFine,
+                settings.nearRadialOrder,
+                settings.nearBoxOrderFine,
+                component,
+                table,
+                lane);
+        }
+        else
+        {
+            int const level = distance >= 4.0 ? 0 : (distance >= 2.0 ? 2 : 5);
+            detail::exactGradedSmoothComponentWarp(
+                acc,
+                R0,
+                u,
+                cells,
+                level,
+                kExactGradedOrder,
+                component,
+                table,
+                lane);
+        }
+        return detail::warpReduceSum(acc, lane.sum);
+    }
+
+    namespace detail
+    {
+        /** Warp-cooperative near pass: one warp per (tile, slot) work item, grid-stride over all tiles.
+         *
+         * The (tile, slot, source) accumulation order is the legacy one (source loop serial per item, same
+         * float cast and weight); each source value comes from exactShapeFieldComponentWarp. Lane 0 alone
+         * writes the accumulator, so every (tile, slot) cell receives exactly one add and the result is
+         * independent of the grid geometry. */
+        template<typename T_Type>
+        struct NearExactAllTilesWarpKernel
+        {
+            ExactSettings settings;
+            GaussTable table;
+            Vec3d cells;
+
+            ALPAKA_FN_ACC void operator()(
+                auto const& acc,
+                auto nearSrc,
+                auto nearW,
+                auto tileOffset,
+                auto accumulator) const
+            {
+                auto const warpSize = static_cast<std::size_t>(alpaka::onAcc::warp::getSize(acc));
+                auto const tileCount = static_cast<std::size_t>(tileOffset.getExtents()[0] - 1u);
+                auto const totalItems = tileCount * kTileSlotCount;
+                for(auto index :
+                    alpaka::onAcc::makeIdxMap(
+                        acc,
+                        alpaka::onAcc::worker::threadsInGrid,
+                        alpaka::IdxRange{alpaka::Vec{totalItems * warpSize}}))
+                {
+                    auto const item = static_cast<std::size_t>(index[0]) / warpSize;
+                    auto const tile = item / kTileSlotCount;
+                    auto const slot = item % kTileSlotCount;
+                    auto const lo = static_cast<std::size_t>(tileOffset[alpaka::Vec<std::size_t, 1>{tile}]);
+                    auto const hi = static_cast<std::size_t>(tileOffset[alpaka::Vec<std::size_t, 1>{tile + 1u}]);
+                    if(lo == hi)
+                        continue;
+                    auto const position = staggeredPosition(slot, cells);
+                    int const component = static_cast<int>(slot % 6u);
+                    double sum = 0.0;
+                    for(std::size_t s = lo; s < hi; ++s)
+                    {
+                        Vec3d const relDx{
+                            static_cast<double>(nearSrc[alpaka::Vec<std::size_t, 2>{s, 0u}]),
+                            static_cast<double>(nearSrc[alpaka::Vec<std::size_t, 2>{s, 1u}]),
+                            static_cast<double>(nearSrc[alpaka::Vec<std::size_t, 2>{s, 2u}])};
+                        Vec3d const u{
+                            static_cast<double>(nearSrc[alpaka::Vec<std::size_t, 2>{s, 3u}]),
+                            static_cast<double>(nearSrc[alpaka::Vec<std::size_t, 2>{s, 4u}]),
+                            static_cast<double>(nearSrc[alpaka::Vec<std::size_t, 2>{s, 5u}])};
+                        Vec3d const R0{position.x - relDx.x, position.y - relDx.y, position.z - relDx.z};
+                        auto const value = exactShapeFieldComponentWarp(acc, R0, u, cells, component, settings, table);
+                        sum += static_cast<double>(nearW[alpaka::Vec<std::size_t, 1>{s}])
+                               * static_cast<double>(static_cast<float>(value));
+                    }
+                    if(alpaka::onAcc::warp::getLaneIdx(acc) == 0u)
+                        accumulator[alpaka::Vec<std::size_t, 2>{tile, slot}] += sum;
+                }
+            }
+        };
+    } // namespace detail
+
+    /** Enqueue the warp-parallel exact near pass for every tile in a single device launch.
+     *
+     * Same buffers and contract as enqueueNearExactAllTiles. The work items are the (tile, slot) pairs of
+     * all @p tileCount tiles (one warp each, 4 warps per 128-thread block), so the grid scales with the
+     * near work: tiles with no near sources early-exit on the device. The kernel carries no per-thread
+     * local memory (the quadrature state is loop-local; the Gauss table rides in the kernel parameters),
+     * so no free-memory thread cap is applied and the device caps residency itself; on a 28-SM part with
+     * 128-thread blocks the grid still saturates the device because each resident warp now evaluates a
+     * quadrature slice 32 threads wide instead of one serial thread.
+     */
+    template<typename T_Type = double, typename TQueue, typename TExec, typename TNearSrc, typename TNearW, typename TOffset, typename TAccumulator>
+    void enqueueNearExactAllTilesWarp(
+        TQueue& queue,
+        TExec exec,
+        TNearSrc const& deviceNearSrc,
+        TNearW const& deviceNearW,
+        TOffset const& deviceTileOffset,
+        std::size_t tileCount,
+        Vec3d const& cells,
+        ExactSettings const& settings,
+        TAccumulator& accumulator)
+    {
+        if(tileCount == 0u)
+            return;
+        using Vec = alpaka::Vec<std::uint32_t, 1>;
+        constexpr std::uint32_t blockSize = 128u;
+        constexpr std::uint32_t warpsPerBlock = 4u; // 128 threads / 32-lane warp
+        auto const totalItems = static_cast<std::uint64_t>(tileCount) * kTileSlotCount;
+        auto const blocks = static_cast<std::uint32_t>((totalItems + warpsPerBlock - 1u) / warpsPerBlock);
+        queue.enqueue(
+            alpaka::onHost::FrameSpec{Vec{blocks}, Vec{blockSize}, exec},
+            alpaka::KernelBundle{
+                detail::NearExactAllTilesWarpKernel<T_Type>{settings, GaussTable::create(), cells},
                 deviceNearSrc,
                 deviceNearW,
                 deviceTileOffset,
