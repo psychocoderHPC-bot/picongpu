@@ -152,6 +152,11 @@ reference keys are `reference`, `targets`, `target`, then those same names. Use
 `--candidate-key`/`--reference-key` when a file has several arrays. Non-finite
 values are rejected.
 
+The gate consumes pre-normalized tile arrays, so a raw openPMD field dump
+cannot be fed in directly: it first needs a converter that applies the
+model-format normalization and selects the correct time level. No such
+converter ships with this script; that end-to-end path is a known gap.
+
 ```bash
 python3 tools/neural-bunch/eval/field_gate.py candidate.npz reference.npz \
     --config gate.json --output report.json

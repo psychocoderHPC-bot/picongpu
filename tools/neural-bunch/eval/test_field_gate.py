@@ -40,6 +40,17 @@ class S0DefinitionTest(unittest.TestCase):
         s0 = fg.reference_tile_s0(tile)
         self.assertAlmostEqual(s0["E"], 16.0 * 0.5, places=15)
 
+    def test_multi_component_point_uses_vector_norm(self):
+        # One point with E=(0.6, 0.8, 0): the point norm is 1.0, so
+        # S0 = 16 * 1.0.  A "max over components" reading would yield
+        # 16 * 0.8 = 12.8 instead.  This pins the definition.
+        tile = np.zeros((256, 6), dtype=np.float64)
+        tile[0, 0] = 0.6
+        tile[0, 1] = 0.8
+        s0 = fg.reference_tile_s0(tile)
+        self.assertAlmostEqual(s0["E"], 16.0 * 1.0, places=15)
+        self.assertNotAlmostEqual(s0["E"], 16.0 * 0.8, places=15)
+
     def test_groups_are_independent(self):
         tile = np.zeros((256, 6), dtype=np.float64)
         tile[:, 3] = 0.25  # cBx everywhere, E stays zero
@@ -112,6 +123,22 @@ class GateBoundaryTest(unittest.TestCase):
         self.assertAlmostEqual(e["relative_l2"], 1e-3, places=14)
         self.assertTrue(e["pass"])
         self.assertTrue(e["absolute_normalized"])
+
+    def test_multi_point_error_uses_l2_not_l1(self):
+        # Two Ex errors of magnitude 3 and 4 at different points: ||err||_2 = 5,
+        # while an L1 norm would give 7.  The reference is uniform 0.1, so
+        # ||A_ref|| = 1.6 and it exceeds the constant S0 = 1.0.  The asserted
+        # ratio therefore changes if the implementation regresses to L1.
+        ref = uniform_tile(0.1)
+        cand = ref.copy()
+        cand[0, 0] = 0.1 + 3.0
+        cand[1, 0] = 0.1 - 4.0
+        config = {"gate": 1e-3, "s0": {"mode": "constant", "E": 1.0, "cB": 1.0}}
+        e = self._run(cand, ref, config)["cases"][0]["E"]
+        self.assertAlmostEqual(e["error_norm"], 5.0, places=15)
+        self.assertAlmostEqual(e["denominator"], 1.6, places=15)
+        self.assertAlmostEqual(e["relative_l2"], 5.0 / 1.6, places=15)
+        self.assertNotAlmostEqual(e["relative_l2"], 7.0 / 1.6, places=15)
 
     def test_E_and_cB_are_reported_separately(self):
         ref = np.zeros((256, 6), dtype=np.float64)

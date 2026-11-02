@@ -15,7 +15,7 @@ per case from the reference tile as
     S0_G = sqrt(N_points) * max_point ||G_point||_2,   N_points = 256,
 
 which is the historical preregistered scale documented at
-``tools/neural-bunch/training/neuralbunch/reference_data.py:92-102`` and
+``tools/neural-bunch/training/neuralbunch/reference_data.py:92-105`` and
 ``tools/neural-bunch/training/README.md:125-139`` (``sqrt(256) = 16``).
 
 The frozen config is a JSON file and MUST declare how ``S0`` is obtained.  A
@@ -395,7 +395,7 @@ def evaluate(
                 "same as the input, i.e. dimensionless normalized tile field "
                 "E_tilde and cB_tilde; inputs must be pre-normalized"
             ),
-            "reference_tile_source": "tools/neural-bunch/training/neuralbunch/reference_data.py:92-102",
+            "reference_tile_source": "tools/neural-bunch/training/neuralbunch/reference_data.py:92-105",
         },
         "s0_specification": dict(spec),
         "cases": cases,
