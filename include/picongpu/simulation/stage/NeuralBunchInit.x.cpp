@@ -828,7 +828,8 @@ namespace picongpu
                                         params.bandedFarMinCells,
                                         params.tileWideBandStats,
                                         deviceTileValues,
-                                        deviceBandCounts);
+                                        deviceBandCounts,
+                                        true);
                                     // --- Exact near pass -------------------------------------------------------
                                     // The tile-wide point field above skipped the near (source, tile) pairs (targets
                                     // inside/near a source's TSC support). Build the per-tile near list with the same

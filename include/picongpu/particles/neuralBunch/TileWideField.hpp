@@ -23,6 +23,7 @@
 
 #include "Features.hpp"
 #include "PointField.hpp"
+#include "QuadrupoleCorrection.hpp"
 #include "TileGeometry.hpp"
 
 #include <alpaka/alpaka.hpp>
@@ -116,6 +117,7 @@ namespace picongpu::particles::neuralBunch
             double bandNearCells{};
             double bandFarCells{};
             bool computeBands{};
+            bool quadrupoleMid{};
 
             ALPAKA_FN_ACC void operator()(
                 auto const& acc,
@@ -198,7 +200,23 @@ namespace picongpu::particles::neuralBunch
                         velocities[alpaka::Vec<std::size_t, 2>{source, 2u}]};
                     // Host pointFieldSlot uses R = x_output - x_source.
                     Vec3d const R{stagger.x - relativeDx.x, stagger.y - relativeDx.y, stagger.z - relativeDx.z};
-                    auto const field = pointFieldDx(R, u);
+                    auto field = pointFieldDx(R, u);
+                    // Mid band only: add the quadrupole shape correction. The same band window the classifier uses
+                    // keeps the near (exact quadrature) and far bands bit-identical to the point-field-only path.
+                    if(quadrupoleMid)
+                    {
+                        double const r2 = R.x * R.x + R.y * R.y + R.z * R.z;
+                        if(r2 >= bandNearCells * bandNearCells && r2 <= bandFarCells * bandFarCells)
+                        {
+                            auto const corr = quadrupoleCorrectionDx(R, u, cellsDx);
+                            field.E.x += corr.E.x;
+                            field.E.y += corr.E.y;
+                            field.E.z += corr.E.z;
+                            field.B.x += corr.B.x;
+                            field.B.y += corr.B.y;
+                            field.B.z += corr.B.z;
+                        }
+                    }
                     double const contribution
                         = component < 3 ? (component == 0 ? field.E.x : (component == 1 ? field.E.y : field.E.z))
                                         : (component == 3 ? field.B.x : (component == 4 ? field.B.y : field.B.z));
@@ -223,6 +241,9 @@ namespace picongpu::particles::neuralBunch
      * @param charges ``[S]`` signed charge ``q/e = -weight``; zero-weight sources are skipped.
      * @param tileValues ``[T,1536]`` accumulator, added in place.
      * @param bandCounts ``[T,3]`` near/mid/far pair counters, added in place.
+     * @param quadrupoleMid add the analytic quadrupole shape correction for pairs inside the mid band
+     *        (``bandNearCells <= |R| <= bandFarCells``). Off by default so the point-field parity tests and callers
+     *        that want the bare point field keep the previous behaviour.
      */
     template<typename TQueue, typename TExec>
     void enqueueTileWidePointField(
@@ -240,7 +261,8 @@ namespace picongpu::particles::neuralBunch
         double bandFarCells,
         bool computeBands,
         auto& tileValues,
-        auto& bandCounts)
+        auto& bandCounts,
+        bool quadrupoleMid = false)
     {
         (void) sourceCount;
         auto const tileCount = static_cast<std::uint64_t>(tileCounts[0]) * static_cast<std::uint64_t>(tileCounts[1])
@@ -265,7 +287,8 @@ namespace picongpu::particles::neuralBunch
                     nearThresholdCells,
                     bandNearCells,
                     bandFarCells,
-                    computeBands},
+                    computeBands,
+                    quadrupoleMid},
                 positions,
                 velocities,
                 charges,
