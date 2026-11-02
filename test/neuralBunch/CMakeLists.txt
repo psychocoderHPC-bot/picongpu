@@ -101,6 +101,24 @@ if(alpaka_DEP_CUDA)
             ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
     )
     add_test(NAME neuralBunchDevicePipelineTest COMMAND neuralBunchDevicePipelineTest cuda)
+    # Near-band accuracy: the default tile-wide path routes the TSC-support / coincident near band to the exact
+    # device quadrature and stays within the frozen 1e-3 gate, instead of the singular analytic point kernel.
+    add_executable(neuralBunchNearBandAccuracyTest nearBandAccuracyTest.cu)
+    target_compile_features(neuralBunchNearBandAccuracyTest PRIVATE cxx_std_20)
+    target_include_directories(neuralBunchNearBandAccuracyTest PRIVATE "${PIConGPUapp_SOURCE_DIR}/..")
+    target_link_libraries(
+        neuralBunchNearBandAccuracyTest
+        PRIVATE alpaka::nn alpakaVendor::alpakaVendor nlohmann_json::nlohmann_json OpenMP::OpenMP_CXX
+    )
+    alpaka_finalize(neuralBunchNearBandAccuracyTest)
+    target_compile_definitions(
+        neuralBunchNearBandAccuracyTest
+        PRIVATE
+            ALPAKA_CMAKE_TARGET_HEADERS_FINALIZE_CALLED
+            ALPAKA_CMAKE_TARGET_CUDA_FINALIZE_CALLED
+            ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
+    )
+    add_test(NAME neuralBunchNearBandAccuracyTest COMMAND neuralBunchNearBandAccuracyTest cuda)
 endif(alpaka_DEP_CUDA)
 
 # openPMD position-decode test: independent, equal and absent offset units.
