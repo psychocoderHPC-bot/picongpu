@@ -63,8 +63,15 @@ namespace picongpu::neuralBunch
         std::string modelPath = "";
         //! Number of global source particles streamed per collective chunk.
         std::uint64_t chunkSize = 1u << 20;
-        //! Number of tiles evaluated per inference batch (accepted, Phase A uses one tile at a time).
-        std::uint32_t tileBatch = 1;
+        /** Number of tiles whose accumulated values one store kernel writes.
+         *
+         * The store loop already splits the local tiles into ``ceil(tiles / tileBatch)`` launches and clamps the
+         * last (partial) batch, so any value is safe. The default used to be 1, which enqueued one store kernel
+         * per tile (about 32k launches per rank for 256^3 on two ranks) for a single 4-byte write per output.
+         * 4096 keeps the launch count small while bounding each launch to ``4096 * 1536`` outputs, so it holds
+         * for grids far larger than the production case. This only changes launch granularity; every tile is
+         * still stored exactly once with the same value. */
+        std::uint32_t tileBatch = 4096;
         //! Must stay true: the Phase B hybrid policy always uses the reference fallback.
         bool enableReferenceFallback = true;
         /** Field-initializer policy (PICMI uses the same enum names).
@@ -87,9 +94,21 @@ namespace picongpu::neuralBunch
         //! Unset means: use ``banded`` when enabled, which is the production default. ``neural`` remains
         //! selectable for compatibility but is not the default.
         std::optional<FieldInitializer> fieldInitializer{};
-        //! ``banded``: distances below this many cells use the exact reference (or ``near_model``).
+        //! ``banded``: distances below this many (dx-normalized) cells are the near band and use the exact TSC
+        //! quadrature (or ``near_model`` when ``useModelForNear`` is set). The tile-wide default path uses this as the
+        //! near threshold: the analytic point field skips every (source, tile) pair within this distance and the exact
+        //! device quadrature evaluates them, so a target inside a source's TSC support is never evaluated with the
+        //! singular point kernel. Raising it widens the exact band into the mid band at a cost (see the far-field note
+        //! on ``bandedFarMinCells``). The exact behaviour is the default.
         double bandedNearMaxCells = 4.0;
-        //! ``banded``: distances above this many cells use the analytic far field (with ``far_multipole``).
+        //! ``banded``: distances above this many cells use the analytic far field (with ``far_multipole``). The point
+        //! field's leading error scales as ~ (source extent / distance)^2, so it falls below the 1e-3 gate only beyond
+        //! a distance of roughly (1.5..3 cells) / sqrt(1e-3) ~ 47..95 cells at aspect 1 (wider at larger aspect; the
+        //! measured held-out thresholds are ~32-256 cells at aspect<=2 and >512 at aspect~10). The mid band between
+        //! ``bandedNearMaxCells`` and this value therefore does not meet 1e-3 by itself (measured mean ~2.5%); to make
+        //! the default pass 1e-3 in the mid band, raise ``bandedNearMaxCells`` to route that range to the exact
+        //! quadrature, enable ``far_multipole``, or use ``referenceOnly``. The near band below ``bandedNearMaxCells``
+        //! is exact by construction.
         double bandedFarMinCells = 48.0;
         //! ``banded``: use the configured model encoder/decoder for near pairs instead of the exact reference.
         //! The model is not validated in the near band; enabling this emits a loud warning.
@@ -106,9 +125,12 @@ namespace picongpu::neuralBunch
         double bandedExactMaxCells = 128.0;
         //! Aspect scaling uses 48 cells for max(a_y,a_z)<=2 and this value at aspect>=10 (BANDS.md).
         double bandedExactAspect10Cells = 512.0;
-        //! ``banded``: evaluate the analytic near/mid/far point field with the tile-centric device kernel
-        //! (one block per tile, one thread per staggered output). This removes the per-pair host loop.
-        //! Automatically disabled when a near/mid model or the exact device quadrature is requested.
+        //! ``banded``: evaluate the analytic point field with the tile-centric device kernel (one block per tile, one
+        //! thread per staggered output), which removes the per-pair host loop. The near band (distances below
+        //! ``bandedNearMaxCells``) is NOT evaluated with the point field: the kernel skips those pairs and a per-tile
+        //! exact device quadrature pass fills them in, so the default path is accurate in the near band and only uses
+        //! the analytic point field for the mid/far bands. Automatically disabled when a near/mid model or the exact
+        //! device quadrature is requested.
         bool tileWideField = true;
         //! ``banded``: count near/mid/far pairs on the device. The counting adds one minimum-distance
         //! evaluation per source and output; disable it on large production runs where the statistics are

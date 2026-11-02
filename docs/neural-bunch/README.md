@@ -53,14 +53,14 @@ dependency, and the initializer stage compiles to nothing.
 | `tileBatch` | `std::uint32_t` | Tiles whose accumulated values one store kernel writes. |
 | `fieldInitializer` | enum | Unset means `banded` when enabled. `neural`, `validatedNeural`, `referenceOnly`, `banded` are selectable. |
 | `enableReferenceFallback` | `bool` | Under `neural`, route out-of-domain pairs to the exact reference (`true`, default) or fail collectively; must stay `true`. |
-| `bandedNearMaxCells` | `double` | `banded` near-band limit in cells, default `4`. |
+| `bandedNearMaxCells` | `double` | `banded` near-band limit in `dx` units, default `4`. Near pairs use the exact TSC quadrature (device in the default tile-wide path, host FP64 in the legacy path); raising it widens the exact band into the mid band. |
 | `bandedFarMinCells` | `double` | `banded` far-band start in cells, default `48`. |
 | `useModelForNear` | `bool` | `banded`: use the model for near pairs instead of the exact reference. Default `false`; enabling it warns because the near band was never validated. |
 | `useModelForMid` | `std::optional<bool>` | `banded`: use the primary encoder/decoder for mid pairs. Default off (analytic point field only). |
 | `useMidCorrection` | `bool` | `banded`: add the learned `mid_correction` head. Default off; measured worse than the point field alone. |
 | `useExactDevice` | `bool` | Evaluate near and mid with the FP64 device quadrature instead of the host reference or the point field. Default `false`. |
 | `bandedExactMaxCells` | `double` | Device-quadrature distance cutoff, default `128` cells. `<= 0` selects aspect-scaled limits: 48 cells up to aspect 2, 512 cells at aspect 10. |
-| `tileWideField` | `bool` | Use the tile-centric device kernel for the analytic near/mid/far point field. Default `true`. |
+| `tileWideField` | `bool` | Use the tile-centric device kernel for the analytic mid/far point field; the near band is skipped by the kernel and filled by a per-tile exact device quadrature pass. Default `true`. |
 | `tileWideBandStats` | `bool` | Count near/mid/far pairs on the device. Default `true`; set `false` on production runs. |
 | `timePolicy` | `int` | Must stay `0`: the source time equals the injection time, so no linear drift is applied. |
 
@@ -71,15 +71,23 @@ iteration times are all errors.
 
 ## Band semantics (`banded`, the enabled default)
 
-- **Near** (`d < bandedNearMaxCells`, default 4 cells): the exact FP64 reference
-  on the host, or the FP64 device quadrature when `useExactDevice` is set. The
-  model is used only when `useModelForNear` is explicitly enabled and a near or
-  primary model is present.
-- **Mid** (`4 .. 48` cells): the analytic point field. The primary model and the
-  learned `mid_correction` head are opt-in and both were measured worse than the
-  point field alone.
+- **Near** (`d < bandedNearMaxCells`, default 4 cells): the exact TSC quadrature.
+  The default tile-wide path uses the FP64 device quadrature (per-tile pass); the
+  legacy path uses the exact FP64 host reference, and the device quadrature when
+  `useExactDevice` is set. The model is used only when `useModelForNear` is
+  explicitly enabled and a near or primary model is present. This band is exact by
+  construction, so a target inside a source's TSC support (and the coincident
+  point) is never evaluated with the singular point kernel.
+- **Mid** (`4 .. 48` cells): the analytic point field. The leading point-field
+  error scales as ~ (source extent / distance)^2, so the mid band does not meet
+  the 1e-3 gate by itself (measured mean ~2.5%). The primary model and the learned
+  `mid_correction` head are opt-in and both were measured worse than the point
+  field alone; to make the mid band pass 1e-3, raise `bandedNearMaxCells`, enable
+  `far_multipole`, or use `referenceOnly`.
 - **Far** (`d >= bandedFarMinCells`, default 48 cells): the analytic point field.
-  An optional `far_multipole` Taylor head is opt-in and is not used by default.
+  The point field clears 1e-3 only beyond ~47-95 cells at aspect 1 (wider at
+  larger aspect). An optional `far_multipole` Taylor head is opt-in and is not
+  used by default.
 
 Distances are the MODEL-FORMAT minimum over the 1536 staggered tile outputs,
 measured in `dx` units. `a_y` and `a_z` come from the grid; there is no cubic
@@ -88,17 +96,25 @@ cell assumption.
 ### Tile-centric device kernel (`tileWideField`)
 
 With the default `tileWideField = true` and no near/mid model, correction or
-exact quadrature, the whole source-tile loop runs on the device. Each source
-chunk is uploaded once (`pos/dx`, `u`, `q/e`); one block owns one tile and 256
+explicit exact quadrature, the whole source-tile loop runs on the device. Each
+source chunk is uploaded once (`pos/dx`, `u`, `q/e`); one block owns one tile and 256
 staggered outputs, so a tile uses six blocks (1536 threads). Every thread walks
 the chunk sources in ascending order, which fixes the accumulation order for a
-given chunk size. The kernel evaluates the analytic point field, applies the
-near threshold on the device, and records near/mid/far counters.
+given chunk size. The kernel evaluates the analytic point field for the mid and
+far bands, skips the near band, and records near/mid/far counters.
 
-The tile kernel computes the point field in every band, so near pairs at or
-inside `bandedNearMaxCells` are skipped rather than evaluated exactly. Use the
-legacy banded path (disable `tileWideField`, or select `useExactDevice`) when
-the near band must be exact.
+The near band (the pairs the singular point kernel cannot evaluate, including a
+target inside a source's TSC support) is NOT computed by the point field. The
+kernel skips every near `(source, tile)` pair (a cheap per-slot box test that is a
+super-set of the exact near test, so no pair is dropped), and a per-tile pass then
+feeds those pairs to the existing exact TSC device quadrature
+(`enqueueExactShapeFieldTileAccumulate`), which adds them into the same device
+accumulator. Only the genuinely near set (a source is near only the few tiles
+around it) touches the quadrature, so the exact cost stays a small fraction of the
+point-field work. The default path is therefore exact in the near band and
+analytic only in the mid/far bands; the legacy per-tile path still runs when
+`useExactDevice`, `useModelForNear`, `useModelForMid`, `useMidCorrection` or
+`NEURAL_BUNCH_FORCE_REFERENCE` is set.
 
 The tile-wide path is disabled automatically when `useExactDevice`,
 `useModelForNear`, `useModelForMid`, `useMidCorrection` or the validation-only
@@ -382,7 +398,7 @@ Options mirror the C++ parameters:
 | `source_species` | `species` | `"e"` | particle species inside the series |
 | `model_path` | `modelPath` | required only for `neural`/`validatedNeural` | artifact path prefix |
 | `chunk_size` | `chunkSize` | `1048576` | source particles per collective chunk |
-| `tile_batch` | `tileBatch` | `1` | tiles per store batch |
+| `tile_batch` | `tileBatch` | `4096` | tiles per store batch |
 | `field_initializer` | `fieldInitializer` | `"banded"` | `banded`, `neural`, `validatedNeural`, `referenceOnly` |
 | `enable_reference_fallback` | `enableReferenceFallback` | `True` | reference outside the model domain |
 | `time_policy` | `timePolicy` | `0` | must stay `0` |

@@ -524,8 +524,11 @@ namespace picongpu
                                                                               48.0,
                                                                               params.bandedExactAspect10Cells})
                                                                     : 0.0;
-                    // Bounded source batch used by the device encoder/decoder and the point field.
-                    std::size_t const sourceBatch = std::max<std::size_t>(64u, params.tileBatch);
+                    // Bounded source batch used by the device encoder/decoder and the point field. This is
+                    // independent of ``tileBatch``, which only controls store-kernel granularity: keeping the
+                    // source batch fixed means raising the store batch default cannot change how many sources
+                    // the legacy per-tile path stages at once.
+                    constexpr std::size_t sourceBatch = 64u;
                     tg::DomainBounds domain{};
                     tg::ValidatedBand validatedBand;
                     tg::ValidatedBand const* band = nullptr;
@@ -614,6 +617,13 @@ namespace picongpu
                     std::uint64_t exactPointPairs = 0;
                     double exactDeviceSeconds = 0.0;
                     double exactPointSeconds = 0.0;
+                    // Default tile-wide path: how many (source, tile) pairs move from the analytic point field to the
+                    // exact device quadrature (the near set the point field skips). ``tileWideSourceTilePairs`` is the
+                    // total number of non-zero (source, tile) pairs, so the exact fraction is
+                    // tileWideNearExactPairs / tileWideSourceTilePairs.
+                    std::uint64_t tileWideNearExactPairs = 0;
+                    std::uint64_t tileWideSourceTilePairs = 0;
+                    double tileWideNearExactSeconds = 0.0;
 
                     MPI_Comm const comm = Environment<simDim>::get().GridController().getCommunicator().getMPIComm();
                     int const rank = Environment<simDim>::get().GridController().getGlobalRank();
@@ -766,6 +776,7 @@ namespace picongpu
                                         = alpaka::onHost::allocHost<double>(alpaka::Vec{valid, std::size_t{3}});
                                     auto hostCharges = alpaka::onHost::allocHost<double>(alpaka::Vec{valid});
                                     std::size_t target = 0u;
+                                    std::size_t validNonZero = 0u;
                                     for(std::size_t i = 0; i < chunk.size(); ++i)
                                     {
                                         if(!chunk.valid[i])
@@ -780,8 +791,14 @@ namespace picongpu
                                         hostCharges[alpaka::Vec<std::size_t, 1>{target}] = -chunk.weight[i];
                                         if(chunk.weight[i] == 0.0)
                                             stats.zeroWeightPairs += tileCount;
+                                        else
+                                            ++validNonZero;
                                         ++target;
                                     }
+                                    // Every non-zero source is a (source, tile) pair with every local tile; the near
+                                    // pairs below move from the point field to the exact quadrature.
+                                    tileWideSourceTilePairs += static_cast<std::uint64_t>(validNonZero)
+                                                               * static_cast<std::uint64_t>(tileCount);
                                     auto devicePositions = alpaka::onHost::allocLike(queue.getDevice(), hostPositions);
                                     auto deviceVelocities
                                         = alpaka::onHost::allocLike(queue.getDevice(), hostVelocities);
@@ -792,6 +809,10 @@ namespace picongpu
                                     hostPositions.keepAlive(queue);
                                     hostVelocities.keepAlive(queue);
                                     hostCharges.keepAlive(queue);
+                                    // The near threshold is now the documented near band, not 0.0: the point field
+                                    // skips every (source, tile) pair flagged by sourceNearBox and the exact
+                                    // quadrature pass below fills them in. This is what stops the default path from
+                                    // evaluating a target inside a source's TSC support with the singular kernel.
                                     enqueueTileWidePointField(
                                         queue,
                                         exec,
@@ -802,12 +823,159 @@ namespace picongpu
                                         Vec3d{1.0, aspectY, aspectZ},
                                         offset,
                                         grid.count,
-                                        0.0,
+                                        params.bandedNearMaxCells,
                                         params.bandedNearMaxCells,
                                         params.bandedFarMinCells,
                                         params.tileWideBandStats,
                                         deviceTileValues,
                                         deviceBandCounts);
+                                    // --- Exact near pass -------------------------------------------------------
+                                    // The tile-wide point field above skipped the near (source, tile) pairs (targets
+                                    // inside/near a source's TSC support). Build the per-tile near list with the same
+                                    // sourceNearBox test the kernel used, and evaluate those pairs with the exact TSC
+                                    // device quadrature, adding into the same deviceTileValues accumulator. Only the
+                                    // genuinely near set (a source is near O(1) tiles) touches the quadrature, so this
+                                    // stays a small fraction of the O(N_s * N_tiles) point-field work.
+                                    {
+                                        auto const nearStart = std::chrono::steady_clock::now();
+                                        double const dx0 = cellSizeSI[0];
+                                        Vec3d const cellsDx{1.0, aspectY, aspectZ};
+                                        double const cellDxA[3]{cellsDx.x, cellsDx.y, cellsDx.z};
+                                        double const nearThreshold = params.bandedNearMaxCells;
+                                        // A source is near a local tile only within (tile extent + threshold) of the
+                                        // local domain in every axis; reject the far ones before the small scan.
+                                        std::array<double, 3> marginCells{};
+                                        // Per-axis neighbourhood radius: a source is box-near to a tile only within
+                                        // nearThreshold/cellsDx of the tile region, so the scan must reach that many
+                                        // tiles past the containing one (the aspect can stretch this in a thin axis).
+                                        std::array<int, 3> radius{};
+                                        for(int axis = 0; axis < 3; ++axis)
+                                        {
+                                            marginCells[axis] = static_cast<double>(tg::tileSize[axis])
+                                                                + nearThreshold / cellDxA[axis];
+                                            radius[axis] = static_cast<int>(std::ceil(
+                                                               nearThreshold / cellDxA[axis] / tg::tileSize[axis]))
+                                                           + 2;
+                                        }
+                                        auto const& tiles = grid.tiles;
+                                        std::vector<std::vector<double>> nearRU(tileCount);
+                                        std::vector<std::vector<double>> nearW(tileCount);
+                                        std::vector<std::size_t> nearCounts(tileCount, 0u);
+                                        for(std::size_t i = 0; i < chunk.size(); ++i)
+                                        {
+                                            if(!chunk.valid[i] || chunk.weight[i] == 0.0)
+                                                continue;
+                                            double const posCell[3]{
+                                                chunk.position[3 * i + 0] / cellSizeSI[0],
+                                                chunk.position[3 * i + 1] / cellSizeSI[1],
+                                                chunk.position[3 * i + 2] / cellSizeSI[2]};
+                                            bool const close
+                                                = std::abs(
+                                                      posCell[0] - (static_cast<double>(offset[0]) + size[0] / 2.0))
+                                                      <= size[0] / 2.0 + marginCells[0]
+                                                  && std::abs(
+                                                         posCell[1] - (static_cast<double>(offset[1]) + size[1] / 2.0))
+                                                         <= size[1] / 2.0 + marginCells[1]
+                                                  && std::abs(
+                                                         posCell[2] - (static_cast<double>(offset[2]) + size[2] / 2.0))
+                                                         <= size[2] / 2.0 + marginCells[2];
+                                            if(!close)
+                                                continue;
+                                            int const base[3]{
+                                                static_cast<int>(std::floor((posCell[0] - offset[0]) / tg::tileNx)),
+                                                static_cast<int>(std::floor((posCell[1] - offset[1]) / tg::tileNy)),
+                                                static_cast<int>(std::floor((posCell[2] - offset[2]) / tg::tileNz))};
+                                            double const srcDx[3]{
+                                                chunk.position[3 * i + 0] / dx0,
+                                                chunk.position[3 * i + 1] / dx0,
+                                                chunk.position[3 * i + 2] / dx0};
+                                            // A source is near at most a few tiles; scan a small neighbourhood and let
+                                            // the exact box test (identical to the kernel's) decide membership.
+                                            for(int dk = -radius[2]; dk <= radius[2]; ++dk)
+                                                for(int dj = -radius[1]; dj <= radius[1]; ++dj)
+                                                    for(int di = -radius[0]; di <= radius[0]; ++di)
+                                                    {
+                                                        int const ti = base[0] + di;
+                                                        int const tj = base[1] + dj;
+                                                        int const tk = base[2] + dk;
+                                                        if(ti < 0 || tj < 0 || tk < 0)
+                                                            continue;
+                                                        if(ti >= grid.count[0] || tj >= grid.count[1]
+                                                           || tk >= grid.count[2])
+                                                            continue;
+                                                        std::size_t const tileIndex = static_cast<std::size_t>(
+                                                            ti + grid.count[0] * (tj + grid.count[1] * tk));
+                                                        auto const& originCell = tiles[tileIndex].origin;
+                                                        Vec3d const relativeDx{
+                                                            srcDx[0] - static_cast<double>(originCell[0]) * cellsDx.x,
+                                                            srcDx[1] - static_cast<double>(originCell[1]) * cellsDx.y,
+                                                            srcDx[2] - static_cast<double>(originCell[2]) * cellsDx.z};
+                                                        if(!tileWideDetail::sourceNearBox(
+                                                               relativeDx,
+                                                               cellsDx,
+                                                               nearThreshold))
+                                                            continue;
+                                                        auto& ru = nearRU[tileIndex];
+                                                        ru.push_back(relativeDx.x);
+                                                        ru.push_back(relativeDx.y);
+                                                        ru.push_back(relativeDx.z);
+                                                        ru.push_back(chunk.u[3 * i + 0]);
+                                                        ru.push_back(chunk.u[3 * i + 1]);
+                                                        ru.push_back(chunk.u[3 * i + 2]);
+                                                        nearW[tileIndex].push_back(-chunk.weight[i]);
+                                                        ++nearCounts[tileIndex];
+                                                    }
+                                        }
+                                        // Evaluate each tile's near list in fixed tile order (deterministic).
+                                        for(std::size_t tileIndex = 0; tileIndex < tileCount; ++tileIndex)
+                                        {
+                                            std::size_t const count = nearCounts[tileIndex];
+                                            if(count == 0u)
+                                                continue;
+                                            auto const& ru = nearRU[tileIndex];
+                                            auto const& w = nearW[tileIndex];
+                                            auto hostSources = alpaka::onHost::allocHost<double>(
+                                                alpaka::Vec{count, std::size_t{6}});
+                                            auto hostWeights = alpaka::onHost::allocHost<double>(alpaka::Vec{count});
+                                            for(std::size_t s = 0; s < count; ++s)
+                                            {
+                                                for(std::size_t c = 0; c < 6u; ++c)
+                                                    hostSources[alpaka::Vec<std::size_t, 2>{s, c}] = ru[s * 6u + c];
+                                                hostWeights[alpaka::Vec<std::size_t, 1>{s}] = w[s];
+                                            }
+                                            auto deviceSources
+                                                = alpaka::onHost::allocLike(queue.getDevice(), hostSources);
+                                            auto deviceWeights
+                                                = alpaka::onHost::allocLike(queue.getDevice(), hostWeights);
+                                            alpaka::onHost::memcpy(queue, deviceSources, hostSources);
+                                            alpaka::onHost::memcpy(queue, deviceWeights, hostWeights);
+                                            hostSources.keepAlive(queue);
+                                            hostWeights.keepAlive(queue);
+                                            // The in-support quadrature needs ~21 KiB of local stack per thread; cap
+                                            // the resident thread count so the launch stack fits (same bound as the
+                                            // legacy exact path).
+                                            auto const freeBytes = device.getFreeGlobalMemBytes();
+                                            std::size_t const exactMaxThreads = std::clamp<std::size_t>(
+                                                freeBytes / (4u * 24u * 1024u),
+                                                512u,
+                                                65536u);
+                                            auto tileTarget = tileValueView(tileIndex);
+                                            enqueueExactShapeFieldTileAccumulate<double>(
+                                                queue,
+                                                exec,
+                                                deviceSources,
+                                                deviceWeights,
+                                                count,
+                                                cellsDx,
+                                                ExactSettings{},
+                                                tileTarget,
+                                                exactMaxThreads);
+                                            tileWideNearExactPairs += count;
+                                        }
+                                        tileWideNearExactSeconds += std::chrono::duration<double>(
+                                                                        std::chrono::steady_clock::now() - nearStart)
+                                                                        .count();
+                                    }
                                     tileWideSeconds
                                         += std::chrono::duration<double>(std::chrono::steady_clock::now() - wideStart)
                                                .count();
@@ -1183,6 +1351,16 @@ namespace picongpu
                                 bandedModelPairs = stats.globalParticles * tileCount - stats.zeroWeightPairs;
                             }
                             bandedBandSeconds[1] += tileWideSeconds;
+                            double const nearExactFraction = tileWideSourceTilePairs != 0u
+                                                                 ? 100.0 * static_cast<double>(tileWideNearExactPairs)
+                                                                       / static_cast<double>(tileWideSourceTilePairs)
+                                                                 : 0.0;
+                            log<picLog::PHYSICS>(
+                                "neuralBunch: rank=%1% tileWideField near->exact: %2% of %3% (source, tile) pairs "
+                                "(%4%%% of all pairs) use the exact device quadrature; the analytic point field "
+                                "handles the rest. nearExactSeconds=%5%.")
+                                % rank % tileWideNearExactPairs % tileWideSourceTilePairs % num(nearExactFraction)
+                                % num(tileWideNearExactSeconds);
                         }
                     }
 

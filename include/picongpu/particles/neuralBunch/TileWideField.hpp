@@ -74,6 +74,29 @@ namespace picongpu::particles::neuralBunch
             return alpaka::math::sqrt(best2);
         }
 
+        /** Cheap per-(source, tile) near test: the source lies inside the tile's cell box expanded by
+         * @p threshold (dx units), i.e. ``relativeDx`` is within ``[-threshold, tileSize + threshold]`` per axis.
+         *
+         * This is a super-set of the exact ``minimumStaggeredDistance < threshold`` test (an L-infinity box around the
+         * tile region versus an L2 ball around the nearest staggered point), so every target inside a source's TSC
+         * support -- and more generally every pair the near band would flag -- is covered. The kernel uses this to
+         * skip those (source, tile) pairs out of the singular point field, and the stage's per-tile exact-quadrature
+         * near list uses the *identical* test, which is what keeps the point-field and exact partitions disjoint and
+         * exhaustive (no pair is dropped, none is double-counted). The short-circuit form keeps the per-slot cost to a
+         * couple of comparisons for the far pairs that dominate a production grid, so the default path keeps the
+         * per-pair work of the analytic kernel (the exact test would be ~25x pricier when evaluated by all 1536
+         * output threads). ``cellsDx`` is ``(1, a_y, a_z)`` as elsewhere in this file.
+         */
+        ALPAKA_FN_HOST_ACC inline bool sourceNearBox(Vec3d const& relativeDx, Vec3d const& cellsDx, double threshold)
+        {
+            double const maxX = static_cast<double>(tileGeometry::tileNx) * cellsDx.x;
+            double const maxY = static_cast<double>(tileGeometry::tileNy) * cellsDx.y;
+            double const maxZ = static_cast<double>(tileGeometry::tileNz) * cellsDx.z;
+            return relativeDx.x >= -threshold && relativeDx.x <= maxX + threshold && relativeDx.y >= -threshold
+                   && relativeDx.y <= maxY + threshold && relativeDx.z >= -threshold
+                   && relativeDx.z <= maxZ + threshold;
+        }
+
         struct TileWideKernel
         {
             Vec3d cellsDx{};
@@ -132,10 +155,14 @@ namespace picongpu::particles::neuralBunch
                     Vec3d const relativeDx{value(0u) - originDx.x, value(1u) - originDx.y, value(2u) - originDx.z};
                     double const charge = charges[alpaka::Vec<std::size_t, 1>{source}];
                     bool const contributes = charge != 0.0;
+                    // The band counters live in the single owning thread (subBlock == 0, thread == 0). With no near
+                    // threshold nothing else consumes the exact minimum distance, so evaluate it in that thread only
+                    // instead of in all 1536 output threads (the T8 trim).
                     double minimum = -1.0;
-                    if(computeBands || nearThresholdCells > 0.0)
+                    bool const bandOwner = subBlock == 0u && thread == 0u;
+                    if(computeBands && bandOwner && contributes)
                         minimum = minimumStaggeredDistance(relativeDx, cellsDx);
-                    if(computeBands && subBlock == 0u && thread == 0u && contributes)
+                    if(computeBands && bandOwner && contributes)
                     {
                         if(minimum < bandNearCells)
                             ++nearCount;
@@ -144,7 +171,16 @@ namespace picongpu::particles::neuralBunch
                         else
                             ++farCount;
                     }
-                    if(!contributes || (nearThresholdCells > 0.0 && minimum < nearThresholdCells))
+                    // Near exclusion. The singular point kernel is never correct inside a source's TSC support (NaN at
+                    // coincidence, ~1-4x overestimate in the support), so when a near threshold is active the default
+                    // path routes those (source, tile) pairs to the exact device quadrature instead. ``sourceNearBox``
+                    // is a cheap per-slot super-set of the exact distance test and is evaluated by every output
+                    // thread, so the pair is skipped out of the point field for all 1536 slots. The stage builds the
+                    // per-tile near list with this identical test and feeds it to
+                    // ``enqueueExactShapeFieldTileAccumulate``, which makes the point-field and exact partitions
+                    // disjoint and exhaustive.
+                    if(!contributes
+                       || (nearThresholdCells > 0.0 && sourceNearBox(relativeDx, cellsDx, nearThresholdCells)))
                         continue;
 
                     Vec3d const u{
