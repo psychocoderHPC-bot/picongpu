@@ -418,7 +418,21 @@ pic_dependency(neuralBunch "Neural bunch field initializer (requires openPMD and
 
 if(PIC_SEARCH_neuralBunch)
     if(NOT PIC_HAVE_openPMD)
-        message(STATUS "neuralBunch requires openPMD - NOT BUILDING the neural bunch initializer")
+        if(PIC_USE_neuralBunch STREQUAL "ON")
+            message(
+                FATAL_ERROR
+                "The neuralBunch initializer requires openPMD, but openPMD was not found. "
+                "Set -DopenPMD_DIR=<prefix>/lib/cmake/openPMD (or add the openPMD prefix to "
+                "CMAKE_PREFIX_PATH) and reconfigure, or disable the feature with "
+                "-DPIC_USE_neuralBunch=OFF."
+            )
+        else()
+            message(
+                STATUS
+                "neuralBunch requires openPMD - NOT BUILDING the neural bunch initializer. "
+                "Set -DopenPMD_DIR=<prefix>/lib/cmake/openPMD to enable it."
+            )
+        endif()
         pic_dependency_set_status(neuralBunch FALSE)
     else()
         include(FetchContent)
