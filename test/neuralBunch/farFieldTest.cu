@@ -24,6 +24,8 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include <cuda_runtime.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -252,115 +254,105 @@ namespace
         check(lists.statistics.nearSourceEvaluations < lists.statistics.directSourceEvaluations, "near is a subset");
     }
 
-    template<int Order>
-    struct FarTileKernel
+    __global__ void directTileKernel(
+        int slotCount,
+        nb::Vec3d cells,
+        int const* offset,
+        int const* tileCounts,
+        int sourceCount,
+        double const* positions,
+        double const* velocities,
+        double const* charges,
+        float* tileValues)
     {
-        nb::Vec3d cells;
-        std::array<int, 3> offset;
-        std::array<int, 3> tileCounts;
-        std::size_t tileCount;
-        std::size_t slotCount;
-
-        ALPAKA_FN_ACC void operator()(
-            auto const& acc,
-            auto nodes,
-            auto farOffsets,
-            auto farIndices,
-            auto nearOffsets,
-            auto nearIndices,
-            auto positions,
-            auto velocities,
-            auto charges,
-            auto tileValues) const
+        int const flat = blockIdx.x * blockDim.x + threadIdx.x;
+        int const tile = flat / slotCount;
+        int const slot = flat % slotCount;
+        if(tile >= tileCounts[0] * tileCounts[1] * tileCounts[2])
+            return;
+        int const i0 = tile % tileCounts[0];
+        int const j0 = (tile / tileCounts[0]) % tileCounts[1];
+        int const k0 = tile / (tileCounts[0] * tileCounts[1]);
+        nb::Vec3d const origin{
+            static_cast<double>(offset[0] + i0 * nb::tileGeometry::tileNx),
+            static_cast<double>(offset[1] + j0 * nb::tileGeometry::tileNy) * cells.y,
+            static_cast<double>(offset[2] + k0 * nb::tileGeometry::tileNz) * cells.z};
+        int const component = slot % 6;
+        double sum = 0.0;
+        for(int source = 0; source < sourceCount; ++source)
         {
-            std::size_t const total = tileCount * slotCount;
-            for(auto index : alpaka::onAcc::makeIdxMap(
-                    acc,
-                    alpaka::onAcc::worker::threadsInGrid,
-                    alpaka::IdxRange{alpaka::Vec{total}}))
-            {
-                std::size_t const flat = static_cast<std::size_t>(index[0]);
-                std::size_t const tile = flat / slotCount;
-                std::size_t const slot = flat % slotCount;
-                auto const i0 = static_cast<int>(tile % static_cast<std::size_t>(tileCounts[0]));
-                auto const j0 = static_cast<int>(
-                    (tile / static_cast<std::size_t>(tileCounts[0])) % static_cast<std::size_t>(tileCounts[1]));
-                auto const k0 = static_cast<int>(
-                    tile / (static_cast<std::size_t>(tileCounts[0])
-                            * static_cast<std::size_t>(tileCounts[1])));
-                nb::Vec3d const origin{
-                    static_cast<double>(offset[0] + i0 * nb::tileGeometry::tileNx),
-                    static_cast<double>(offset[1] + j0 * nb::tileGeometry::tileNy) * cells.y,
-                    static_cast<double>(offset[2] + k0 * nb::tileGeometry::tileNz) * cells.z};
-                nb::Vec3d const staggered = nb::staggeredPosition(slot, cells);
-                int const component = static_cast<int>(slot % 6u);
-                double sum = 0.0;
-                int const farBegin = farOffsets[alpaka::Vec<std::size_t, 1>{tile}];
-                int const farEnd = farOffsets[alpaka::Vec<std::size_t, 1>{tile + 1u}];
-                for(int k = farBegin; k < farEnd; ++k)
-                {
-                    int const node = farIndices[alpaka::Vec<std::size_t, 1>{static_cast<std::size_t>(k)}];
-                    sum += ff::nodeFieldComponent<Order>(
-                        nodes[alpaka::Vec<std::size_t, 1>{static_cast<std::size_t>(node)}],
-                        origin.x + staggered.x,
-                        origin.y + staggered.y,
-                        origin.z + staggered.z,
-                        component);
-                }
-                int const nearBegin = nearOffsets[alpaka::Vec<std::size_t, 1>{tile}];
-                int const nearEnd = nearOffsets[alpaka::Vec<std::size_t, 1>{tile + 1u}];
-                for(int k = nearBegin; k < nearEnd; ++k)
-                {
-                    std::size_t const source
-                        = nearIndices[alpaka::Vec<std::size_t, 1>{static_cast<std::size_t>(k)}];
-                    nb::Vec3d const sourceR{
-                        positions[alpaka::Vec<std::size_t, 2>{source, 0u}] - origin.x,
-                        positions[alpaka::Vec<std::size_t, 2>{source, 1u}] - origin.y,
-                        positions[alpaka::Vec<std::size_t, 2>{source, 2u}] - origin.z};
-                    nb::Vec3d const u{
-                        velocities[alpaka::Vec<std::size_t, 2>{source, 0u}],
-                        velocities[alpaka::Vec<std::size_t, 2>{source, 1u}],
-                        velocities[alpaka::Vec<std::size_t, 2>{source, 2u}]};
-                    sum += charges[alpaka::Vec<std::size_t, 1>{source}] * nb::pointFieldSlot(slot, sourceR, u, cells);
-                }
-                tileValues[alpaka::Vec<std::size_t, 2>{tile, slot}] += static_cast<float>(sum);
-            }
+            double const charge = charges[source];
+            if(charge == 0.0)
+                continue;
+            nb::Vec3d const sourceR{
+                positions[3 * source] - origin.x,
+                positions[3 * source + 1] - origin.y,
+                positions[3 * source + 2] - origin.z};
+            nb::Vec3d const u{
+                velocities[3 * source],
+                velocities[3 * source + 1],
+                velocities[3 * source + 2]};
+            sum += charge * nb::pointFieldSlot(static_cast<std::size_t>(slot), sourceR, u, cells);
         }
-    };
+        (void) component;
+        tileValues[static_cast<std::size_t>(tile) * slotCount + slot] += static_cast<float>(sum);
+    }
 
     template<int Order>
-    void enqueueFarTiles(
-        auto& queue,
-        auto const& exec,
-        nb::Vec3d const& cells,
-        std::array<int, 3> const& offset,
-        std::array<int, 3> const& tileCounts,
-        std::size_t tileCount,
-        auto const& deviceNodes,
-        auto const& deviceFarOffsets,
-        auto const& deviceFarIndices,
-        auto const& deviceNearOffsets,
-        auto const& deviceNearIndices,
-        auto const& devicePositions,
-        auto const& deviceVelocities,
-        auto const& deviceCharges,
-        auto& deviceTileValues)
+    __global__ void farTileKernel(
+        int slotCount,
+        nb::Vec3d cells,
+        int const* offset,
+        int const* tileCounts,
+        ff::NodeAggregate const* nodes,
+        int const* farOffsets,
+        int const* farIndices,
+        int const* nearOffsets,
+        std::uint32_t const* nearIndices,
+        double const* positions,
+        double const* velocities,
+        double const* charges,
+        float* tileValues)
     {
-        std::size_t const total = tileCount * nb::tileGeometry::outputDimension;
-        using Vec = alpaka::Vec<std::uint32_t, 1>;
-        queue.enqueue(
-            alpaka::onHost::FrameSpec{Vec{static_cast<std::uint32_t>(total)}, Vec{256u}, exec},
-            alpaka::KernelBundle{
-                FarTileKernel<Order>{cells, offset, tileCounts, tileCount, nb::tileGeometry::outputDimension},
-                deviceNodes,
-                deviceFarOffsets,
-                deviceFarIndices,
-                deviceNearOffsets,
-                deviceNearIndices,
-                devicePositions,
-                deviceVelocities,
-                deviceCharges,
-                deviceTileValues});
+        int const flat = blockIdx.x * blockDim.x + threadIdx.x;
+        int const tile = flat / slotCount;
+        int const slot = flat % slotCount;
+        if(tile >= tileCounts[0] * tileCounts[1] * tileCounts[2])
+            return;
+        int const i0 = tile % tileCounts[0];
+        int const j0 = (tile / tileCounts[0]) % tileCounts[1];
+        int const k0 = tile / (tileCounts[0] * tileCounts[1]);
+        nb::Vec3d const origin{
+            static_cast<double>(offset[0] + i0 * nb::tileGeometry::tileNx),
+            static_cast<double>(offset[1] + j0 * nb::tileGeometry::tileNy) * cells.y,
+            static_cast<double>(offset[2] + k0 * nb::tileGeometry::tileNz) * cells.z};
+        nb::Vec3d const staggered = nb::staggeredPosition(static_cast<std::size_t>(slot), cells);
+        int const component = slot % 6;
+        double sum = 0.0;
+        for(int k = farOffsets[tile]; k < farOffsets[tile + 1]; ++k)
+        {
+            int const node = farIndices[k];
+            sum += ff::nodeFieldComponent<Order>(
+                nodes[node],
+                origin.x + staggered.x,
+                origin.y + staggered.y,
+                origin.z + staggered.z,
+                component);
+        }
+        for(int k = nearOffsets[tile]; k < nearOffsets[tile + 1]; ++k)
+        {
+            std::size_t const source = nearIndices[k];
+            nb::Vec3d const sourceR{
+                positions[3 * source] - origin.x,
+                positions[3 * source + 1] - origin.y,
+                positions[3 * source + 2] - origin.z};
+            nb::Vec3d const u{
+                velocities[3 * source],
+                velocities[3 * source + 1],
+                velocities[3 * source + 2]};
+            sum += charges[source] * nb::pointFieldSlot(static_cast<std::size_t>(slot), sourceR, u, cells);
+        }
+        tileValues[static_cast<std::size_t>(tile) * slotCount + slot] += static_cast<float>(sum);
     }
 
     double now()
@@ -370,6 +362,7 @@ namespace
 
     void benchmarkCase(std::size_t sourceCount, std::array<int, 3> const& tileCounts)
     {
+        std::cout << std::unitbuf;
         std::array<int, 3> const offset{0, 0, 0};
         nb::Vec3d const cells{1.0, 1.0, 1.0};
         std::size_t const tiles = static_cast<std::size_t>(tileCounts[0]) * tileCounts[1] * tileCounts[2];
@@ -391,166 +384,210 @@ namespace
                   << " max_near_sources_per_tile " << lists.statistics.maxNearSourcesPerTile
                   << " host_build_seconds " << buildSeconds << '\n';
 
-        nb::dispatchBackend(
-            "cuda",
-            [&](auto& device, auto const& exec)
+        auto checkCuda = [](cudaError_t status, char const* what)
+        {
+            if(status != cudaSuccess)
             {
-                auto queue = device.makeQueue();
-                auto hostPositions = alpaka::onHost::allocHost<double>(alpaka::Vec{sourceCount, std::size_t{3}});
-                auto hostVelocities = alpaka::onHost::allocHost<double>(alpaka::Vec{sourceCount, std::size_t{3}});
-                auto hostCharges = alpaka::onHost::allocHost<double>(alpaka::Vec{sourceCount});
-                for(std::size_t i = 0; i < sourceCount; ++i)
-                {
-                    for(int axis = 0; axis < 3; ++axis)
-                    {
-                        hostPositions[alpaka::Vec<std::size_t, 2>{i, static_cast<std::size_t>(axis)}]
-                            = buffers.positions[3 * i + axis];
-                        hostVelocities[alpaka::Vec<std::size_t, 2>{i, static_cast<std::size_t>(axis)}]
-                            = buffers.velocities[3 * i + axis];
-                    }
-                    hostCharges[alpaka::Vec<std::size_t, 1>{i}] = buffers.charges[i];
-                }
-                auto devicePositions = alpaka::onHost::allocLike(device, hostPositions);
-                auto deviceVelocities = alpaka::onHost::allocLike(device, hostVelocities);
-                auto deviceCharges = alpaka::onHost::allocLike(device, hostCharges);
-                alpaka::onHost::memcpy(queue, devicePositions, hostPositions);
-                alpaka::onHost::memcpy(queue, deviceVelocities, hostVelocities);
-                alpaka::onHost::memcpy(queue, deviceCharges, hostCharges);
-                hostPositions.keepAlive(queue);
-                hostVelocities.keepAlive(queue);
-                hostCharges.keepAlive(queue);
+                std::cerr << "CUDA error in " << what << ": " << cudaGetErrorString(status) << '\n';
+                std::exit(EXIT_FAILURE);
+            }
+        };
 
-                auto hostNodes = alpaka::onHost::allocHost<ff::NodeAggregate>(alpaka::Vec{lists.nodes.size()});
-                for(std::size_t i = 0; i < lists.nodes.size(); ++i)
-                    hostNodes[alpaka::Vec<std::size_t, 1>{i}] = lists.nodes[i];
-                auto deviceNodes = alpaka::onHost::allocLike(device, hostNodes);
-                alpaka::onHost::memcpy(queue, deviceNodes, hostNodes);
-                hostNodes.keepAlive(queue);
+        double* devicePositions = nullptr;
+        double* deviceVelocities = nullptr;
+        double* deviceCharges = nullptr;
+        ff::NodeAggregate* deviceNodes = nullptr;
+        int* deviceFarOffsets = nullptr;
+        int* deviceFarIndices = nullptr;
+        int* deviceNearOffsets = nullptr;
+        std::uint32_t* deviceNearIndices = nullptr;
+        int* deviceOffset = nullptr;
+        int* deviceTileCounts = nullptr;
+        float* deviceTileValues = nullptr;
 
-                auto hostFarOffsets = alpaka::onHost::allocHost<int>(alpaka::Vec{lists.farOffsets.size()});
-                auto hostFarIndices = alpaka::onHost::allocHost<int>(alpaka::Vec{lists.farNodes.size()});
-                auto hostNearOffsets = alpaka::onHost::allocHost<int>(alpaka::Vec{lists.nearOffsets.size()});
-                auto hostNearIndices
-                    = alpaka::onHost::allocHost<std::uint32_t>(alpaka::Vec{lists.nearSources.size()});
-                for(std::size_t i = 0; i < lists.farOffsets.size(); ++i)
-                    hostFarOffsets[alpaka::Vec<std::size_t, 1>{i}] = lists.farOffsets[i];
-                for(std::size_t i = 0; i < lists.farNodes.size(); ++i)
-                    hostFarIndices[alpaka::Vec<std::size_t, 1>{i}] = lists.farNodes[i];
-                for(std::size_t i = 0; i < lists.nearOffsets.size(); ++i)
-                    hostNearOffsets[alpaka::Vec<std::size_t, 1>{i}] = lists.nearOffsets[i];
-                for(std::size_t i = 0; i < lists.nearSources.size(); ++i)
-                    hostNearIndices[alpaka::Vec<std::size_t, 1>{i}] = lists.nearSources[i];
-                auto deviceFarOffsets = alpaka::onHost::allocLike(device, hostFarOffsets);
-                auto deviceFarIndices = alpaka::onHost::allocLike(device, hostFarIndices);
-                auto deviceNearOffsets = alpaka::onHost::allocLike(device, hostNearOffsets);
-                auto deviceNearIndices = alpaka::onHost::allocLike(device, hostNearIndices);
-                alpaka::onHost::memcpy(queue, deviceFarOffsets, hostFarOffsets);
-                alpaka::onHost::memcpy(queue, deviceFarIndices, hostFarIndices);
-                alpaka::onHost::memcpy(queue, deviceNearOffsets, hostNearOffsets);
-                alpaka::onHost::memcpy(queue, deviceNearIndices, hostNearIndices);
-                hostFarOffsets.keepAlive(queue);
-                hostFarIndices.keepAlive(queue);
-                hostNearOffsets.keepAlive(queue);
-                hostNearIndices.keepAlive(queue);
+        checkCuda(cudaMalloc(&devicePositions, 3 * sourceCount * sizeof(double)), "positions");
+        checkCuda(cudaMalloc(&deviceVelocities, 3 * sourceCount * sizeof(double)), "velocities");
+        checkCuda(cudaMalloc(&deviceCharges, sourceCount * sizeof(double)), "charges");
+        checkCuda(cudaMemcpy(
+                     devicePositions,
+                     buffers.positions.data(),
+                     3 * sourceCount * sizeof(double),
+                     cudaMemcpyHostToDevice),
+                 "positions copy");
+        checkCuda(cudaMemcpy(
+                     deviceVelocities,
+                     buffers.velocities.data(),
+                     3 * sourceCount * sizeof(double),
+                     cudaMemcpyHostToDevice),
+                 "velocities copy");
+        checkCuda(cudaMemcpy(
+                     deviceCharges,
+                     buffers.charges.data(),
+                     sourceCount * sizeof(double),
+                     cudaMemcpyHostToDevice),
+                 "charges copy");
+        checkCuda(
+            cudaMalloc(&deviceNodes, std::max<std::size_t>(1, lists.nodes.size()) * sizeof(ff::NodeAggregate)),
+            "nodes");
+        checkCuda(cudaMalloc(&deviceFarOffsets, std::max<std::size_t>(1, lists.farOffsets.size()) * sizeof(int)), "farOffsets");
+        checkCuda(cudaMalloc(&deviceFarIndices, std::max<std::size_t>(1, lists.farNodes.size()) * sizeof(int)), "farIndices");
+        checkCuda(cudaMalloc(&deviceNearOffsets, std::max<std::size_t>(1, lists.nearOffsets.size()) * sizeof(int)), "nearOffsets");
+        checkCuda(
+            cudaMalloc(
+                &deviceNearIndices,
+                std::max<std::size_t>(1, lists.nearSources.size()) * sizeof(std::uint32_t)),
+            "nearIndices");
+        checkCuda(cudaMalloc(&deviceOffset, 3 * sizeof(int)), "offset");
+        checkCuda(cudaMalloc(&deviceTileCounts, 3 * sizeof(int)), "tileCounts");
+        checkCuda(cudaMalloc(&deviceTileValues, tiles * slots * sizeof(float)), "tileValues");
+        checkCuda(cudaMemcpy(
+                     deviceNodes,
+                     lists.nodes.data(),
+                     lists.nodes.size() * sizeof(ff::NodeAggregate),
+                     cudaMemcpyHostToDevice),
+                 "nodes copy");
+        checkCuda(cudaMemcpy(
+                     deviceFarOffsets,
+                     lists.farOffsets.data(),
+                     lists.farOffsets.size() * sizeof(int),
+                     cudaMemcpyHostToDevice),
+                 "farOffsets copy");
+        if(!lists.farNodes.empty())
+            checkCuda(cudaMemcpy(
+                         deviceFarIndices,
+                         lists.farNodes.data(),
+                         lists.farNodes.size() * sizeof(int),
+                         cudaMemcpyHostToDevice),
+                     "farIndices copy");
+        checkCuda(cudaMemcpy(
+                     deviceNearOffsets,
+                     lists.nearOffsets.data(),
+                     lists.nearOffsets.size() * sizeof(int),
+                     cudaMemcpyHostToDevice),
+                 "nearOffsets copy");
+        if(!lists.nearSources.empty())
+            checkCuda(cudaMemcpy(
+                         deviceNearIndices,
+                         lists.nearSources.data(),
+                         lists.nearSources.size() * sizeof(std::uint32_t),
+                         cudaMemcpyHostToDevice),
+                     "nearIndices copy");
+        checkCuda(cudaMemcpy(deviceOffset, offset.data(), 3 * sizeof(int), cudaMemcpyHostToDevice), "offset copy");
+        checkCuda(
+            cudaMemcpy(deviceTileCounts, tileCounts.data(), 3 * sizeof(int), cudaMemcpyHostToDevice),
+            "tileCounts copy");
 
-                auto deviceTileValues
-                    = alpaka::onHost::alloc<float>(device, alpaka::Vec{tiles, slots});
-                auto deviceBandCounts
-                    = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{tiles, std::size_t{3}});
-                auto hostZero = alpaka::onHost::allocHost<float>(alpaka::Vec{tiles, slots});
-                auto hostTileValues = alpaka::onHost::allocHost<float>(alpaka::Vec{tiles, slots});
-                for(std::size_t tile = 0; tile < tiles; ++tile)
-                    for(std::size_t slot = 0; slot < slots; ++slot)
-                        hostZero[alpaka::Vec<std::size_t, 2>{tile, slot}] = 0.0f;
+        int const block = 256;
+        int const total = static_cast<int>(tiles * slots);
+        int const grid = (total + block - 1) / block;
+        auto hostFetch = [&]()
+        {
+            std::vector<float> values(tiles * slots);
+            checkCuda(
+                cudaMemcpy(
+                    values.data(),
+                    deviceTileValues,
+                    tiles * slots * sizeof(float),
+                    cudaMemcpyDeviceToHost),
+                "fetch");
+            return values;
+        };
+        auto runDirect = [&]()
+        {
+            checkCuda(cudaMemset(deviceTileValues, 0, tiles * slots * sizeof(float)), "zero");
+            checkCuda(cudaDeviceSynchronize(), "zero sync");
+            double const start = now();
+            directTileKernel<<<grid, block, 0, 0>>>(
+                static_cast<int>(slots),
+                cells,
+                deviceOffset,
+                deviceTileCounts,
+                static_cast<int>(sourceCount),
+                devicePositions,
+                deviceVelocities,
+                deviceCharges,
+                deviceTileValues);
+            checkCuda(cudaDeviceSynchronize(), "direct");
+            return now() - start;
+        };
+        // The direct kernel is O(S * tiles); large cases get a single timed run
+        // (no warm-up repetition) so the proof stays inside a sane wall time.
+        int const directReps = sourceCount >= 50000u ? 1 : 2;
+        if(sourceCount < 50000u)
+            (void) runDirect();
+        double directSeconds = 1.0e300;
+        for(int rep = 0; rep < directReps; ++rep)
+            directSeconds = std::min(directSeconds, runDirect());
+        auto const direct = hostFetch();
+        std::cout << "direct_seconds " << directSeconds << " direct_reps " << directReps << "\n";
 
-                auto runDirect = [&]()
-                {
-                    alpaka::onHost::memcpy(queue, deviceTileValues, hostZero);
-                    alpaka::onHost::wait(queue);
-                    double const start = now();
-                    nb::enqueueTileWidePointField(
-                        queue,
-                        exec,
-                        devicePositions,
-                        deviceVelocities,
-                        deviceCharges,
-                        sourceCount,
-                        cells,
-                        offset,
-                        tileCounts,
-                        0.0,
-                        4.0,
-                        48.0,
-                        false,
-                        deviceTileValues,
-                        deviceBandCounts);
-                    alpaka::onHost::wait(queue);
-                    return now() - start;
-                };
+        auto runFar = [&](int order)
+        {
+            checkCuda(cudaMemset(deviceTileValues, 0, tiles * slots * sizeof(float)), "zero");
+            checkCuda(cudaDeviceSynchronize(), "zero sync");
+            double const start = now();
+            if(order == 2)
+                farTileKernel<2><<<grid, block, 0, 0>>>(
+                    static_cast<int>(slots),
+                    cells,
+                    deviceOffset,
+                    deviceTileCounts,
+                    deviceNodes,
+                    deviceFarOffsets,
+                    deviceFarIndices,
+                    deviceNearOffsets,
+                    deviceNearIndices,
+                    devicePositions,
+                    deviceVelocities,
+                    deviceCharges,
+                    deviceTileValues);
+            else
+                farTileKernel<4><<<grid, block, 0, 0>>>(
+                    static_cast<int>(slots),
+                    cells,
+                    deviceOffset,
+                    deviceTileCounts,
+                    deviceNodes,
+                    deviceFarOffsets,
+                    deviceFarIndices,
+                    deviceNearOffsets,
+                    deviceNearIndices,
+                    devicePositions,
+                    deviceVelocities,
+                    deviceCharges,
+                    deviceTileValues);
+            checkCuda(cudaDeviceSynchronize(), "far");
+            return now() - start;
+        };
 
-                auto fetch = [&]()
-                {
-                    alpaka::onHost::memcpy(queue, hostTileValues, deviceTileValues);
-                    alpaka::onHost::wait(queue);
-                    std::vector<float> values(tiles * slots);
-                    for(std::size_t tile = 0; tile < tiles; ++tile)
-                        for(std::size_t slot = 0; slot < slots; ++slot)
-                            values[tile * slots + slot] = hostTileValues[alpaka::Vec<std::size_t, 2>{tile, slot}];
-                    return values;
-                };
+        for(int const order : {2, 4})
+        {
+            (void) runFar(order);
+            double best = 1.0e300;
+            for(int rep = 0; rep < 2; ++rep)
+                best = std::min(best, runFar(order));
+            auto const far = hostFetch();
+            auto const metric = compareFields(far, direct, tiles);
+            std::cout << "far_order " << order << " seconds " << best << " speedup " << directSeconds / best
+                      << " relL2_E " << metric.groupE << " relL2_cB " << metric.groupB;
+            for(std::size_t component = 0; component < 6; ++component)
+                std::cout << " _relL2_" << componentName(component) << ' ' << metric.component[component];
+            std::cout << " work_units " << lists.statistics.totalWorkUnits(order) << '\n';
+        }
 
-                (void) runDirect();
-                double directSeconds = 1.0e300;
-                for(int rep = 0; rep < 2; ++rep)
-                    directSeconds = std::min(directSeconds, runDirect());
-                auto const direct = fetch();
-                std::cout << "direct_seconds " << directSeconds << '\n';
-
-                auto runFar = [&](auto orderTag)
-                {
-                    constexpr int order = decltype(orderTag)::value;
-                    alpaka::onHost::memcpy(queue, deviceTileValues, hostZero);
-                    alpaka::onHost::wait(queue);
-                    double const start = now();
-                    enqueueFarTiles<order>(
-                        queue,
-                        exec,
-                        cells,
-                        offset,
-                        tileCounts,
-                        tiles,
-                        deviceNodes,
-                        deviceFarOffsets,
-                        deviceFarIndices,
-                        deviceNearOffsets,
-                        deviceNearIndices,
-                        devicePositions,
-                        deviceVelocities,
-                        deviceCharges,
-                        deviceTileValues);
-                    alpaka::onHost::wait(queue);
-                    return now() - start;
-                };
-
-                auto timeOrder = [&](auto orderTag)
-                {
-                    constexpr int order = decltype(orderTag)::value;
-                    (void) runFar(orderTag);
-                    double best = 1.0e300;
-                    for(int rep = 0; rep < 2; ++rep)
-                        best = std::min(best, runFar(orderTag));
-                    auto const far = fetch();
-                    auto const metric = compareFields(far, direct, tiles);
-                    std::cout << "far_order " << order << " seconds " << best << " speedup " << directSeconds / best
-                              << " relL2_E " << metric.groupE << " relL2_cB " << metric.groupB;
-                    for(std::size_t component = 0; component < 6; ++component)
-                        std::cout << ' ' << componentName(component) << "_relL2 " << metric.component[component];
-                    std::cout << " work_units " << lists.statistics.totalWorkUnits(order) << '\n';
-                };
-                timeOrder(std::integral_constant<int, 2>{});
-                timeOrder(std::integral_constant<int, 4>{});
-            });
+        checkCuda(cudaFree(devicePositions), "free");
+        checkCuda(cudaFree(deviceVelocities), "free");
+        checkCuda(cudaFree(deviceCharges), "free");
+        checkCuda(cudaFree(deviceNodes), "free");
+        checkCuda(cudaFree(deviceFarOffsets), "free");
+        checkCuda(cudaFree(deviceFarIndices), "free");
+        checkCuda(cudaFree(deviceNearOffsets), "free");
+        checkCuda(cudaFree(deviceNearIndices), "free");
+        checkCuda(cudaFree(deviceOffset), "free");
+        checkCuda(cudaFree(deviceTileCounts), "free");
+        checkCuda(cudaFree(deviceTileValues), "free");
     }
+
 } // namespace
 
 int main(int argc, char** argv)

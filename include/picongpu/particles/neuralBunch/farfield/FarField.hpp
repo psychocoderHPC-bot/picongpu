@@ -45,43 +45,101 @@ namespace picongpu::particles::neuralBunch::farfield
         return (order + 1) * (order + 2) * (order + 3) / 6;
     }
 
-    /** Multi-index table: total-degree order, then a ascending, then b ascending.
+    /** Decode a term index back into its multi-index.
      *
-     * Terms of order <= N are a prefix of this list, so one moment array serves
-     * every expansion order.
+     * Computed arithmetically instead of a namespace-scope table so the same
+     * code is usable from device kernels without a device-side global.
      */
-    struct MultiIndexTable
+    constexpr std::array<int, kMaxTerms> makeTermA()
     {
-        std::array<int, kMaxTerms> a{};
-        std::array<int, kMaxTerms> b{};
-        std::array<int, kMaxTerms> c{};
-        std::array<int, kMaxTerms> degree{};
-        std::array<int, 7 * 7 * 7> index{};
+        std::array<int, kMaxTerms> result{};
+        int term = 0;
+        for(int total = 0; total <= kMaxOrder; ++total)
+            for(int aa = 0; aa <= total; ++aa)
+                for(int bb = 0; bb <= total - aa; ++bb)
+                    result[term++] = aa;
+        return result;
+    }
 
-        constexpr MultiIndexTable()
-        {
-            index.fill(-1);
-            int term = 0;
-            for(int total = 0; total <= kMaxOrder; ++total)
-            {
-                for(int aa = 0; aa <= total; ++aa)
-                {
-                    for(int bb = 0; bb <= total - aa; ++bb)
-                    {
-                        int const cc = total - aa - bb;
-                        a[term] = aa;
-                        b[term] = bb;
-                        c[term] = cc;
-                        degree[term] = total;
-                        index[aa * 49 + bb * 7 + cc] = term;
-                        ++term;
-                    }
-                }
-            }
-        }
-    };
+    constexpr std::array<int, kMaxTerms> makeTermB()
+    {
+        std::array<int, kMaxTerms> result{};
+        int term = 0;
+        for(int total = 0; total <= kMaxOrder; ++total)
+            for(int aa = 0; aa <= total; ++aa)
+                for(int bb = 0; bb <= total - aa; ++bb)
+                    result[term++] = bb;
+        return result;
+    }
 
-    inline constexpr MultiIndexTable kMultiIndex{};
+    constexpr std::array<int, kMaxTerms> makeTermC()
+    {
+        std::array<int, kMaxTerms> result{};
+        int term = 0;
+        for(int total = 0; total <= kMaxOrder; ++total)
+            for(int aa = 0; aa <= total; ++aa)
+                for(int bb = 0; bb <= total - aa; ++bb)
+                    result[term++] = total - aa - bb;
+        return result;
+    }
+
+    constexpr std::array<int, kMaxTerms> makeTermDegree()
+    {
+        std::array<int, kMaxTerms> result{};
+        int term = 0;
+        for(int total = 0; total <= kMaxOrder; ++total)
+            for(int aa = 0; aa <= total; ++aa)
+                for(int bb = 0; bb <= total - aa; ++bb)
+                    result[term++] = total;
+        return result;
+    }
+
+    constexpr std::array<int, kMaxTerms> kTermAHost = makeTermA();
+    constexpr std::array<int, kMaxTerms> kTermBHost = makeTermB();
+    constexpr std::array<int, kMaxTerms> kTermCHost = makeTermC();
+    constexpr std::array<int, kMaxTerms> kTermDegreeHost = makeTermDegree();
+#if defined(__CUDACC__)
+    __device__ constexpr std::array<int, kMaxTerms> kTermADevice = makeTermA();
+    __device__ constexpr std::array<int, kMaxTerms> kTermBDevice = makeTermB();
+    __device__ constexpr std::array<int, kMaxTerms> kTermCDevice = makeTermC();
+    __device__ constexpr std::array<int, kMaxTerms> kTermDegreeDevice = makeTermDegree();
+#endif
+
+    ALPAKA_FN_HOST_ACC inline constexpr int termDegreeOf(int index)
+    {
+#if defined(__CUDA_ARCH__)
+        return kTermDegreeDevice[index];
+#else
+        return kTermDegreeHost[index];
+#endif
+    }
+
+    ALPAKA_FN_HOST_ACC inline constexpr int termAOf(int index)
+    {
+#if defined(__CUDA_ARCH__)
+        return kTermADevice[index];
+#else
+        return kTermAHost[index];
+#endif
+    }
+
+    ALPAKA_FN_HOST_ACC inline constexpr int termBOf(int index)
+    {
+#if defined(__CUDA_ARCH__)
+        return kTermBDevice[index];
+#else
+        return kTermBHost[index];
+#endif
+    }
+
+    ALPAKA_FN_HOST_ACC inline constexpr int termCOf(int index)
+    {
+#if defined(__CUDA_ARCH__)
+        return kTermCDevice[index];
+#else
+        return kTermCHost[index];
+#endif
+    }
 
     ALPAKA_FN_HOST_ACC inline constexpr int termIndex(int aa, int bb, int cc)
     {
@@ -94,7 +152,15 @@ namespace picongpu::particles::neuralBunch::farfield
         return result + bb;
     }
 
-    /** Truncated three-variable Taylor jet. Coefficient layout is @ref kMultiIndex. */
+    ALPAKA_FN_HOST_ACC inline constexpr int flatTermIndex(int key)
+    {
+        int const a = key / 49;
+        int const b = (key / 7) % 7;
+        int const c = key % 7;
+        return termIndex(a, b, c);
+    }
+
+    /** Truncated three-variable Taylor jet. Terms are ordered by total degree, then by the x exponent, then y. */
     template<int Order>
     struct Jet3
     {
@@ -155,20 +221,20 @@ namespace picongpu::particles::neuralBunch::farfield
         {
             if(x.v[i] == 0.0)
                 continue;
-            int const ai = kMultiIndex.a[i];
-            int const bi = kMultiIndex.b[i];
-            int const ci = kMultiIndex.c[i];
-            int const di = kMultiIndex.degree[i];
+            int const ai = termAOf(i);
+            int const bi = termBOf(i);
+            int const ci = termCOf(i);
+            int const di = termDegreeOf(i);
             for(int j = 0; j < terms; ++j)
             {
                 if(y.v[j] == 0.0)
                     continue;
-                if(di + kMultiIndex.degree[j] > Order)
+                if(di + termDegreeOf(j) > Order)
                     continue;
-                int const ia = ai + kMultiIndex.a[j];
-                int const ib = bi + kMultiIndex.b[j];
-                int const ic = ci + kMultiIndex.c[j];
-                result.v[kMultiIndex.index[ia * 49 + ib * 7 + ic]] += x.v[i] * y.v[j];
+                int const ia = ai + termAOf(j);
+                int const ib = bi + termBOf(j);
+                int const ic = ci + termCOf(j);
+                result.v[flatTermIndex(ia * 49 + ib * 7 + ic)] += x.v[i] * y.v[j];
             }
         }
         return result;
@@ -183,21 +249,21 @@ namespace picongpu::particles::neuralBunch::farfield
         result.v[0] = 1.0 / f.v[0];
         for(int i = 1; i < terms; ++i)
         {
-            int const ai = kMultiIndex.a[i];
-            int const bi = kMultiIndex.b[i];
-            int const ci = kMultiIndex.c[i];
-            int const di = kMultiIndex.degree[i];
+            int const ai = termAOf(i);
+            int const bi = termBOf(i);
+            int const ci = termCOf(i);
+            int const di = termDegreeOf(i);
             double sum = 0.0;
             for(int j = 1; j < terms; ++j)
             {
-                if(kMultiIndex.degree[j] > di)
+                if(termDegreeOf(j) > di)
                     continue;
-                int const ja = kMultiIndex.a[j];
-                int const jb = kMultiIndex.b[j];
-                int const jc = kMultiIndex.c[j];
+                int const ja = termAOf(j);
+                int const jb = termBOf(j);
+                int const jc = termCOf(j);
                 if(ja > ai || jb > bi || jc > ci)
                     continue;
-                int const k = kMultiIndex.index[(ai - ja) * 49 + (bi - jb) * 7 + (ci - jc)];
+                int const k = flatTermIndex((ai - ja) * 49 + (bi - jb) * 7 + (ci - jc));
                 sum += f.v[j] * result.v[k];
             }
             result.v[i] = -sum / f.v[0];
@@ -214,22 +280,22 @@ namespace picongpu::particles::neuralBunch::farfield
         result.v[0] = alpaka::math::sqrt(f.v[0]);
         for(int i = 1; i < terms; ++i)
         {
-            int const ai = kMultiIndex.a[i];
-            int const bi = kMultiIndex.b[i];
-            int const ci = kMultiIndex.c[i];
-            int const di = kMultiIndex.degree[i];
+            int const ai = termAOf(i);
+            int const bi = termBOf(i);
+            int const ci = termCOf(i);
+            int const di = termDegreeOf(i);
             double sum = 0.0;
             for(int j = 1; j < terms; ++j)
             {
-                int const dj = kMultiIndex.degree[j];
+                int const dj = termDegreeOf(j);
                 if(dj >= di)
                     continue;
-                int const ja = kMultiIndex.a[j];
-                int const jb = kMultiIndex.b[j];
-                int const jc = kMultiIndex.c[j];
+                int const ja = termAOf(j);
+                int const jb = termBOf(j);
+                int const jc = termCOf(j);
                 if(ja > ai || jb > bi || jc > ci)
                     continue;
-                int const k = kMultiIndex.index[(ai - ja) * 49 + (bi - jb) * 7 + (ci - jc)];
+                int const k = flatTermIndex((ai - ja) * 49 + (bi - jb) * 7 + (ci - jc));
                 sum += result.v[j] * result.v[k];
             }
             result.v[i] = (f.v[i] - sum) / (2.0 * result.v[0]);
@@ -402,8 +468,8 @@ namespace picongpu::particles::neuralBunch::farfield
                         powers[axis][exponent] = powers[axis][exponent - 1] * delta;
                 }
                 for(int term = 0; term < kMaxTerms; ++term)
-                    node.moments[term] += charge * powers[0][kMultiIndex.a[term]] * powers[1][kMultiIndex.b[term]]
-                                          * powers[2][kMultiIndex.c[term]];
+                    node.moments[term] += charge * powers[0][termAOf(term)] * powers[1][termBOf(term)]
+                                          * powers[2][termCOf(term)];
             }
             return node;
         }
