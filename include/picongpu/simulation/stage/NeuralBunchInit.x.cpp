@@ -933,51 +933,72 @@ namespace picongpu
                                                         ++nearCounts[tileIndex];
                                                     }
                                         }
-                                        // Evaluate each tile's near list in fixed tile order (deterministic).
-                                        for(std::size_t tileIndex = 0; tileIndex < tileCount; ++tileIndex)
+                                        // Evaluate the near pass in ONE device launch. The per-tile host loop
+                                        // (one allocation pair, two H2D copies, a free-memory query and two kernel
+                                        // launches per tile, serialised over all tiles) is what made the near band
+                                        // catastrophic: 0.9% of the pairs still burned ~all of the run on the host.
+                                        // Pack the per-tile near lists into a single CSR flat list and let one
+                                        // kernel do the quadrature for every (tile, slot) at once. The arithmetic
+                                        // (exactShapeFieldPoint, float cast, per-slot source order) is unchanged, so
+                                        // the result is bit-identical to the per-tile path.
+                                        std::size_t totalNear = 0u;
+                                        for(std::size_t t = 0u; t < tileCount; ++t)
+                                            totalNear += nearCounts[t];
+                                        if(totalNear > 0u)
                                         {
-                                            std::size_t const count = nearCounts[tileIndex];
-                                            if(count == 0u)
-                                                continue;
-                                            auto const& ru = nearRU[tileIndex];
-                                            auto const& w = nearW[tileIndex];
-                                            auto hostSources = alpaka::onHost::allocHost<double>(
-                                                alpaka::Vec{count, std::size_t{6}});
-                                            auto hostWeights = alpaka::onHost::allocHost<double>(alpaka::Vec{count});
-                                            for(std::size_t s = 0; s < count; ++s)
+                                            auto hostNearSrc
+                                                = alpaka::onHost::allocHost<double>(alpaka::Vec{totalNear, std::size_t{6}});
+                                            auto hostNearW = alpaka::onHost::allocHost<double>(alpaka::Vec{totalNear});
+                                            auto hostTileOffset
+                                                = alpaka::onHost::allocHost<std::uint64_t>(alpaka::Vec{tileCount + 1u});
+                                            std::size_t flat = 0u;
+                                            hostTileOffset[alpaka::Vec<std::size_t, 1>{0u}] = 0u;
+                                            for(std::size_t t = 0u; t < tileCount; ++t)
                                             {
-                                                for(std::size_t c = 0; c < 6u; ++c)
-                                                    hostSources[alpaka::Vec<std::size_t, 2>{s, c}] = ru[s * 6u + c];
-                                                hostWeights[alpaka::Vec<std::size_t, 1>{s}] = w[s];
+                                                std::size_t const count = nearCounts[t];
+                                                auto const& ru = nearRU[t];
+                                                auto const& w = nearW[t];
+                                                for(std::size_t s = 0u; s < count; ++s)
+                                                {
+                                                    for(std::size_t c = 0u; c < 6u; ++c)
+                                                        hostNearSrc[alpaka::Vec<std::size_t, 2>{flat, c}] = ru[s * 6u + c];
+                                                    hostNearW[alpaka::Vec<std::size_t, 1>{flat}] = w[s];
+                                                    ++flat;
+                                                }
+                                                hostTileOffset[alpaka::Vec<std::size_t, 1>{t + 1u}] = flat;
                                             }
-                                            auto deviceSources
-                                                = alpaka::onHost::allocLike(queue.getDevice(), hostSources);
-                                            auto deviceWeights
-                                                = alpaka::onHost::allocLike(queue.getDevice(), hostWeights);
-                                            alpaka::onHost::memcpy(queue, deviceSources, hostSources);
-                                            alpaka::onHost::memcpy(queue, deviceWeights, hostWeights);
-                                            hostSources.keepAlive(queue);
-                                            hostWeights.keepAlive(queue);
-                                            // The in-support quadrature needs ~21 KiB of local stack per thread; cap
-                                            // the resident thread count so the launch stack fits (same bound as the
-                                            // legacy exact path).
+                                            auto deviceNearSrc
+                                                = alpaka::onHost::allocLike(queue.getDevice(), hostNearSrc);
+                                            auto deviceNearW
+                                                = alpaka::onHost::allocLike(queue.getDevice(), hostNearW);
+                                            auto deviceTileOffset
+                                                = alpaka::onHost::allocLike(queue.getDevice(), hostTileOffset);
+                                            alpaka::onHost::memcpy(queue, deviceNearSrc, hostNearSrc);
+                                            alpaka::onHost::memcpy(queue, deviceNearW, hostNearW);
+                                            alpaka::onHost::memcpy(queue, deviceTileOffset, hostTileOffset);
+                                            hostNearSrc.keepAlive(queue);
+                                            hostNearW.keepAlive(queue);
+                                            hostTileOffset.keepAlive(queue);
+                                            // The in-support quadrature local frame is reserved per resident thread,
+                                            // so cap the launch the same way the per-tile path did (hoisted out of
+                                            // the per-tile loop, so it is computed once per chunk, not per tile).
                                             auto const freeBytes = device.getFreeGlobalMemBytes();
                                             std::size_t const exactMaxThreads = std::clamp<std::size_t>(
                                                 freeBytes / (4u * 24u * 1024u),
                                                 512u,
                                                 65536u);
-                                            auto tileTarget = tileValueView(tileIndex);
-                                            enqueueExactShapeFieldTileAccumulate<double>(
+                                            enqueueNearExactAllTiles<double>(
                                                 queue,
                                                 exec,
-                                                deviceSources,
-                                                deviceWeights,
-                                                count,
+                                                deviceNearSrc,
+                                                deviceNearW,
+                                                deviceTileOffset,
+                                                tileCount,
                                                 cellsDx,
                                                 ExactSettings{},
-                                                tileTarget,
+                                                deviceTileValues,
                                                 exactMaxThreads);
-                                            tileWideNearExactPairs += count;
+                                            tileWideNearExactPairs += totalNear;
                                         }
                                         tileWideNearExactSeconds += std::chrono::duration<double>(
                                                                         std::chrono::steady_clock::now() - nearStart)

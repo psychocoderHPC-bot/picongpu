@@ -982,6 +982,115 @@ namespace picongpu::particles::neuralBunch
         }
     }
 
+    namespace detail
+    {
+        /** One launch over the CSR-packed near list. Each (tile, slot) work item sums the weighted exact
+         *  field over that tile's near sources (sources in list order) and adds to the device accumulator, so
+         *  the per-slot accumulation is deterministic and matches the legacy per-tile ExactTileKernel +
+         *  ExactAccumulateKernel path: every exact value is cast to float before weighting and the order is
+         *  (tile, slot, source). Tiles with no near sources early-exit. The index map grid-strides over all
+         *  tiles, so the resident thread count (and thus the in-support quadrature local frame) is bounded by
+         *  the launch size instead of growing with the tile count. */
+        template<typename T_Type>
+        struct NearExactAllTilesKernel
+        {
+            ExactSettings settings;
+            GaussTable table;
+            Vec3d cells;
+
+            ALPAKA_FN_ACC void operator()(
+                auto const& acc,
+                auto nearSrc,
+                auto nearW,
+                auto tileOffset,
+                auto accumulator) const
+            {
+                auto const tileCount = static_cast<std::size_t>(tileOffset.getExtents()[0] - 1u);
+                auto const total = tileCount * kTileSlotCount;
+                for(auto index :
+                    alpaka::onAcc::makeIdxMap(
+                        acc,
+                        alpaka::onAcc::worker::threadsInGrid,
+                        alpaka::IdxRange{alpaka::Vec{total}}))
+                {
+                    auto const flat = static_cast<std::size_t>(index[0]);
+                    auto const tile = flat / kTileSlotCount;
+                    auto const slot = flat % kTileSlotCount;
+                    auto const lo = static_cast<std::size_t>(tileOffset[alpaka::Vec<std::size_t, 1>{tile}]);
+                    auto const hi = static_cast<std::size_t>(tileOffset[alpaka::Vec<std::size_t, 1>{tile + 1u}]);
+                    if(lo == hi)
+                        continue;
+                    auto const position = staggeredPosition(slot, cells);
+                    int const component = static_cast<int>(slot % 6u);
+                    double sum = 0.0;
+                    for(std::size_t s = lo; s < hi; ++s)
+                    {
+                        Vec3d const relDx{
+                            static_cast<double>(nearSrc[alpaka::Vec<std::size_t, 2>{s, 0u}]),
+                            static_cast<double>(nearSrc[alpaka::Vec<std::size_t, 2>{s, 1u}]),
+                            static_cast<double>(nearSrc[alpaka::Vec<std::size_t, 2>{s, 2u}])};
+                        Vec3d const u{
+                            static_cast<double>(nearSrc[alpaka::Vec<std::size_t, 2>{s, 3u}]),
+                            static_cast<double>(nearSrc[alpaka::Vec<std::size_t, 2>{s, 4u}]),
+                            static_cast<double>(nearSrc[alpaka::Vec<std::size_t, 2>{s, 5u}])};
+                        Vec3d const R0{position.x - relDx.x, position.y - relDx.y, position.z - relDx.z};
+                        auto const result = exactShapeFieldPoint<T_Type>(R0, u, cells, settings, table);
+                        double const value
+                            = component < 3u
+                                  ? (component == 0u ? result.E.x : (component == 1u ? result.E.y : result.E.z))
+                                  : (component == 3u ? result.B.x : (component == 4u ? result.B.y : result.B.z));
+                        sum += static_cast<double>(nearW[alpaka::Vec<std::size_t, 1>{s}])
+                               * static_cast<double>(static_cast<float>(value));
+                    }
+                    accumulator[alpaka::Vec<std::size_t, 2>{tile, slot}] += sum;
+                }
+            }
+        };
+    } // namespace detail
+
+    /** Enqueue the exact near pass for every tile in a single device launch.
+     *
+     * @p deviceNearSrc is [S,6] with (relativeDx, u) per near (source, tile) pair, @p deviceNearW is [S] with
+     * q/e = -weight, @p deviceTileOffset is [T+1] with CSR offsets (tile t's near sources are the flat indices
+     * [offset[t], offset[t+1])), @p accumulator is [T,1536] added in place. One thread per (tile, slot)
+     * work item grid-strides over the whole grid; tiles with no near sources early-exit. @p maxThreads caps
+     * the resident thread count exactly as the per-tile path (the in-support quadrature local frame is
+     * reserved per resident thread), so the launch stack is bounded the same way. No per-tile host
+     * round-trip: the near list is one H2D transfer and the quadrature is one launch.
+     */
+    template<typename T_Type = double, typename TQueue, typename TExec, typename TNearSrc, typename TNearW, typename TOffset, typename TAccumulator>
+    void enqueueNearExactAllTiles(
+        TQueue& queue,
+        TExec exec,
+        TNearSrc const& deviceNearSrc,
+        TNearW const& deviceNearW,
+        TOffset const& deviceTileOffset,
+        std::size_t tileCount,
+        Vec3d const& cells,
+        ExactSettings const& settings,
+        TAccumulator& accumulator,
+        std::size_t maxThreads = std::numeric_limits<std::size_t>::max())
+    {
+        if(tileCount == 0u)
+            return;
+        using Vec = alpaka::Vec<std::uint32_t, 1>;
+        constexpr std::uint32_t blockSize = 128u;
+        auto const total = static_cast<std::uint64_t>(tileCount) * kTileSlotCount;
+        auto const wantedBlocks = (total + blockSize - 1u) / blockSize;
+        auto const maxBlocks = std::max<std::uint64_t>(1u, maxThreads / blockSize);
+        auto const blocks = static_cast<std::uint32_t>(std::min(wantedBlocks, maxBlocks));
+        if(blocks == 0u)
+            return;
+        queue.enqueue(
+            alpaka::onHost::FrameSpec{Vec{blocks}, Vec{blockSize}, exec},
+            alpaka::KernelBundle{
+                detail::NearExactAllTilesKernel<T_Type>{settings, GaussTable::create(), cells},
+                deviceNearSrc,
+                deviceNearW,
+                deviceTileOffset,
+                accumulator});
+    }
+
     template<typename T_Type = double, typename TQueue, typename TExec>
     ExactBatchedResult exactShapeFieldTile(
         TQueue& queue,
