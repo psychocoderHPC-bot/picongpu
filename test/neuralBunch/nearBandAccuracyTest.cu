@@ -152,6 +152,9 @@ namespace
      *
      * @p nearMax == 0 and @p doExactPass == false reproduce the pre-fix default (the point field
      * evaluates every pair, including the singular near ones, and nothing fills them in).
+     *
+     * @p quadrupoleMid enables the analytic quadrupole shape correction for mid-band pairs
+     * (bandNearCells <= |R| <= bandFarCells), matching the production default.
      */
     template<typename TQueue, typename TExec>
     std::vector<double> tileWidePath(
@@ -160,7 +163,8 @@ namespace
         std::vector<Src> const& sources,
         nb::Vec3d cells,
         double nearMax,
-        bool doExactPass)
+        bool doExactPass,
+        bool quadrupoleMid = false)
     {
         constexpr std::size_t kOut = 1536u;
         std::size_t const S = sources.size();
@@ -205,7 +209,8 @@ namespace
             48.0,
             true,
             pointBuf,
-            bandBuf);
+            bandBuf,
+            quadrupoleMid);
 
         std::vector<double> tile(kOut, 0.0);
         auto pointHost = alpaka::onHost::allocHost<float>(alpaka::Vec{std::size_t{1}, kOut});
@@ -515,6 +520,51 @@ namespace
                           << ", fixed-2.0=" << (sourceNearBoxFixed(relG, cellsG, kAspectNearMax) ? "near" : "far")
                           << ", aspect-aware-2.0=" << (sourceNearBox(relG, cellsG, kAspectNearMax) ? "near" : "far")
                           << "\n";
+
+                // ---- Scenario H: mid-band quadrupole pin (T76) ---------------------------------------------------
+                // A source at (12.5, 4.0, 2.0) is 4.5 cells from the nearest staggered slot (8, 4, 2), outside the
+                // near box (threshold 4.0: x face at 12.0), in the mid band. The mid band does not meet the 1e-3
+                // near-band gate (param comment: "measured mean ~2.5%"); the quadrupole shape correction reduces the
+                // point-field error by a factor of ~3-8, which is the validated behaviour for d >= 4. The checks
+                // pin that the quadrupole is active (point+quad better than point-only) and that the residual is
+                // within the mid-band accuracy envelope (<10%), not the near-band 1e-3 gate.
+                std::vector<Src> h{{Src{{12.5, 4.0, 2.0}, {7.03562364, 7.03562364, 0.0}, 1.0}}};
+                nb::Vec3d const cellsH{1.0, 1.0, 1.0};
+                auto refH = ref::tile_field(ref::Vec3{0.0, 0.0, 0.0}, toReference(h), 1.0, 1.0, 1.0);
+                auto hQuad = tileWidePath(queue, exec, h, cellsH, kNearMax, true, true);
+                auto hPoint = tileWidePath(queue, exec, h, cellsH, kNearMax, true, false);
+                bool const hQuadFinite
+                    = std::all_of(hQuad.begin(), hQuad.end(), [](double v) { return std::isfinite(v); });
+                check(hQuadFinite, "H: mid-band quadrupole path finite", 0.0);
+                double const gateHQuad_E = groupGate(hQuad, refH, 0u);
+                double const gateHQuad_B = groupGate(hQuad, refH, 3u);
+                double const gateHPoint_E = groupGate(hPoint, refH, 0u);
+                double const gateHPoint_B = groupGate(hPoint, refH, 3u);
+                check(gateHQuad_E < gateHPoint_E, "H: quadrupole reduces E error vs point-only", gateHPoint_E - gateHQuad_E);
+                check(gateHQuad_B < gateHPoint_B, "H: quadrupole reduces B error vs point-only", gateHPoint_B - gateHQuad_B);
+                check(gateHQuad_E <= 0.1, "H: point+quad E within mid-band envelope (<10%)", gateHQuad_E);
+                check(gateHQuad_B <= 0.1, "H: point+quad B within mid-band envelope (<10%)", gateHQuad_B);
+                check(gateHPoint_E > 0.01, "H: point-only E error is significant (quad is doing work)", gateHPoint_E);
+                std::cout << "[H mid-band quadrupole, d=4.5, moving] default vs exact reference\n";
+                report("point+quad", hQuad, refH);
+                report("point-only", hPoint, refH);
+                reportPairs("point+quad", nearPairCounts(h, cellsH, kNearMax));
+
+                // ---- Scenario I: near-box boundary disjointness (T76) ---------------------------------------------
+                // A source exactly on the near-box face (x=12.0, threshold 4.0: maxX+thrX=12.0) is classified
+                // as near (exact pass); a source just outside (x=12.01) is classified as not near (point field).
+                // This pins the disjoint partition: no (source, tile) pair is handled by both passes.
+                nb::Vec3d const relI1{12.0, 4.0, 2.0};
+                nb::Vec3d const relI2{12.01, 4.0, 2.0};
+                check(
+                    sourceNearBox(relI1, cellsH, kNearMax),
+                    "I: source on the near-box face is classified near (exact pass)", 0.0);
+                check(
+                    !sourceNearBox(relI2, cellsH, kNearMax),
+                    "I: source just outside the near box is classified far (point field)", 0.0);
+                std::cout << "[I near-box boundary, threshold 4.0] disjointness\n";
+                std::cout << "  x=12.0 -> " << (sourceNearBox(relI1, cellsH, kNearMax) ? "near" : "far")
+                          << ", x=12.01 -> " << (sourceNearBox(relI2, cellsH, kNearMax) ? "near" : "far") << "\n";
             });
         return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
