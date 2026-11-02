@@ -94,15 +94,18 @@ namespace picongpu::neuralBunch
         //! Unset means: use ``banded`` when enabled, which is the production default. ``neural`` remains
         //! selectable for compatibility but is not the default.
         std::optional<FieldInitializer> fieldInitializer{};
-        //! ``banded``: distances below this many (dx-normalized) cells are the near band and use the exact TSC
-        //! quadrature (or ``near_model`` when ``useModelForNear`` is set). The tile-wide default path uses this as the
-        //! near threshold: the analytic point field skips every (source, tile) pair within this distance and the exact
-        //! device quadrature evaluates them, so a target inside a source's TSC support is never evaluated with the
-        //! singular point kernel. Raising it widens the exact band into the mid band at a cost (see the far-field note
-        //! on ``bandedFarMinCells``). The exact behaviour is the default. A value of 0 disables the near-band split:
-        //! the point field evaluates every pair and the exact near pass does not run (legacy point-field-only
-        //! semantics).
-        double bandedNearMaxCells = 4.0;
+        //! ``banded``: the near threshold in dx units. The tile-wide default path routes a (source, tile) pair to the
+        //! exact TSC quadrature when the source lies within this margin of the tile box on every axis (sourceNearBox);
+        //! the analytic point field handles the rest, so a target inside a source's TSC support is never evaluated with
+        //! the singular point kernel. The minimal margin that keeps every in-support pair exact is 1.5 * max(1, a_y, a_z)
+        //! (the TSC support is +-1.5 cells per axis); 2.0 is the isotropic default (1.5 + 0.5 margin). For anisotropic
+        //! cells the threshold must scale with the max aspect to keep the support in the near band (e.g. ~15 at aspect 10);
+        //! a fixed 4.0 under-covers those. Lowering it from 4.0 drops the cheaper 2-4 cell pairs out of the exact pass
+        //! (measured ~1.3x wall-time cut on a 2000-source 64^3 grid: 1824.9s -> 1379.7s, 60000 -> 18240 near pairs) while
+        //! every in-support pair stays exact (pinned by nearBandAccuracyTest scenario F). A value of 0 disables the
+        //! near-band split: the point field evaluates every pair and the exact near pass does not run (legacy
+        //! point-field-only semantics).
+        double bandedNearMaxCells = 2.0;
         //! ``banded``: distances above this many cells use the analytic far field (with ``far_multipole``). The point
         //! field's leading error scales as ~ (source extent / distance)^2, so it falls below the 1e-3 gate only beyond
         //! a distance of roughly (1.5..3 cells) / sqrt(1e-3) ~ 47..95 cells at aspect 1 (wider at larger aspect; the

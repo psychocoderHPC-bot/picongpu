@@ -431,6 +431,29 @@ namespace
                 std::cout << "[E zero near threshold] exact pass skipped\n";
                 std::cout << "  max|threshold0 - legacy| = " << maxDiffE << " (must be exactly 0)\n";
                 reportPairs("threshold0", nearPairCounts(e, cellsA, kZeroNearMax));
+
+                // ---- Scenario F: near threshold 2.0, worst-position in-support source (T60 safety) ----
+                // A source at the TSC support edge of the tile x=0 edge slot (rel.x=-1.49, in-support to the slot
+                // at (0,0.5,0.5) since |dx|=1.49<1.5) must still be routed to the exact pass at nearMax=2.0
+                // (2.0 > 1.5 support), not the point field. Confirms lowering the near threshold to 2.0 keeps
+                // every in-support (source, slot) pair exact (analytic min threshold for iso cells is 1.5).
+                std::vector<Src> f{{Src{{-1.49, 0.5, 0.5}, {0.10, 0.10, 0.05}, 1.0}}};
+                constexpr double kThr2NearMax = 2.0;
+                auto refF = ref::tile_field(ref::Vec3{0.0, 0.0, 0.0}, toReference(f), 1.0, 1.0, 1.0);
+                auto defaultF = tileWidePath(queue, exec, f, cellsA, kThr2NearMax, true);
+                bool const fFinite = std::all_of(
+                    defaultF.begin(), defaultF.end(), [](double v) { return std::isfinite(v); });
+                check(fFinite, "F: thr=2.0 worst-position path finite", 0.0);
+                double const gateF_E = groupGate(defaultF, refF, 0u);
+                double const gateF_B = groupGate(defaultF, refF, 3u);
+                check(gateF_E <= 1.0e-3, "F: thr=2.0 keeps the in-support source exact (E group)", gateF_E);
+                check(gateF_B <= 1.0e-3, "F: thr=2.0 keeps the in-support source exact (B group)", gateF_B);
+                check(
+                    sourceNearBox(nb::Vec3d{-1.49, 0.5, 0.5}, cellsA, kThr2NearMax),
+                    "F: worst-position in-support source is inside the near box at thr=2.0", 0.0);
+                std::cout << "[F threshold 2.0, worst-position in-support] default vs exact reference\n";
+                report("default", defaultF, refF);
+                reportPairs("default", nearPairCounts(f, cellsA, kThr2NearMax));
             });
         return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
