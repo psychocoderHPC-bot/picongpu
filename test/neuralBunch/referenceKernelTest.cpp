@@ -135,6 +135,63 @@ namespace
         }
     }
 
+    // Ground truth for the stationary (u = 0) shape integral inside the TSC
+    // support, with unit cells and the source at the origin:
+    //     E(x) = int_{[-1.5,1.5]^3} W(s) (x - s)/|x - s|^3 d^3 s.
+    // The values below were produced outside this build, independently of the
+    // C++ implementation, by high-order tensor Gauss-Legendre quadrature in
+    // spherical coordinates around the singular point s = x (up to 600^2
+    // angular x 256 radial nodes), cross-checked against an analytic-
+    // subtraction Cartesian quadrature (512/640 nodes per axis for the smooth
+    // remainder, and a 50-digit mpmath box field with one face axis integrated
+    // in closed form via asinh).  The two disagree by <2e-7.  The numbers are
+    // embedded so the test has no Python dependency.
+    void inSupportAccuracy()
+    {
+        struct Probe
+        {
+            char const* name;
+            ref::Vec3 x;
+            ref::Vec3 truth;
+        };
+        std::array<Probe, 5> const probes{{
+            {"P1", {0.5, 0.25, 0.0}, {0.68199314198371386, 0.33013571230043481, 0.0}},
+            {"P2", {0.1, 0.2, 0.3}, {0.15460951156243138, 0.31166497467576837, 0.47331363061538945}},
+            {"H1", {0.49, 0.49, 0.49}, {0.45480399008387334, 0.45480399008387334, 0.45480399008387334}},
+            {"H3", {1.49, 0.25, 0.0}, {0.42013343859130897, 0.066759292829999553, 0.0}},
+            {"H6", {0.99, 0.99, 0.99}, {0.19828951566260772, 0.19828951566260772, 0.19828951566260772}},
+        }};
+        for(auto const& probe : probes)
+        {
+            ref::Vec3 E, B;
+            ref::ShapeResult result;
+            ref::shape_field(
+                probe.x,
+                ref::Vec3{},
+                ref::Vec3{},
+                1.0,
+                1.0,
+                1.0,
+                ref::Settings{},
+                E,
+                B,
+                &result);
+            double const scale = std::max(
+                {std::abs(probe.truth.x), std::abs(probe.truth.y), std::abs(probe.truth.z), 1e-300});
+            double const diff = std::max(
+                {std::abs(E.x - probe.truth.x),
+                 std::abs(E.y - probe.truth.y),
+                 std::abs(E.z - probe.truth.z)});
+            double const rel = diff / scale;
+            check(result.converged, std::string(probe.name) + ": in-support converged");
+            check(rel <= 1.0e-6, std::string(probe.name) + ": in-support relative error vs independent truth");
+            if(rel > 1.0e-6)
+                std::cerr << "  " << probe.name << " rel=" << rel << " E=(" << E.x << "," << E.y << "," << E.z
+                          << ") truth=(" << probe.truth.x << "," << probe.truth.y << "," << probe.truth.z
+                          << ")\n";
+        }
+    }
+
     void directAnisotropic()
     {
         // Independent direct check at one output point with unequal cells.
@@ -282,6 +339,7 @@ int main(int argc, char** argv)
 {
     fs::path dataDir = argc > 1 ? fs::path(argv[1]) : fs::path{NB_TESTDATA_DIR};
     goldenTiles(dataDir);
+    inSupportAccuracy();
     directAnisotropic();
     anisotropicGeometry();
 
