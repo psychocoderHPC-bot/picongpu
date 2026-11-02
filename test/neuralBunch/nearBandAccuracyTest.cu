@@ -73,12 +73,26 @@ namespace
         double w = 1.0;
     };
 
-    // Mirrors nb::tileWideDetail::sourceNearBox (the stage's near test): a source is box-near to a
-    // tile when its tile-relative position (dx units) lies in [-threshold, tileExtent+threshold] on
-    // every axis. Inlined here so this test also builds against pre-fix trees where the helper is
-    // absent; the formula is identical to the kernel's, keeping the point/exact partitions disjoint
-    // and exhaustive.
+    // Mirrors nb::tileWideDetail::sourceNearBox (the stage's near test): a source is box-near to a tile
+    // when its tile-relative position (dx units) lies in [-threshold*cells.a, tileExtent+threshold*cells.a]
+    // on every axis (threshold cells of margin on each axis, in that axis's own units). Aspect-aware since
+    // T63: a fixed dx margin under-covers the long axes for anisotropic cells. Inlined so this test also
+    // builds against pre-fix trees; the formula is identical to the kernel's, keeping the point/exact
+    // partitions disjoint and exhaustive.
     bool sourceNearBox(nb::Vec3d const& rel, nb::Vec3d const& cells, double const threshold)
+    {
+        double const thrX = threshold * cells.x, thrY = threshold * cells.y, thrZ = threshold * cells.z;
+        double const maxX = static_cast<double>(tg::tileNx) * cells.x;
+        double const maxY = static_cast<double>(tg::tileNy) * cells.y;
+        double const maxZ = static_cast<double>(tg::tileNz) * cells.z;
+        return rel.x >= -thrX && rel.x <= maxX + thrX
+            && rel.y >= -thrY && rel.y <= maxY + thrY
+            && rel.z >= -thrZ && rel.z <= maxZ + thrZ;
+    }
+
+    // The pre-T63 fixed-dx near box, kept only to pin that an aspect-10 in-support pair is mis-classified
+    // by the old behaviour (scenario G): a fixed dx margin covers only threshold/cells.a cells on axis a.
+    bool sourceNearBoxFixed(nb::Vec3d const& rel, nb::Vec3d const& cells, double const threshold)
     {
         double const maxX = static_cast<double>(tg::tileNx) * cells.x;
         double const maxY = static_cast<double>(tg::tileNy) * cells.y;
@@ -454,6 +468,53 @@ namespace
                 std::cout << "[F threshold 2.0, worst-position in-support] default vs exact reference\n";
                 report("default", defaultF, refF);
                 reportPairs("default", nearPairCounts(f, cellsA, kThr2NearMax));
+
+                // ---- Scenario G: aspect 10, in-support pair outside the fixed-dx band (T63) ----------------------
+                // A source at cell (4.0, -0.5, 2.0) (= dx 4.0, -5.0, 2.0): a cell corner in x and z, a TSC knot in y,
+                // 0.5 cell below the tile's bottom face. It is inside the true TSC support (to the bottom slots, ~1
+                // cell in y) but its y offset (-5.0 dx) is outside BOTH the pre-fix 4.0-dx and the 2.0-dx fixed bands,
+                // which only reach 4.0/2.0 cells_y = 0.4/0.2 cells_y on the y axis -- far short of the 1.5-cell TSC
+                // half-support. The pre-fix default therefore routed this in-support pair to the singular point field
+                // (wrong). The aspect-aware box (T63) scales the y margin to 2.0*10 = 20 dx (2.0 cells_y) and classifies
+                // it exact. This case FAILS on the pre-fix fixed-dx box and PASSES after the fix.
+                std::vector<Src> g{{Src{{4.0, -5.0, 2.0}, {0.10, 0.10, 0.05}, 1.0}}};
+                nb::Vec3d const cellsG{1.0, 10.0, 1.0};
+                constexpr double kAspectNearMax = 2.0;
+                nb::Vec3d const relG{4.0, -5.0, 2.0};
+                std::array<double, 3> const srcCellG{4.0, -5.0, 2.0};
+                std::array<double, 3> const originCellG{0.0, 0.0, 0.0};
+                tg::CellSizes const sizesG{1.0, 10.0, 1.0};
+                double const supportG = tg::minimumSupportDistanceCells(srcCellG, originCellG, sizesG);
+                check(supportG == 0.0, "G: aspect-10 pair is inside the true TSC support", supportG);
+                check(
+                    !sourceNearBoxFixed(relG, cellsG, 4.0),
+                    "G: pre-fix fixed 4.0-dx box mis-classifies the in-support pair as far (the bug)",
+                    0.0);
+                check(
+                    !sourceNearBoxFixed(relG, cellsG, kAspectNearMax),
+                    "G: pre-fix fixed 2.0-dx box (old default) also mis-classifies it as far",
+                    0.0);
+                check(
+                    sourceNearBox(relG, cellsG, kAspectNearMax),
+                    "G: aspect-aware box classifies the in-support pair as exact",
+                    0.0);
+                auto refG = ref::tile_field(ref::Vec3{0.0, 0.0, 0.0}, toReference(g), 1.0, 10.0, 1.0);
+                auto defaultG = tileWidePath(queue, exec, g, cellsG, kAspectNearMax, true);
+                bool const gFinite = std::all_of(
+                    defaultG.begin(), defaultG.end(), [](double v) { return std::isfinite(v); });
+                check(gFinite, "G: aspect-10 default path finite", 0.0);
+                double const gateG_E = groupGate(defaultG, refG, 0u);
+                double const gateG_B = groupGate(defaultG, refG, 3u);
+                check(gateG_E <= 1.0e-3, "G: aspect-10 in-support pair routed exact (E group within 1e-3)", gateG_E);
+                check(gateG_B <= 1.0e-3, "G: aspect-10 in-support pair routed exact (B group within 1e-3)", gateG_B);
+                std::cout << "[G aspect 10, in-support outside the fixed band] default vs exact reference\n";
+                report("default", defaultG, refG);
+                reportPairs("default", nearPairCounts(g, cellsG, kAspectNearMax));
+                std::cout << "  aspect-10 source: minSupportDistance=" << supportG << " dx, fixed-4.0="
+                          << (sourceNearBoxFixed(relG, cellsG, 4.0) ? "near" : "far")
+                          << ", fixed-2.0=" << (sourceNearBoxFixed(relG, cellsG, kAspectNearMax) ? "near" : "far")
+                          << ", aspect-aware-2.0=" << (sourceNearBox(relG, cellsG, kAspectNearMax) ? "near" : "far")
+                          << "\n";
             });
         return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }

@@ -89,12 +89,21 @@ namespace picongpu::particles::neuralBunch
          */
         ALPAKA_FN_HOST_ACC inline bool sourceNearBox(Vec3d const& relativeDx, Vec3d const& cellsDx, double threshold)
         {
+            // The near band is `threshold` cells of margin on every axis, in that axis's own cell units:
+            // `threshold * cellsDx.a` dx on axis a (cellsDx = (1, a_y, a_z)). This keeps the TSC support
+            // (half-width 1.5 cells/axis) inside the band for anisotropic cells: a fixed dx margin covers
+            // only threshold/cellsDx.a cells on axis a, which under-covers the long axes (aspect 10 needs a
+            // 1.5-cell y-margin of 15 dx, not 4). For isotropic cells (cellsDx == 1) this is exactly the old
+            // fixed-dx box, so an explicitly set threshold is unchanged there.
+            double const thrX = threshold * cellsDx.x;
+            double const thrY = threshold * cellsDx.y;
+            double const thrZ = threshold * cellsDx.z;
             double const maxX = static_cast<double>(tileGeometry::tileNx) * cellsDx.x;
             double const maxY = static_cast<double>(tileGeometry::tileNy) * cellsDx.y;
             double const maxZ = static_cast<double>(tileGeometry::tileNz) * cellsDx.z;
-            return relativeDx.x >= -threshold && relativeDx.x <= maxX + threshold && relativeDx.y >= -threshold
-                   && relativeDx.y <= maxY + threshold && relativeDx.z >= -threshold
-                   && relativeDx.z <= maxZ + threshold;
+            return relativeDx.x >= -thrX && relativeDx.x <= maxX + thrX && relativeDx.y >= -thrY
+                   && relativeDx.y <= maxY + thrY && relativeDx.z >= -thrZ
+                   && relativeDx.z <= maxZ + thrZ;
         }
 
         struct TileWideKernel

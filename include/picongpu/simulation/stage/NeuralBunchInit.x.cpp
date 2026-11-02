@@ -847,21 +847,21 @@ namespace picongpu
                                         auto const nearStart = std::chrono::steady_clock::now();
                                         double const dx0 = cellSizeSI[0];
                                         Vec3d const cellsDx{1.0, aspectY, aspectZ};
-                                        double const cellDxA[3]{cellsDx.x, cellsDx.y, cellsDx.z};
                                         double const nearThreshold = params.bandedNearMaxCells;
                                         // A source is near a local tile only within (tile extent + threshold) of the
                                         // local domain in every axis; reject the far ones before the small scan.
                                         std::array<double, 3> marginCells{};
-                                        // Per-axis neighbourhood radius: a source is box-near to a tile only within
-                                        // nearThreshold/cellsDx of the tile region, so the scan must reach that many
-                                        // tiles past the containing one (the aspect can stretch this in a thin axis).
+                                        // Per-axis neighbourhood radius: after the aspect-aware box (T63) the near
+                                        // margin on axis a is `nearThreshold` cells of that axis (nearThreshold*cellDx.a
+                                        // dx), so a source is box-near to a tile only within nearThreshold cells_a of the
+                                        // tile region; the scan must reach that many tiles past the containing one.
                                         std::array<int, 3> radius{};
                                         for(int axis = 0; axis < 3; ++axis)
                                         {
                                             marginCells[axis] = static_cast<double>(tg::tileSize[axis])
-                                                                + nearThreshold / cellDxA[axis];
+                                                                + nearThreshold;
                                             radius[axis] = static_cast<int>(std::ceil(
-                                                               nearThreshold / cellDxA[axis] / tg::tileSize[axis]))
+                                                               nearThreshold / tg::tileSize[axis]))
                                                            + 2;
                                         }
                                         auto const& tiles = grid.tiles;

@@ -94,17 +94,20 @@ namespace picongpu::neuralBunch
         //! Unset means: use ``banded`` when enabled, which is the production default. ``neural`` remains
         //! selectable for compatibility but is not the default.
         std::optional<FieldInitializer> fieldInitializer{};
-        //! ``banded``: the near threshold in dx units. The tile-wide default path routes a (source, tile) pair to the
-        //! exact TSC quadrature when the source lies within this margin of the tile box on every axis (sourceNearBox);
-        //! the analytic point field handles the rest, so a target inside a source's TSC support is never evaluated with
-        //! the singular point kernel. The minimal margin that keeps every in-support pair exact is 1.5 * max(1, a_y, a_z)
-        //! (the TSC support is +-1.5 cells per axis); 2.0 is the isotropic default (1.5 + 0.5 margin). For anisotropic
-        //! cells the threshold must scale with the max aspect to keep the support in the near band (e.g. ~15 at aspect 10);
-        //! a fixed 4.0 under-covers those. Lowering it from 4.0 drops the cheaper 2-4 cell pairs out of the exact pass
-        //! (measured ~1.3x wall-time cut on a 2000-source 64^3 grid: 1824.9s -> 1379.7s, 60000 -> 18240 near pairs) while
-        //! every in-support pair stays exact (pinned by nearBandAccuracyTest scenario F). A value of 0 disables the
-        //! near-band split: the point field evaluates every pair and the exact near pass does not run (legacy
-        //! point-field-only semantics).
+        //! ``banded``: the near-band half-width, in cells, applied on every axis in that axis's own cell units (T63).
+        //! The tile-wide default path routes a (source, tile) pair to the exact TSC quadrature when the source lies within
+        //! this many cells of the tile box on every axis (sourceNearBox); the analytic point field handles the rest, so a
+        //! target inside a source's TSC support is never evaluated with the singular point kernel. The margin on axis a is
+        //! internally `bandedNearMaxCells * a_a` dx (a_a = axis aspect, x == 1): the same number of cells on every axis in
+        //! that axis's own units, which keeps the +-1.5-cell TSC support in the band for anisotropic cells without the user
+        //! scaling per aspect. The analytic minimum that covers the support is 1.5 cells/axis, so the default 2.0 is a
+        //! 2.0/1.5 ~ 1.33 safety factor over it. For isotropic cells this is byte-for-byte the pre-T63 fixed-dx box, so an
+        //! explicitly set value is unchanged there. (Pre-T63 this was a fixed dx margin applied on every axis, which
+        //! under-covered the long axes -- e.g. aspect 10 needed a ~15-dx y-margin but only 4 were applied; pinned by
+        //! nearBandAccuracyTest scenario G.) Lowering it from 4.0 (iso) drops the cheaper 2-4 cell pairs out of the exact
+        //! pass (measured ~1.3x wall-time cut on a 2000-source 64^3 grid: 1824.9s -> 1379.7s, 60000 -> 18240 near pairs)
+        //! while every in-support pair stays exact (scenarios F and G). A value of 0 disables the near-band split: the
+        //! point field evaluates every pair and the exact near pass does not run (legacy point-field-only semantics).
         double bandedNearMaxCells = 2.0;
         //! ``banded``: distances above this many cells use the analytic far field (with ``far_multipole``). The point
         //! field's leading error scales as ~ (source extent / distance)^2, so it falls below the 1e-3 gate only beyond
