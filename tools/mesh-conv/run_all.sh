@@ -35,6 +35,7 @@ python3 compare_ref.py validate_double.csv --out validation_double.json | tee va
 ./meshconv --mode validate --fft float > validate_float.csv
 python3 compare_ref.py validate_float.csv --out validation_float.json | tee validation_float.txt
 
+./meshconv --mode refine | tee refine.txt
 ./meshconv --mode nopad | tee nopad.txt
 
 ./meshconv --mode bench > bench_double.csv

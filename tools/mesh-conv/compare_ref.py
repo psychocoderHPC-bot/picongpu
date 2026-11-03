@@ -43,17 +43,17 @@ def load_cache():
     return {}
 
 
-def reference(gamma, aspect, axis, d, cache):
-    key = f"{gamma}|{aspect}|{axis}|{d}"
+def reference(gamma, aspect, axis, d, cache, h):
+    key = f"h{h}|{gamma}|{aspect}|{axis}|{d}"
     if key in cache:
         return cache[key]
     cells = np.array([1.0, aspect, 1.0])
-    src = np.array([CENTER, CENTER, CENTER], dtype=float) * cells
-    tgt = np.array([CENTER, CENTER, CENTER], dtype=float)
+    src = np.array([CENTER, CENTER, CENTER], dtype=float) * h * cells
+    tgt = np.array([CENTER, CENTER, CENTER], dtype=float) * h
     if axis == "x":
-        tgt[0] += d
+        tgt[0] += d * h
     else:
-        tgt[1] += d
+        tgt[1] += d * h
     u = vel(gamma)
     ref = np.empty(6)
     for c in range(6):
@@ -70,6 +70,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("csv")
     ap.add_argument("--out", default="validation.json")
+    ap.add_argument("--h", type=float, default=1.0,
+                    help="grid spacing in cell units used by meshconv --h")
     a = ap.parse_args()
 
     rows = []
@@ -92,7 +94,7 @@ def main():
     worst_band = {}
     per_d = {}
     for gamma, aspect, axis, d, comp, mesh in rows:
-        refv = reference(gamma, aspect, axis, d, cache)
+        refv = reference(gamma, aspect, axis, d, cache, a.h)
         c = comps.index(comp)
         ref = float(refv[c])
         rel = abs(ref - mesh) / (1.0 + max(abs(ref), abs(mesh)))
@@ -112,7 +114,7 @@ def main():
 
     np.savez(CACHE_FILE, **cache)
 
-    out = {"N": N, "rows": len(rows), "worst_rel": {}, "worst_plain_rel": {},
+    out = {"N": N, "h": a.h, "rows": len(rows), "worst_rel": {}, "worst_plain_rel": {},
            "worst_point": {}, "per_d": {}, "worst_rel_band": {}}
     for k, v in worst.items():
         out["worst_rel"][f"{k[0]}|{k[1]}|{k[2]}"] = v

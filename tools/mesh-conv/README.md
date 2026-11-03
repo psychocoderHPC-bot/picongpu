@@ -47,7 +47,9 @@ Mesh (this program):
     F_c[j] = h^3 * sum_i rho[i] * K_c(((j-i)*h + o_c)*cells)   (free-space conv)
 
 `F_c[j]` is the field component at the staggered Yee position
-`(j*h + o_c)*cells`.  The point kernel is the same algebraic form as
+`(j*h + o_c)*cells`.  The `h^3` factor is part of the convolution, not only the
+FFT normalisation: the TSC deposit sums to the particle charge, so the Riemann
+sum needs the cell volume `h^3` even when the kernel is sampled in cell units.  The point kernel is the same algebraic form as
 `indfield.point_field`:
 
     D = |R|^2/(1+u^2) + (R.u)^2/(1+u^2)^2
@@ -69,14 +71,20 @@ the one pinned by alpakaVendor (`extern/alpaka3`,
 ## Modes
 
     CUDA_VISIBLE_DEVICES=3 ./meshconv --mode info
-    CUDA_VISIBLE_DEVICES=3 ./meshconv --mode validate [--fft double|float]
+    CUDA_VISIBLE_DEVICES=3 ./meshconv --mode validate [--fft double|float] [--h H]
+    CUDA_VISIBLE_DEVICES=3 ./meshconv --mode refine
     CUDA_VISIBLE_DEVICES=3 ./meshconv --mode nopad
     CUDA_VISIBLE_DEVICES=3 ./meshconv --mode bench  [--fft double|float]
 
 * `info`: prints the FFT backend and the alpakaVendor pin.
 * `validate`: grid 48^3, pad 4, one unit source on the centre node, gamma in
   {1,10,100}, aspect y/x in {0.25, 4, 1}, distances d = 2..16 nodes along +x and
-  +y.  Prints `gamma,aspect,axis,d,comp,mesh`.
+  +y.  Prints `gamma,aspect,axis,d,comp,mesh`.  `--h` sets the dimensionless node
+  spacing in cell units (default 1); `compare_ref.py --h H` evaluates the
+  reference at the matching positions.
+* `refine`: self-contained regression that compares the field at the same
+  physical source/target separation for h=1 and h=1/2 (gamma 1 and 10).  It
+  fails if the `h^3` quadrature measure is missing from the convolution scale.
 * `compare_ref.py`: evaluates the `indfield.py` reference at the staggered
   positions and reports worst relative error per component with
   `|ref-mesh|/(1+max(|ref|,|mesh|))` (the T139/T142/T149 convention).
@@ -99,7 +107,9 @@ evaluated serially by `compare_ref.py`. The alpakaVendor build reproduces the
 earlier direct-FFT prototype **to every printed digit**.
 
 Worst per-component error over the far band d=12..16 (double FFT): 1.4e-4 to
-2.9e-4. Over the near-dominated d=2..16 band: 3.0e-2 to 7.2e-1, so the mesh
+2.9e-4.  Grid-refinement regression (`--mode refine`, h=1 vs h=1/2 at fixed
+physical separation): worst 9.1e-4, gate 2e-3.  With the pre-fix `scale=1/M^3`
+it is O(1) (factor h^-3 = 8). Over the near-dominated d=2..16 band: 3.0e-2 to 7.2e-1, so the mesh
 alone is not a near-field method and needs the table inside the shell.
 
 No-padding control, N=32, pad=1 vs pad=2: the wraparound artefact is

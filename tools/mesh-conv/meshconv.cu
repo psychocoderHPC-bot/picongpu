@@ -86,6 +86,7 @@ static const double kOffsets[6][3] = {
     {0.5, 0.0, 0.5},   // By
     {0.5, 0.5, 0.0}};  // Bz
 static const char* kComp[6] = {"Ex", "Ey", "Ez", "Bx", "By", "Bz"};
+static double g_h = 1.0;  // grid spacing in cell units (refinement study)
 
 struct Sim {
   int N = 48;          // number of nodes per axis
@@ -351,7 +352,12 @@ static std::vector<double> runMeshImpl(Env& env,
     const int thr = 256;
     const int64_t blk = (M3 + thr - 1) / thr;
     const int64_t blkN = (N3 + thr - 1) / thr;
-    const double scale = 1.0 / (double)M3;  // alpakaVendor: no normalization
+    // F_c[j] = h^3 sum_i rho[i] K_c(...): the TSC deposit has unit
+    // partition sum, so the quadrature measure h^3 is required in addition to
+    // the inverse FFT normalization 1/M^3 (alpakaVendor has none).  `h` is the
+    // dimensionless node spacing in cell units; `cell` is already folded into
+    // the sampled kernel, so no cell factor belongs here.
+    const double scale = s.h * s.h * s.h / (double)M3;
 
     CK(cudaEventRecord(e0, stream));
     realToComplex<Complex><<<(int)blk, thr, 0, stream>>>(d_rho, d_rho_hat, M3);
@@ -464,15 +470,15 @@ static int modeValidate(Env& env, bool useFloat) {
   for (int gi = 0; gi < 3; ++gi) {
     for (int ai = 0; ai < 3; ++ai) {
       Sim s;
-      s.N = N; s.pad = pad; s.h = 1.0;
+      s.N = N; s.pad = pad; s.h = g_h;
       s.cell[0] = cell[0];
       s.cell[1] = aspects[ai];
       s.cell[2] = cell[2];
       vel(gammas[gi], u);
       s.u[0] = u[0]; s.u[1] = u[1]; s.u[2] = u[2];
-      std::vector<double> pos = {(double)center * s.cell[0],
-                                 (double)center * s.cell[1],
-                                 (double)center * s.cell[2]};
+      std::vector<double> pos = {(double)center * s.h * s.cell[0],
+                                 (double)center * s.h * s.cell[1],
+                                 (double)center * s.h * s.cell[2]};
       std::vector<double> w = {1.0};
       DevPart dp;
       upload(dp, pos, w);
@@ -534,6 +540,54 @@ static int modeNopad(Env& env) {
   return 0;
 }
 
+// Refinement regression: the same physical source/target separation must give
+// the same field at h and h/2.  This is self-contained (no indfield.py) and
+// fails by a factor h^-3 if the quadrature measure is missing from `scale`.
+static int modeRefine(Env& env) {
+  const int N = 48, pad = 4, center = N / 2;
+  const int64_t N3 = (int64_t)N * N * N;
+  const int gammas[2] = {1, 10};
+  const int Ds[3] = {4, 6, 8};
+  double worst = 0.0;
+  printf("gamma,D,comp,h1,h05,rel\n");
+  for (int gi = 0; gi < 2; ++gi) {
+    double u[3];
+    vel(gammas[gi], u);
+    std::vector<double> F[2];
+    for (int r = 0; r < 2; ++r) {
+      Sim s;
+      s.N = N; s.pad = pad; s.h = (r == 0) ? 1.0 : 0.5;
+      s.cell[0] = s.cell[1] = s.cell[2] = 1.0;
+      s.u[0] = u[0]; s.u[1] = u[1]; s.u[2] = u[2];
+      const double p = (double)center * s.h;
+      std::vector<double> pos = {p, p, p};
+      std::vector<double> w = {1.0};
+      DevPart dp;
+      upload(dp, pos, w);
+      Phase ph;
+      F[r] = runMesh(env, s, dp.pos, dp.w, 1, false, &ph, false);
+    }
+    for (int di = 0; di < 3; ++di) {
+      const int D = Ds[di];
+      const int i1 = center + D;          // h=1 node at distance D
+      const int i05 = center + 2 * D;     // h=1/2 node at the same distance
+      const int64_t idx1 = i1 + (int64_t)N * (center + (int64_t)N * center);
+      const int64_t idx05 = i05 + (int64_t)N * (center + (int64_t)N * center);
+      for (int c = 0; c < 6; ++c) {
+        const double a = F[0][(size_t)c * N3 + idx1];
+        const double b = F[1][(size_t)c * N3 + idx05];
+        const double e = fabs(a - b) / (1.0 + fmax(fabs(a), fabs(b)));
+        worst = fmax(worst, e);
+        printf("%d,%d,%s,%.17g,%.17g,%.3e\n", gammas[gi], D, kComp[c],
+               a, b, e);
+      }
+    }
+  }
+  printf("REFINE worst |h1-h05|/(1+max) = %.3e (gate 2e-3): %s\n", worst,
+         worst < 2e-3 ? "PASS" : "FAIL");
+  return worst < 2e-3 ? 0 : 1;
+}
+
 static int modeBench(Env& env, bool useFloat) {
   const int Ns[2] = {64, 128};          // 20-cell and 50-cell bunch containers
   const double bunch[2] = {20.0, 50.0};
@@ -586,8 +640,9 @@ int main(int argc, char** argv) {
     std::string a = argv[i];
     if (a == "--mode" && i + 1 < argc) mode = argv[++i];
     else if (a == "--fft" && i + 1 < argc) useFloat = (std::string(argv[++i]) == "float");
+    else if (a == "--h" && i + 1 < argc) g_h = std::atof(argv[++i]);
     else if (a == "--help") {
-      printf("usage: %s --mode {validate,nopad,bench,info} [--fft double|float]\n",
+      printf("usage: %s --mode {validate,refine,nopad,bench,info} [--fft double|float] [--h H]\n",
              argv[0]);
       return 0;
     } else {
@@ -604,6 +659,7 @@ int main(int argc, char** argv) {
   }
   Env env = makeEnv();
   if (mode == "validate") return modeValidate(env, useFloat);
+  if (mode == "refine") return modeRefine(env);
   if (mode == "nopad") return modeNopad(env);
   if (mode == "bench") return modeBench(env, useFloat);
   fprintf(stderr, "unknown mode %s\n", mode.c_str());
