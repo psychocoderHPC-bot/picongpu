@@ -17,15 +17,23 @@ The delivered implementation uses **alpakaVendor**
     alpaka::fft::onHost::executeForward(queue, plan, in, out);
     alpaka::fft::onHost::executeBackward(queue, plan, in, out);
 
-The vendor maps that plan to the platform FFT: the CUDA FFT runtime on an Nvidia
-GPU, hipFFT on AMD, oneMKL DFT on SYCL and FFTW on the CPU. The source contains
-no direct vendor FFT call. Both `float` and `double` are supported
+The vendor maps that plan to the platform FFT: cuFFT on an Nvidia GPU, hipFFT
+on AMD, oneMKL DFT on SYCL and FFTW on the CPU. The source contains no direct
+vendor FFT call. Both `float` and `double` are supported
 (`alpaka::fft::RealScalar`), selected by `--fft float|double`.
 
-This replaces the earlier prototype that called the CUDA FFT API directly.
+This replaces the earlier prototype that called the cuFFT API directly.
 Both implementations give the same validated numbers and comparable timings
 (see Validation and Performance). The alpakaVendor version is the one that
 ships because the project requires the vendor FFT for backend portability.
+
+## Portability
+
+The FFT comes from alpakaVendor; on CUDA that resolves to cuFFT, on HIP to
+hipFFT, on SYCL to oneMKL and on the CPU to FFTW. The code calls only the
+vendor API (`PlanBuilder`, `executeForward`, `executeBackward`), never a
+platform FFT function directly. The CUDA build links `libcufft` because
+alpakaVendor's CUDA backend maps to cuFFT internally.
 
 ## Formulation
 
@@ -54,7 +62,7 @@ The convolution is a circular FFT convolution zero-padded to `M = pad*N`. With
     ./run_all.sh
 
 The script clones alpakaVendor at the PIConGPU pin, builds `meshconv.cu` with
-`nvcc` and links the CUDA FFT runtime from the toolkit. The alpaka version is
+`nvcc` and links `libcufft` from the toolkit. The alpaka version is
 the one pinned by alpakaVendor (`extern/alpaka3`,
 `7b92361468d3280c260200198081ae7e98f0bc56`).
 

@@ -16,9 +16,9 @@
 // FFT backend: alpakaVendor (https://github.com/psychocoderHPC/alpakaVendor),
 // pinned by PIConGPU to af24cc7b2bd125056e9889e270d3af7bdf972c6f.  The program
 // only calls the portable alpaka::fft API and never calls a vendor FFT API
-// directly.  alpakaVendor maps the plan to the platform FFT: the CUDA FFT
-// runtime on an Nvidia GPU, hipFFT on AMD, oneMKL DFT on SYCL and FFTW on the
-// CPU.  The build script links that runtime; see run_all.sh.
+// directly.  alpakaVendor maps the plan to the platform FFT: cuFFT on an Nvidia
+// GPU, hipFFT on AMD, oneMKL DFT on SYCL and FFTW on the CPU.  The build script
+// links libcufft; see run_all.sh.
 
 #include <alpaka/alpaka.hpp>
 #include <alpaka/fft.hpp>
@@ -304,7 +304,7 @@ static std::vector<double> runMeshImpl(Env& env,
                   .build(env.device);
   static_assert(
       std::is_same_v<decltype(alpaka::getApi(env.queue)), alpaka::api::Cuda>,
-      "this tool instantiates the alpakaVendor CUDA FFT backend");
+      "this tool instantiates the alpakaVendor CUDA (cuFFT) FFT backend");
 
   std::vector<double> hostF((size_t)6 * N3, 0.0);
   double* d_out = nullptr;

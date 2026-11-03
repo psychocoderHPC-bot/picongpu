@@ -1,7 +1,8 @@
 #!/bin/bash
 # Build and run on rosi_v100 (CUDA 12.6, V100 sm_70).  GPU 3 only.
 # The FFT comes from alpakaVendor at the PIConGPU pin; only the portable
-# alpaka::fft API is used.  The CUDA FFT runtime is linked by the toolkit.
+# alpaka::fft API is used.  alpakaVendor's CUDA backend maps to cuFFT, so the
+# toolkit's cuFFT library must be on the link line.
 set -euo pipefail
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-3}
 NVCC=${NVCC:-/usr/local/cuda/bin/nvcc}
@@ -24,7 +25,7 @@ fi
 cd "$HERE"
 "$NVCC" -O3 -arch=sm_70 -std=c++20 \
   -I"$ALPAKAV_DIR/include" -I"$ALPAKAV_DIR/extern/alpaka3/include" \
-  meshconv.cu -lcu"fft" -o meshconv
+  meshconv.cu -lcufft -o meshconv
 echo "built meshconv (alpakaVendor $ALPAKAV_PIN)"
 
 ./meshconv --mode info
