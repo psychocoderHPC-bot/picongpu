@@ -15,9 +15,44 @@ sources and from the exact FP64 reference next to them.
 
 ## Build switch
 
+PIConGPU has no top-level `CMakeLists.txt`. The CMake source directory is
+`include/picongpu`. `bin/pic-configure` passes exactly that path, and it also
+configures the unit tests. Pointing CMake at the repository root fails with
+`does not appear to contain CMakeLists.txt`.
+
+Build and test from a fresh clone:
+
 ```bash
-cmake ... -DPIC_USE_neuralBunch=ON ...
+git clone https://github.com/psychocoderHPC-bot/picongpu.git picongpu
+cd picongpu
+git checkout feature-neural-bunch-field-init
+git submodule update --init --depth 1
+
+# keep the build tree outside the checkout
+mkdir -p ../picongpu-build && cd ../picongpu-build
+cmake ../picongpu/include/picongpu \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DPIC_USE_neuralBunch=ON \
+    -Dalpaka_DEP_CUDA=ON \
+    -DCMAKE_CUDA_ARCHITECTURES=70
+cmake --build . --parallel
+ctest -R neuralBunch --output-on-failure
 ```
+
+Set `CMAKE_PREFIX_PATH` (or `openPMD_DIR`) to an openPMD-api installation;
+`PIC_USE_neuralBunch=ON` fails at configure time when openPMD is missing. Set
+`CMAKE_CUDA_ARCHITECTURES` to the target GPU. Without
+`-Dalpaka_DEP_CUDA=ON` the host tests still build and the CUDA test targets are
+skipped. To build only the tests, pass their targets to `cmake --build`, for
+example `--target neuralBunchReferenceTest neuralBunchBandedPolicyTest
+neuralBunchTileGeometryTest neuralBunchProbeFeatureTest
+neuralBunchSourceFileTest neuralBunchExactBenchmark
+neuralBunchDevicePipelineTest neuralBunchNearBandAccuracyTest`.
+
+For a simulation input set the `pic-build`/`pic-configure` wrappers work
+unchanged: `bin/pic-configure` adds `-DPIC_EXTENSION_PATH=<input>` and points
+CMake at `<picongpu>/include/picongpu`. Pass the switch through, for example
+`pic-configure -c "-DPIC_USE_neuralBunch=ON" <inputDirectory>`.
 
 `PIC_USE_neuralBunch` is an `AUTO` dependency: enabling it requires openPMD and
 the pinned alpakaNN/alpakaVendor forks. The build defines
