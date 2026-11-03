@@ -72,7 +72,7 @@ def point_field(R, u):
     beta = u / np.sqrt(1.0 + uu2)
     rb = np.sum(R * beta, axis=-1)
     D = r2 * inv_g2 + rb * rb
-    E = inv_g2[..., None] * R / (D ** 1.5)[..., None]
+    E = inv_g2 * R / (D ** 1.5)[..., None]
     B = np.cross(beta, E)
     return E, B
 
