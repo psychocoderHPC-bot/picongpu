@@ -118,6 +118,7 @@ namespace picongpu::particles::neuralBunch
             double bandFarCells{};
             bool computeBands{};
             bool quadrupoleMid{};
+            bool order4Mid{};
 
             ALPAKA_FN_ACC void operator()(
                 auto const& acc,
@@ -203,18 +204,31 @@ namespace picongpu::particles::neuralBunch
                     auto field = pointFieldDx(R, u);
                     // Mid band only: add the quadrupole shape correction. The same band window the classifier uses
                     // keeps the near (exact quadrature) and far bands bit-identical to the point-field-only path.
-                    if(quadrupoleMid)
+                    if(quadrupoleMid || order4Mid)
                     {
                         double const r2 = R.x * R.x + R.y * R.y + R.z * R.z;
                         if(r2 >= bandNearCells * bandNearCells && r2 <= bandFarCells * bandFarCells)
                         {
-                            auto const corr = quadrupoleCorrectionDx(R, u, cellsDx);
-                            field.E.x += corr.E.x;
-                            field.E.y += corr.E.y;
-                            field.E.z += corr.E.z;
-                            field.B.x += corr.B.x;
-                            field.B.y += corr.B.y;
-                            field.B.z += corr.B.z;
+                            if(quadrupoleMid)
+                            {
+                                auto const corr = quadrupoleCorrectionDx(R, u, cellsDx);
+                                field.E.x += corr.E.x;
+                                field.E.y += corr.E.y;
+                                field.E.z += corr.E.z;
+                                field.B.x += corr.B.x;
+                                field.B.y += corr.B.y;
+                                field.B.z += corr.B.z;
+                            }
+                            if(order4Mid)
+                            {
+                                auto const corr4 = order4CorrectionDx(R, u, cellsDx);
+                                field.E.x += corr4.E.x;
+                                field.E.y += corr4.E.y;
+                                field.E.z += corr4.E.z;
+                                field.B.x += corr4.B.x;
+                                field.B.y += corr4.B.y;
+                                field.B.z += corr4.B.z;
+                            }
                         }
                     }
                     double const contribution
@@ -244,6 +258,9 @@ namespace picongpu::particles::neuralBunch
      * @param quadrupoleMid add the analytic quadrupole shape correction for pairs inside the mid band
      *        (``bandNearCells <= |R| <= bandFarCells``). Off by default so the point-field parity tests and callers
      *        that want the bare point field keep the previous behaviour.
+     * @param order4Mid add the analytic order-4 (hexadecapole) shape correction on top of the quadrupole for
+     *        mid-band pairs. Off by default; with the banded near threshold at 6.0 cells the worst-case
+     *        point+quad+order4 error at the band boundary is ~5e-4 (gamma-10, 60 deg oblique).
      */
     template<typename TQueue, typename TExec>
     void enqueueTileWidePointField(
@@ -262,7 +279,8 @@ namespace picongpu::particles::neuralBunch
         bool computeBands,
         auto& tileValues,
         auto& bandCounts,
-        bool quadrupoleMid = false)
+        bool quadrupoleMid = false,
+        bool order4Mid = false)
     {
         (void) sourceCount;
         auto const tileCount = static_cast<std::uint64_t>(tileCounts[0]) * static_cast<std::uint64_t>(tileCounts[1])
@@ -288,7 +306,8 @@ namespace picongpu::particles::neuralBunch
                     bandNearCells,
                     bandFarCells,
                     computeBands,
-                    quadrupoleMid},
+                    quadrupoleMid,
+                    order4Mid},
                 positions,
                 velocities,
                 charges,

@@ -131,6 +131,29 @@ namespace
         return diffNorm / std::max(refNorm, s0);
     }
 
+    /** Worst-case accuracy of one field group over the 256 staggered cells: the maximum per-cell
+     *  ||err|| / ||ref|| vector relative error. Unlike groupGate (pooled L2 over all cells), this
+     *  catches local failures at the band boundary that a pooled metric averages away. */
+    double worstCaseGate(std::vector<double> const& cand, std::vector<double> const& reference, std::size_t groupStart)
+    {
+        constexpr std::size_t kPoints = 256u; // 8 * 8 * 4 cells
+        double worst = 0.0;
+        for(std::size_t p = 0; p < kPoints; ++p)
+        {
+            double sumRef2 = 0.0;
+            double sumDiff2 = 0.0;
+            for(int c = 0; c < 3; ++c)
+            {
+                std::size_t const slot = 6u * p + groupStart + static_cast<std::size_t>(c);
+                double const d = cand[slot] - reference[slot];
+                sumDiff2 += d * d;
+                sumRef2 += reference[slot] * reference[slot];
+            }
+            worst = std::max(worst, std::sqrt(sumDiff2) / std::max(std::sqrt(sumRef2), 1e-30));
+        }
+        return worst;
+    }
+
     std::vector<ref::Source> toReference(std::vector<Src> const& sources)
     {
         std::vector<ref::Source> out(sources.size());
@@ -164,7 +187,8 @@ namespace
         nb::Vec3d cells,
         double nearMax,
         bool doExactPass,
-        bool quadrupoleMid = false)
+        bool quadrupoleMid = false,
+        bool order4Mid = false)
     {
         constexpr std::size_t kOut = 1536u;
         std::size_t const S = sources.size();
@@ -210,7 +234,8 @@ namespace
             true,
             pointBuf,
             bandBuf,
-            quadrupoleMid);
+            quadrupoleMid,
+            order4Mid);
 
         std::vector<double> tile(kOut, 0.0);
         auto pointHost = alpaka::onHost::allocHost<float>(alpaka::Vec{std::size_t{1}, kOut});
@@ -565,6 +590,52 @@ namespace
                 std::cout << "[I near-box boundary, threshold 4.0] disjointness\n";
                 std::cout << "  x=12.0 -> " << (sourceNearBox(relI1, cellsH, kNearMax) ? "near" : "far")
                           << ", x=12.01 -> " << (sourceNearBox(relI2, cellsH, kNearMax) ? "near" : "far") << "\n";
+
+                // ---- Scenario J: worst-case pin at the p4 band boundary (T86) -------------------------------------
+                // Order-4 (hexadecapole) mid-band correction with the near threshold raised to 6.0 cells. A gamma-10
+                // oblique source 6 dx along y from slot (7, 1.875, 3.5) sits just outside the aspect-aware near box
+                // (y face 2.0 + 6 * 0.25 = 3.5 < 7.875), so every slot of this tile is a mid-band pair at |R| >= 6,
+                // the band boundary where point+quad+order4 must stay within 1e-3 worst case (measured
+                // 1.5e-4 over the 256 staggered cells). The E gate is the worst case over all 256 staggered
+                // cells, not the pooled L2: point+quad alone is ~2.7e-3 worst case here and would fail it while
+                // its pooled L2 stays below 1e-3, so pooled-L2-only logic is caught. The B group (derived,
+                // B = beta x E) uses the standard pooled 1e-3 gate, as in the other scenarios.
+                nb::Vec3d const cellsJ{1.0, 0.25, 1.0};
+                double const nearMaxJ = 6.0;
+                std::vector<Src> j{{Src{{7.0, 7.875, 3.5}, {7.03562364, 7.03562364, 0.0}, 1.0}}};
+                auto refJ = ref::tile_field(ref::Vec3{0.0, 0.0, 0.0}, toReference(j), 1.0, 0.25, 1.0);
+                auto jP4 = tileWidePath(queue, exec, j, cellsJ, nearMaxJ, true, true, true);
+                auto jP2 = tileWidePath(queue, exec, j, cellsJ, nearMaxJ, true, true, false);
+                auto jPoint = tileWidePath(queue, exec, j, cellsJ, nearMaxJ, true, false, false);
+                bool const jP4Finite
+                    = std::all_of(jP4.begin(), jP4.end(), [](double v) { return std::isfinite(v); });
+                check(jP4Finite, "J: p4 band-boundary path finite", 0.0);
+                // The B group is gated with the standard pooled gate: B = beta x E vanishes at
+                // cross-product nodes, so a per-cell relative B error is not a well-posed gate.
+                double const worstJ4_E = worstCaseGate(jP4, refJ, 0u);
+                double const pooledJ4_B = groupGate(jP4, refJ, 3u);
+                double const worstJ2_E = worstCaseGate(jP2, refJ, 0u);
+                double const worstJPoint_E = worstCaseGate(jPoint, refJ, 0u);
+                check(
+                    worstJ4_E <= 1.0e-3,
+                    "J: point+quad+order4 worst case within 1e-3 at the d=6 band boundary (E)",
+                    worstJ4_E);
+                check(
+                    pooledJ4_B <= 1.0e-3,
+                    "J: point+quad+order4 pooled B gate within 1e-3 at the d=6 band boundary",
+                    pooledJ4_B);
+                check(worstJ4_E < worstJ2_E, "J: order4 reduces the worst case vs point+quad", worstJ2_E - worstJ4_E);
+                check(
+                    worstJ2_E > 1.0e-3,
+                    "J: point+quad alone fails the 1e-3 worst-case gate (order4 is required)",
+                    worstJ2_E);
+                check(
+                    worstJPoint_E > 1.0e-2,
+                    "J: point-only worst case is significant (corrections are doing work)",
+                    worstJPoint_E);
+                std::cout << "[J p4 band boundary, T=6, source 6 dx along y, gamma-10 oblique] worst case over 256 cells\n";
+                std::cout << "  worst-case E: point=" << worstJPoint_E << "  point+quad=" << worstJ2_E
+                          << "  point+quad+order4=" << worstJ4_E << "  (pooled B order4=" << pooledJ4_B << ")\n";
             });
         return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
