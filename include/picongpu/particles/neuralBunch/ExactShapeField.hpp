@@ -6,11 +6,20 @@
 
 /** Device port of the validated TSC shape-integrated quadrature (reference/cpp/neural_reference.hpp).
  *
- * Smooth outputs use a fixed-order tensor Gauss rule over the three TSC sub-panels on every axis. The order is
- * selected from the distance to the support (4 cells -> order 4, ~1e-8). In-support outputs use the same
- * box/pyramid decomposition as the CPU reference: 27 TSC sub-boxes, the containing box split at the singularity
- * into corner boxes, each covered by three pyramids with the singularity as apex. Two fixed-order evaluations give
- * a per-output Richardson error estimate; there is no adaptive host loop.
+ * Out-of-support outputs use a fixed-order tensor Gauss rule over the three TSC sub-panels on every axis with
+ * graded panels near the support (4 cells -> order 4, ~1e-8). In-support outputs use the reference
+ * power-transformed tensor Gauss rule: each axis is split at the TSC knot points and at the anchor
+ * t = R0 / cells, and every panel is mapped by
+ *
+ *     s = c + (other - c) * tau**kExactPeakPower,     tau in [0, 1] (Gauss node)
+ *
+ * with c the panel end nearest the anchor and the Jacobian p * tau**(p-1) folded into the weights. The kernel
+ * peak (the singularity, and the 1/gamma pancake of the moving kernel through it) is a panel endpoint of every
+ * box: the node clustering resolves the 1/gamma-wide peak that the pre-fix pyramid path saw only as a domain
+ * edge (measured device/reference ratio 0.177 at gamma 100, order-insensitive at box orders 32/64/96), and the
+ * Jacobian cancels the 1/r**2 corner singularity (transformed integrand vanishes like tau**2 for p = 5). No
+ * epsilon is added to the kernel. Two fixed-order evaluations give a per-output Richardson error estimate;
+ * there is no adaptive host loop.
  *
  * Accumulation is FP64 by default. The FP32 path keeps the point-field physics in FP64 but accumulates the
  * quadrature in float with Kahan compensation.
@@ -66,11 +75,8 @@ namespace picongpu::particles::neuralBunch
         int smoothOrderMid = 12; // 2 <= distance < 4
         int smoothOrderClose = 24; // 1 <= distance < 2
         int smoothOrderVeryClose = 32; // 0 < distance < 1
-        int nearAngularOrder = 24;
-        int nearAngularOrderFine = 32;
-        int nearRadialOrder = 4;
-        int nearBoxOrder = 12;
-        int nearBoxOrderFine = 16;
+        int nearBoxOrder = 12; // coarse in-support order of the Richardson pair
+        int nearBoxOrderFine = 16; // fine in-support order of the Richardson pair
         double tol = 1.0e-7;
     };
 
@@ -418,141 +424,144 @@ namespace picongpu::particles::neuralBunch
         }
     }
 
+    //! Exponent of the reference power transform (indfield.py: TRANSFORM_POWER = 5). The kernel anchor sits at
+    //! tau = 0 of every panel; the Jacobian p * tau**(p-1) cancels the 1/r**2 kernel singularity (the
+    //! transformed integrand vanishes like tau**(p-3) = tau**2 at the anchor) and clusters the Gauss nodes on
+    //! the 1/gamma pancake of the moving kernel, a 1/gamma-wide feature that a fixed-order rule on the unsplit
+    //! support sees only as an edge artifact of the integration domain.
+    inline constexpr double kExactPeakPower = 5.0;
+
+    //! tau**kExactPeakPower and tau**(kExactPeakPower - 1) by explicit multiplication (no libm pow on device).
+    ALPAKA_FN_HOST_ACC inline void exactPeakPowers(double tau, double& tauPowP, double& tauPowPm1)
+    {
+        double const u2 = tau * tau;
+        double const u4 = u2 * u2;
+        tauPowPm1 = u4; // tau**(p - 1) = tau**4
+        tauPowP = u4 * tau; // tau**p = tau**5
+    }
+
+    //! Append one in-support panel [eA, eB], anchored at the end nearest the kernel peak tAxis.
+    ALPAKA_FN_HOST_ACC inline void exactAddPeakPanel(
+        double const tAxis,
+        double eA,
+        double eB,
+        double* panelC,
+        double* panelLen,
+        int& panelCount)
+    {
+        bool const anchorAtA = alpaka::math::abs(eA - tAxis) <= alpaka::math::abs(eB - tAxis);
+        panelC[panelCount] = anchorAtA ? eA : eB;
+        panelLen[panelCount] = anchorAtA ? (eB - eA) : (eA - eB);
+        ++panelCount;
+    }
+
+    /** TSC support integral for one in-support (R0, u): the reference power-transformed tensor Gauss rule.
+     *
+     * Each axis is split at the TSC knot points and at the anchor t = R0 / cells (in support, so t is in
+     * [-1.5, 1.5]**3); every resulting panel is mapped by
+     *
+     *     s = c + (other - c) * tau**kExactPeakPower,     tau in [0, 1] (Gauss node)
+     *
+     * with c the panel end nearest the anchor, so the kernel peak (the singularity, and the 1/gamma pancake of
+     * the moving kernel through it) is a panel endpoint of every box. The node clustering resolves the peak and
+     * the Jacobian p * tau**(p-1) cancels the 1/r**2 corner singularity (transformed integrand vanishes like
+     * tau**2 for p = 5). No epsilon is added to the kernel. @p ng is the Gauss order of every panel; the caller
+     * runs the coarse/fine pair for the Richardson error estimate.
+     */
     template<typename T_Type>
     ALPAKA_FN_HOST_ACC void exactBoxIntegral(
         Vec3d const& R0,
         Vec3d const& u,
         Vec3d const& cells,
-        int nang,
-        int nr,
         int ng,
         GaussTable const& table,
         ExactAccumulator6<T_Type>& accumulator)
     {
-        int const ia = exactOrderIndex(nang);
-        int const ir = exactOrderIndex(nr);
         int const ig = exactOrderIndex(ng);
         double const t[3]{R0.x / cells.x, R0.y / cells.y, R0.z / cells.z};
-        double const boxLo[3]{-1.5, -1.5, -1.5};
 
-        for(int ix = 0; ix < 3; ++ix)
-            for(int iy = 0; iy < 3; ++iy)
-                for(int iz = 0; iz < 3; ++iz)
+        // Per-axis panels: the three TSC knot intervals, the one containing t[a] split at t[a]; at most 4 each.
+        constexpr double baseA[3]{-1.5, -0.5, 0.5};
+        constexpr double baseB[3]{-0.5, 0.5, 1.5};
+        double panelC[3][4]{}; // panel anchor end (nearest the kernel peak t)
+        double panelLen[3][4]{}; // signed panel length, other - c
+        int panelCount[3]{};
+        for(int a = 0; a < 3; ++a)
+        {
+            for(int p = 0; p < 3; ++p)
+            {
+                double const lo = baseA[p];
+                double const hi = baseB[p];
+                if(lo < t[a] && t[a] < hi)
                 {
-                    double const lo[3]{boxLo[0] + ix, boxLo[1] + iy, boxLo[2] + iz};
-                    double const hi[3]{lo[0] + 1.0, lo[1] + 1.0, lo[2] + 1.0};
-                    bool contains = true;
-                    for(int a = 0; a < 3; ++a)
-                        contains = contains && lo[a] <= t[a] && t[a] <= hi[a];
+                    exactAddPeakPanel(t[a], lo, t[a], panelC[a], panelLen[a], panelCount[a]);
+                    exactAddPeakPanel(t[a], t[a], hi, panelC[a], panelLen[a], panelCount[a]);
+                }
+                else
+                {
+                    exactAddPeakPanel(t[a], lo, hi, panelC[a], panelLen[a], panelCount[a]);
+                }
+            }
+        }
 
-                    if(!contains)
+        for(int px = 0; px < panelCount[0]; ++px)
+            for(int py = 0; py < panelCount[1]; ++py)
+                for(int pz = 0; pz < panelCount[2]; ++pz)
+                {
+                    double const cx = panelC[0][px];
+                    double const dx = panelLen[0][px];
+                    double const cy = panelC[1][py];
+                    double const dy = panelLen[1][py];
+                    double const cz = panelC[2][pz];
+                    double const dz = panelLen[2][pz];
+                    double const adx = alpaka::math::abs(dx);
+                    double const ady = alpaka::math::abs(dy);
+                    double const adz = alpaka::math::abs(dz);
+                    for(int i0 = 0; i0 < ng; ++i0)
                     {
-                        for(int a0 = 0; a0 < ng; ++a0)
+                        double const tau0 = 0.5 * (table.nodes[ig][i0] + 1.0);
+                        double up0 = 0.0, upm10 = 0.0;
+                        exactPeakPowers(tau0, up0, upm10);
+                        double const s0 = cx + dx * up0;
+                        double const w0
+                            = 0.5 * table.weights[ig][i0] * adx * kExactPeakPower * upm10 * exactTscShape(s0);
+                        if(w0 == 0.0)
+                            continue;
+                        for(int i1 = 0; i1 < ng; ++i1)
                         {
-                            double const s0 = 0.5 * (lo[0] + hi[0]) + 0.5 * (hi[0] - lo[0]) * table.nodes[ig][a0];
-                            double const w0 = 0.5 * (hi[0] - lo[0]) * table.weights[ig][a0];
-                            for(int a1 = 0; a1 < ng; ++a1)
+                            double const tau1 = 0.5 * (table.nodes[ig][i1] + 1.0);
+                            double up1 = 0.0, upm11 = 0.0;
+                            exactPeakPowers(tau1, up1, upm11);
+                            double const s1 = cy + dy * up1;
+                            double const wxy
+                                = w0 * (0.5 * table.weights[ig][i1] * ady * kExactPeakPower * upm11
+                                        * exactTscShape(s1));
+                            if(wxy == 0.0)
+                                continue;
+                            for(int i2 = 0; i2 < ng; ++i2)
                             {
-                                double const s1
-                                    = 0.5 * (lo[1] + hi[1]) + 0.5 * (hi[1] - lo[1]) * table.nodes[ig][a1];
-                                double const w1 = 0.5 * (hi[1] - lo[1]) * table.weights[ig][a1];
-                                for(int a2 = 0; a2 < ng; ++a2)
-                                {
-                                    double const s2
-                                        = 0.5 * (lo[2] + hi[2]) + 0.5 * (hi[2] - lo[2]) * table.nodes[ig][a2];
-                                    double const w2 = 0.5 * (hi[2] - lo[2]) * table.weights[ig][a2];
-                                    double const W = exactTscShape(s0) * exactTscShape(s1) * exactTscShape(s2);
-                                    if(W == 0.0)
-                                        continue;
-                                    Vec3d const R{
-                                        R0.x - s0 * cells.x,
-                                        R0.y - s1 * cells.y,
-                                        R0.z - s2 * cells.z};
-                                    auto const field = pointFieldDx(R, u);
-                                    accumulator.addPointField(field.E, field.B, w0 * w1 * w2 * W);
-                                }
-                            }
-                        }
-                        continue;
-                    }
-
-                    double segLo[3][2]{};
-                    double segHi[3][2]{};
-                    double segSign[3][2]{};
-                    int segCount[3]{};
-                    for(int a = 0; a < 3; ++a)
-                    {
-                        if(lo[a] < t[a])
-                        {
-                            segLo[a][segCount[a]] = lo[a];
-                            segHi[a][segCount[a]] = t[a];
-                            segSign[a][segCount[a]] = -1.0;
-                            ++segCount[a];
-                        }
-                        if(t[a] < hi[a])
-                        {
-                            segLo[a][segCount[a]] = t[a];
-                            segHi[a][segCount[a]] = hi[a];
-                            segSign[a][segCount[a]] = 1.0;
-                            ++segCount[a];
-                        }
-                    }
-                    for(int cx = 0; cx < segCount[0]; ++cx)
-                        for(int cy = 0; cy < segCount[1]; ++cy)
-                            for(int cz = 0; cz < segCount[2]; ++cz)
-                            {
-                                double const L[3]{
-                                    segHi[0][cx] - segLo[0][cx],
-                                    segHi[1][cy] - segLo[1][cy],
-                                    segHi[2][cz] - segLo[2][cz]};
-                                if(L[0] <= 0.0 || L[1] <= 0.0 || L[2] <= 0.0)
+                                double const tau2 = 0.5 * (table.nodes[ig][i2] + 1.0);
+                                double up2 = 0.0, upm12 = 0.0;
+                                exactPeakPowers(tau2, up2, upm12);
+                                double const s2 = cz + dz * up2;
+                                double const weight
+                                    = wxy * (0.5 * table.weights[ig][i2] * adz * kExactPeakPower * upm12
+                                             * exactTscShape(s2));
+                                if(weight == 0.0)
                                     continue;
-                                double const sgn[3]{segSign[0][cx], segSign[1][cy], segSign[2][cz]};
-                                double const V = L[0] * L[1] * L[2];
-                                for(int face = 0; face < 3; ++face)
-                                {
-                                    int const o0 = (face + 1) % 3;
-                                    int const o1 = (face + 2) % 3;
-                                    for(int iu = 0; iu < nang; ++iu)
-                                    {
-                                        double const uu = 0.5 * (table.nodes[ia][iu] + 1.0);
-                                        double const wu = 0.5 * table.weights[ia][iu];
-                                        for(int iv = 0; iv < nang; ++iv)
-                                        {
-                                            double const vv = 0.5 * (table.nodes[ia][iv] + 1.0);
-                                            double const wv = 0.5 * table.weights[ia][iv];
-                                            double q[3]{0.0, 0.0, 0.0};
-                                            q[face] = sgn[face] * L[face];
-                                            q[o0] = sgn[o0] * uu * L[o0];
-                                            q[o1] = sgn[o1] * vv * L[o1];
-                                            for(int irr = 0; irr < nr; ++irr)
-                                            {
-                                                double const r = 0.5 * (table.nodes[ir][irr] + 1.0);
-                                                double const weight
-                                                    = 0.5 * table.weights[ir][irr] * wu * wv * V * r * r;
-                                                Vec3d const s{
-                                                    t[0] + r * q[0],
-                                                    t[1] + r * q[1],
-                                                    t[2] + r * q[2]};
-                                                double const W
-                                                    = exactTscShape(s.x) * exactTscShape(s.y) * exactTscShape(s.z);
-                                                if(W == 0.0)
-                                                    continue;
-                                                Vec3d const R{
-                                                    -r * q[0] * cells.x,
-                                                    -r * q[1] * cells.y,
-                                                    -r * q[2] * cells.z};
-                                                auto const field = pointFieldDx(R, u);
-                                                accumulator.addPointField(field.E, field.B, weight * W);
-                                            }
-                                        }
-                                    }
-                                }
+                                Vec3d const R{
+                                    R0.x - s0 * cells.x,
+                                    R0.y - s1 * cells.y,
+                                    R0.z - s2 * cells.z};
+                                auto const field = pointFieldDx(R, u);
+                                accumulator.addPointField(field.E, field.B, weight);
                             }
+                        }
+                    }
                 }
     }
 
-    ALPAKA_FN_HOST_ACC inline double exactRichardsonError(
+        ALPAKA_FN_HOST_ACC inline double exactRichardsonError(
         double const* a,
         double const* b)
     {
@@ -591,24 +600,8 @@ namespace picongpu::particles::neuralBunch
             result.inSupport = true;
             ExactAccumulator6<T_Type> coarse;
             ExactAccumulator6<T_Type> fine;
-            exactBoxIntegral(
-                R0,
-                u,
-                cells,
-                settings.nearAngularOrder,
-                settings.nearRadialOrder,
-                settings.nearBoxOrder,
-                table,
-                coarse);
-            exactBoxIntegral(
-                R0,
-                u,
-                cells,
-                settings.nearAngularOrderFine,
-                settings.nearRadialOrder,
-                settings.nearBoxOrderFine,
-                table,
-                fine);
+            exactBoxIntegral(R0, u, cells, settings.nearBoxOrder, table, coarse);
+            exactBoxIntegral(R0, u, cells, settings.nearBoxOrderFine, table, fine);
             double a[6], b[6];
             for(int i = 0; i < 6; ++i)
             {
