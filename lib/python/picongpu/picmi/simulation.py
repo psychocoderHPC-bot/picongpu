@@ -52,6 +52,7 @@ from picongpu.picmi.species_requirements import (
     run_construction,
 )
 from picongpu.picmi.memory_config import MemoryConfig
+from picongpu.picmi.neural_bunch import NeuralBunchInitializer
 from picongpu.picmi.precision_config import PrecisionConfig
 from picongpu.pypicongpu.backgroundfield import BackgroundField as PyPIConGPUBackgroundField
 from picongpu.pypicongpu.output.openpmd_plugin import FieldDump as PyPIConGPUFieldDump
@@ -363,6 +364,15 @@ class Simulation(picmistandard.PICMI_Simulation):
     picongpu_walltime: datetime.timedelta | None = Field(default=None)
     """time after which the cluster scheduler will stop the simulation"""
 
+    picongpu_neural_bunch: NeuralBunchInitializer | None = Field(default=None)
+    """
+    External electron-bunch initializer rendered into ``neuralBunch.param``.
+
+    The initializer inserts an externally generated openPMD electron bunch and
+    its fields at the start of the simulation. It is mutually exclusive with a
+    density initializer for the same destination species.
+    """
+
     _runner: Runner | None = PrivateAttr(default=None)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -660,11 +670,58 @@ class Simulation(picmistandard.PICMI_Simulation):
                 for functor in functors:
                     one_species.register_requirements(functor.get_required_attributes())
 
+    def _validate_neural_bunch(self):
+        """Reject a neural bunch initializer that cannot be applied uniquely.
+
+        The destination species must be part of the simulation exactly once and
+        must not carry a density initializer: the neural bunch inserts the
+        complete particle set, so a concurrent density operation would duplicate
+        or overwrite it.
+        """
+        initializer = self.picongpu_neural_bunch
+        if initializer is None:
+            return
+
+        members = list(chain.from_iterable(_entry_members(entry) for entry in self.species))
+        matches = [s for s in members if s is initializer.species or s.name == initializer.species.name]
+        if not matches:
+            raise ValueError(
+                "picongpu_neural_bunch destination species "
+                f"{initializer.species.name!r} is not part of the simulation species list."
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                "picongpu_neural_bunch destination species "
+                f"{initializer.species.name!r} appears more than once in the simulation species list; "
+                "the bunch can only be initialized into exactly one species."
+            )
+        destination = matches[0]
+        if destination.initial_distribution is not None:
+            raise ValueError(
+                "picongpu_neural_bunch destination species "
+                f"{destination.name!r} already has an initial_distribution="
+                f"{type(destination.initial_distribution).__name__}; a neural bunch initializer and a "
+                "density initializer cannot both initialize the same species."
+            )
+
+        from picongpu.pypicongpu.species.operation.simpledensity import SimpleDensity
+
+        for operation in destination.get_operation_requirements():
+            metadata = getattr(operation, "metadata", None)
+            if metadata is not None and metadata.Type is SimpleDensity:
+                if destination in metadata.kwargs.get("species", []):
+                    raise ValueError(
+                        "picongpu_neural_bunch destination species "
+                        f"{destination.name!r} has a density operation registered; conflicting initializers "
+                        "for the same species are not allowed."
+                    )
+
     def get_as_pypicongpu(self) -> pypicongpu.simulation.Simulation:
         """translate to PyPIConGPU object"""
         self._check_compatibility()
         self._check_huygens_surface_positions()
         self._register_functor_requirements()
+        self._validate_neural_bunch()
 
         all_species = chain.from_iterable(_entry_members(entry) for entry in self.species)
         init_operations = organise_init_operations(
@@ -730,6 +787,13 @@ class Simulation(picmistandard.PICMI_Simulation):
             precision=self.picongpu_precision,
             precision_overrides=self.picongpu_precision_config.get_as_pypicongpu(),
             memory_config=self.picongpu_memory_config.get_as_pypicongpu(),
+            neural_bunch=(
+                None
+                if self.picongpu_neural_bunch is None
+                else self.picongpu_neural_bunch.get_as_pypicongpu(
+                    self.solver.grid, self.solver.method, self.particle_shape
+                )
+            ),
         )
 
     def _get_base_density(self) -> float:

@@ -1,0 +1,154 @@
+/* Copyright 2026
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
+#pragma once
+
+/** User-facing parameters of the neural bunch initializer (Phase A).
+ *
+ * Phase B implements the deterministic hybrid policy:
+ *  - when enabled without an explicit policy the DEFAULT is ``banded``: the
+ *    analytic point field handles mid/far, the exact reference handles near.
+ *    ``neural`` remains selectable for compatibility, but the point field is
+ *    both more accurate in the mid band and about 300x cheaper per pair;
+ *  - ``validatedNeural`` uses the neural path only inside a measured band;
+ *  - ``referenceOnly`` uses the exact reference and requires no model artifact;
+ *  - ``banded`` routes by distance: near uses the exact reference unless
+ *    ``useModelForNear`` selects the model, mid uses the analytic point field
+ *    only unless ``useModelForMid`` or ``useMidCorrection`` explicitly opts
+ *    into a learned head, far uses the analytic point field plus an optional
+ *    ``far_multipole`` Taylor head;
+ *  - ``enableReferenceFallback`` selects reference vs collective failure for
+ *    pairs outside the model domain under the ``neural`` policy and for
+ *    near/mid pairs without a configured model under ``banded``.
+ *  - ``enableReferenceFallback`` must stay true;
+ *  - ``timePolicy`` must stay 0, which means the openPMD source time equals the
+ *    injection time (no linear drift is applied);
+ *  - ``a_y = dy/dx`` and ``a_z = dz/dx`` are taken from the PIConGPU grid and
+ *    threaded through features, decoder interpolation, tile geometry and the
+ *    reference kernel; there is no cubic-cell assumption.
+ *
+ * ``Species`` selects the PIConGPU species that receives the particles. It
+ * must be an electron species and its name must match ``species``, the name of
+ * the particle species inside the openPMD file.
+ */
+
+#include "picongpu/particles/param.hpp"
+
+#include <cstdint>
+#include <optional>
+#include <string>
+
+namespace picongpu::neuralBunch
+{
+    //! PIConGPU species that receives the loaded particles.
+    using Species = PIC_Electrons;
+
+    struct NeuralBunchParam
+    {
+        /** Master switch. Disabled by default so a standard PIConGPU setup that
+         * compiles the feature in behaves exactly as before: the stage returns
+         * immediately, reads no file and loads no model. A hand-written setup
+         * must set ``enabled = true``; PICMI does so only when
+         * ``picongpu_neural_bunch`` is configured. */
+        bool enabled = false;
+        //! openPMD series path, e.g. ``bunch.h5`` or ``bunch.bp5``.
+        std::string filename = "bunch.h5";
+        //! Iteration inside the openPMD series that is read for both passes.
+        std::uint64_t iteration = 0;
+        //! Particle species name inside the openPMD file.
+        std::string species = "e";
+        //! Path prefix of the model artifact (``<modelPath>.json``/``.bin``).
+        std::string modelPath = "";
+        //! Number of global source particles streamed per collective chunk.
+        std::uint64_t chunkSize = 1u << 20;
+        /** Number of tiles whose accumulated values one store kernel writes.
+         *
+         * The store loop already splits the local tiles into ``ceil(tiles / tileBatch)`` launches and clamps the
+         * last (partial) batch, so any value is safe. The default used to be 1, which enqueued one store kernel
+         * per tile (about 32k launches per rank for 256^3 on two ranks) for a single 4-byte write per output.
+         * 4096 keeps the launch count small while bounding each launch to ``4096 * 1536`` outputs, so it holds
+         * for grids far larger than the production case. This only changes launch granularity; every tile is
+         * still stored exactly once with the same value. */
+        std::uint32_t tileBatch = 4096;
+        //! Must stay true: the Phase B hybrid policy always uses the reference fallback.
+        bool enableReferenceFallback = true;
+        /** Field-initializer policy (PICMI uses the same enum names).
+         *
+         * - neural (default): use the trained model for every (source, tile) pair
+         *   inside the artifact's declared domain; outside use the exact reference
+         *   when enableReferenceFallback is true, otherwise fail collectively.
+         * - validatedNeural: neural only inside validation.validated_band.
+         * - referenceOnly: exact reference, no model artifact required.
+         * - banded: distance-banded composition of the analytic point field,
+         *   optional mid/far heads and the exact reference.
+         */
+        enum class FieldInitializer
+        {
+            neural,
+            validatedNeural,
+            referenceOnly,
+            banded
+        };
+        //! Unset means: use ``banded`` when enabled, which is the production default. ``neural`` remains
+        //! selectable for compatibility but is not the default.
+        std::optional<FieldInitializer> fieldInitializer{};
+        //! ``banded``: the near-band half-width, in cells, applied on every axis in that axis's own cell units (T63).
+        //! The tile-wide default path routes a (source, tile) pair to the exact TSC quadrature when the source lies within
+        //! this many cells of the tile box on every axis (sourceNearBox); the analytic point field handles the rest, so a
+        //! target inside a source's TSC support is never evaluated with the singular point kernel. The margin on axis a is
+        //! internally `bandedNearMaxCells * a_a` dx (a_a = axis aspect, x == 1): the same number of cells on every axis in
+        //! that axis's own units, which keeps the +-1.5-cell TSC support in the band for anisotropic cells without the user
+        //! scaling per aspect. The analytic minimum that covers the support is 1.5 cells/axis, so the default 4.0 is a
+        //! 4.0/1.5 ~ 2.67 safety factor over it. For isotropic cells this is byte-for-byte the pre-T63 fixed-dx box, so an
+        //! explicitly set value is unchanged there. (Pre-T63 this was a fixed dx margin applied on every axis, which
+        //! under-covered the long axes -- e.g. aspect 10 needed a ~15-dx y-margin but only 4 were applied; pinned by
+        //! nearBandAccuracyTest scenario G.) The default 4.0 keeps the 2-4 cell range in the exact pass because the
+        //! quadrupole mid-band correction (T76) is validated only for d >= 4 cells: the azimuth-averaged point+quad
+        //! error at d = 2..3 is 0.1-0.6 (well above the 1e-3 gate), while at d = 4 it drops to ~0.04 and meets the
+        //! per-tile gate. Lowering to 2.0 would cut the near-pair count by ~3x (measured 60000 -> 18240 on a
+        //! 2000-source 64^3 grid) but routes the unvalidated (2,4] range to the point field. A value of 0 disables
+        //! the near-band split: the point field evaluates every pair and the exact near pass does not run (legacy
+        //! point-field-only semantics).
+        double bandedNearMaxCells = 4.0;
+        //! ``banded``: distances above this many cells use the analytic far field (with ``far_multipole``). The point
+        //! field's leading error scales as ~ (source extent / distance)^2, so it falls below the 1e-3 gate only beyond
+        //! a distance of roughly (1.5..3 cells) / sqrt(1e-3) ~ 47..95 cells at aspect 1 (wider at larger aspect; the
+        //! measured held-out thresholds are ~32-256 cells at aspect<=2 and >512 at aspect~10). The mid band between
+        //! ``bandedNearMaxCells`` and this value is evaluated with the analytic point field plus the quadrupole shape
+        //! correction (T76), which meets the 1e-3 per-tile gate for d >= 4 at the default threshold. The near band below
+        //! ``bandedNearMaxCells`` is exact by construction.
+        double bandedFarMinCells = 48.0;
+        //! ``banded``: use the configured model encoder/decoder for near pairs instead of the exact reference.
+        //! The model is not validated in the near band; enabling this emits a loud warning.
+        bool useModelForNear = false;
+        //! ``banded``: opt into the primary encoder/decoder for mid pairs. Default: analytic point field only.
+        std::optional<bool> useModelForMid{};
+        //! ``banded``: opt into the learned ``mid_correction`` head. Default off: the learned correction is
+        //! measurably worse than the point field alone in 4..48 cells.
+        bool useMidCorrection = false;
+        //! ``banded``: evaluate near and mid with the validated FP64 GPU quadrature instead of the CPU reference
+        //! or the point field. Exact only for d < the cutoff below; point field beyond.
+        bool useExactDevice = false;
+        //! Distance cutoff for the device quadrature. Safe default 128 cells; <=0 enables aspect scaling.
+        double bandedExactMaxCells = 128.0;
+        //! Aspect scaling uses 48 cells for max(a_y,a_z)<=2 and this value at aspect>=10 (BANDS.md).
+        double bandedExactAspect10Cells = 512.0;
+        //! ``banded``: evaluate the analytic point field with the tile-centric device kernel (one block per tile, one
+        //! thread per staggered output), which removes the per-pair host loop. The near band (distances below
+        //! ``bandedNearMaxCells``) is NOT evaluated with the point field: the kernel skips those pairs and a per-tile
+        //! exact device quadrature pass fills them in, so the default path is accurate in the near band and only uses
+        //! the analytic point field for the mid/far bands. Automatically disabled when a near/mid model or the exact
+        //! device quadrature is requested.
+        bool tileWideField = true;
+        //! ``banded``: count near/mid/far pairs on the device. The counting adds one minimum-distance
+        //! evaluation per source and output; disable it on large production runs where the statistics are
+        //! not needed.
+        bool tileWideBandStats = true;
+        //! Must stay 0: source time equals injection time (no drift applied).
+        int timePolicy = 0;
+    };
+
+    inline NeuralBunchParam const neuralBunchParam{};
+} // namespace picongpu::neuralBunch

@@ -1,0 +1,655 @@
+/* Copyright 2026
+ *
+ * SPDX-License-Identifier: MPL-2.0
+ *
+ * Pins the near-band accuracy fix. A target inside a source's TSC support, including one exactly
+ * coincident with a source, is evaluated by the exact device quadrature, not by the singular
+ * analytic point kernel. For a single tile the test reproduces the default tile-wide path the
+ * stage now uses -- the analytic point field for the mid/far bands plus a per-tile exact
+ * quadrature pass for the near band, the two partitions split by the same near box -- and checks
+ * it against the FP64 host reference under the frozen 1e-3 relative gate. It also reproduces the
+ * pre-fix default (point field only, no near threshold) and shows it is non-finite at the
+ * coincident point, and that a stationary source yields B == 0 exactly. A near-box partition case
+ * (threshold 0.4, source just outside the tile) pins the disjoint point/exact split: the pre-fix
+ * distance-based skip keeps a pair the box-selected exact pass also adds, which is counted twice.
+ * A zero-threshold case pins that the exact pass is skipped there too: with threshold 0 the point
+ * field keeps every pair, so an unconditional exact pass would double count the in-tile sources and
+ * would not match the legacy point-field-only path. Each scenario also prints the near-exact
+ * (source, tile) pair fraction the stage logs.
+ *
+ * The 1e-3 gate reproduces tools/neural-bunch/eval/field_gate.py (Python-based) in C++ with the
+ * identical arithmetic, per field group G in {E, B} over the 256 staggered points:
+ *   S0_G = 16 * max_point ||G_point||,   ratio = ||A_cand - A_ref||_2 / max(||A_ref||_2, S0_G)
+ * where G_point is the 3-component vector of group G at one point and 16 = sqrt(N_G/3) with
+ * N_G = 768 (the number of values in one group). S0_G is the preregistered scale taken from the
+ * reference tile, so a weak or cancelling tile is normalised by the configuration scale rather
+ * than by its own tiny norm.
+ */
+
+#include "picongpu/particles/neuralBunch/Backend.hpp"
+#include "picongpu/particles/neuralBunch/ExactShapeField.hpp"
+#include "picongpu/particles/neuralBunch/PointField.hpp"
+#include "picongpu/particles/neuralBunch/ReferenceKernel.hpp"
+#include "picongpu/particles/neuralBunch/TileGeometry.hpp"
+#include "picongpu/particles/neuralBunch/TileWideField.hpp"
+
+#include <alpaka/alpaka.hpp>
+#include <alpaka/nn/onHost/ops/weighted_add.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdlib>
+#include <iostream>
+#include <limits>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace nb = picongpu::particles::neuralBunch;
+namespace ref = picongpu::particles::neuralBunch::reference;
+namespace tg = picongpu::particles::neuralBunch::tileGeometry;
+
+namespace
+{
+    int failures = 0;
+    int checks = 0;
+
+    void check(bool const ok, std::string const& what, double detail = 0.0)
+    {
+        ++checks;
+        if(!ok)
+        {
+            ++failures;
+            std::cerr << "FAIL: " << what << " (" << detail << ")\n";
+        }
+    }
+
+    struct Src
+    {
+        double pos[3]{};
+        double u[3]{};
+        double w = 1.0;
+    };
+
+    // Mirrors nb::tileWideDetail::sourceNearBox (the stage's near test): a source is box-near to a tile
+    // when its tile-relative position (dx units) lies in [-threshold*cells.a, tileExtent+threshold*cells.a]
+    // on every axis (threshold cells of margin on each axis, in that axis's own units). Aspect-aware since
+    // T63: a fixed dx margin under-covers the long axes for anisotropic cells. Inlined so this test also
+    // builds against pre-fix trees; the formula is identical to the kernel's, keeping the point/exact
+    // partitions disjoint and exhaustive.
+    bool sourceNearBox(nb::Vec3d const& rel, nb::Vec3d const& cells, double const threshold)
+    {
+        double const thrX = threshold * cells.x, thrY = threshold * cells.y, thrZ = threshold * cells.z;
+        double const maxX = static_cast<double>(tg::tileNx) * cells.x;
+        double const maxY = static_cast<double>(tg::tileNy) * cells.y;
+        double const maxZ = static_cast<double>(tg::tileNz) * cells.z;
+        return rel.x >= -thrX && rel.x <= maxX + thrX
+            && rel.y >= -thrY && rel.y <= maxY + thrY
+            && rel.z >= -thrZ && rel.z <= maxZ + thrZ;
+    }
+
+    // The pre-T63 fixed-dx near box, kept only to pin that an aspect-10 in-support pair is mis-classified
+    // by the old behaviour (scenario G): a fixed dx margin covers only threshold/cells.a cells on axis a.
+    bool sourceNearBoxFixed(nb::Vec3d const& rel, nb::Vec3d const& cells, double const threshold)
+    {
+        double const maxX = static_cast<double>(tg::tileNx) * cells.x;
+        double const maxY = static_cast<double>(tg::tileNy) * cells.y;
+        double const maxZ = static_cast<double>(tg::tileNz) * cells.z;
+        return rel.x >= -threshold && rel.x <= maxX + threshold
+            && rel.y >= -threshold && rel.y <= maxY + threshold
+            && rel.z >= -threshold && rel.z <= maxZ + threshold;
+    }
+
+    // The frozen 1e-3 gate for one field group (E: groupStart 0, B: groupStart 3) over the 256
+    // staggered points. The tile is stored in model order c + 6*(i + 8*(j + 8*k)), so point p owns
+    // slots 6*p .. 6*p+5.
+    double groupGate(std::vector<double> const& cand, std::vector<double> const& reference, std::size_t groupStart)
+    {
+        constexpr std::size_t kPoints = 256u; // 8 * 8 * 4 cells
+        double sumRef2 = 0.0;
+        double sumDiff2 = 0.0;
+        double s0Group = 0.0;
+        for(std::size_t p = 0; p < kPoints; ++p)
+        {
+            double g[3]{};
+            for(int c = 0; c < 3; ++c)
+            {
+                std::size_t const slot = 6u * p + groupStart + static_cast<std::size_t>(c);
+                double const rv = reference[slot];
+                double const d = cand[slot] - rv;
+                sumRef2 += rv * rv;
+                sumDiff2 += d * d;
+                g[c] = rv;
+            }
+            s0Group = std::max(s0Group, std::sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]));
+        }
+        double const s0 = 16.0 * s0Group; // 16 = sqrt(768/3); preregistered scale from the reference
+        double const refNorm = std::sqrt(sumRef2);
+        double const diffNorm = std::sqrt(sumDiff2);
+        return diffNorm / std::max(refNorm, s0);
+    }
+
+    /** Worst-case accuracy of one field group over the 256 staggered cells: the maximum per-cell
+     *  ||err|| / ||ref|| vector relative error. Unlike groupGate (pooled L2 over all cells), this
+     *  catches local failures at the band boundary that a pooled metric averages away. */
+    double worstCaseGate(std::vector<double> const& cand, std::vector<double> const& reference, std::size_t groupStart)
+    {
+        constexpr std::size_t kPoints = 256u; // 8 * 8 * 4 cells
+        double worst = 0.0;
+        for(std::size_t p = 0; p < kPoints; ++p)
+        {
+            double sumRef2 = 0.0;
+            double sumDiff2 = 0.0;
+            for(int c = 0; c < 3; ++c)
+            {
+                std::size_t const slot = 6u * p + groupStart + static_cast<std::size_t>(c);
+                double const d = cand[slot] - reference[slot];
+                sumDiff2 += d * d;
+                sumRef2 += reference[slot] * reference[slot];
+            }
+            worst = std::max(worst, std::sqrt(sumDiff2) / std::max(std::sqrt(sumRef2), 1e-30));
+        }
+        return worst;
+    }
+
+    std::vector<ref::Source> toReference(std::vector<Src> const& sources)
+    {
+        std::vector<ref::Source> out(sources.size());
+        for(std::size_t i = 0; i < sources.size(); ++i)
+        {
+            out[i].x = {sources[i].pos[0], sources[i].pos[1], sources[i].pos[2]};
+            out[i].u = {sources[i].u[0], sources[i].u[1], sources[i].u[2]};
+            out[i].w = sources[i].w;
+        }
+        return out;
+    }
+
+    /** The tile-wide default path for a single tile at the origin: the point field (which skips the
+     * box-near pairs when @p nearMax > 0) plus, when @p doExactPass and @p nearMax > 0, the exact
+     * device quadrature for exactly those near pairs, both accumulated into the same 1536-value tile.
+     *
+     * The exact pass is gated on @p nearMax > 0 exactly like the stage: at threshold 0 the point
+     * field skips nothing, so running the exact pass as well would add every in-tile source twice.
+     *
+     * @p nearMax == 0 and @p doExactPass == false reproduce the pre-fix default (the point field
+     * evaluates every pair, including the singular near ones, and nothing fills them in).
+     *
+     * @p quadrupoleMid enables the analytic quadrupole shape correction for mid-band pairs
+     * (bandNearCells <= |R| <= bandFarCells), matching the production default.
+     */
+    template<typename TQueue, typename TExec>
+    std::vector<double> tileWidePath(
+        TQueue& queue,
+        TExec exec,
+        std::vector<Src> const& sources,
+        nb::Vec3d cells,
+        double nearMax,
+        bool doExactPass,
+        bool quadrupoleMid = false,
+        bool order4Mid = false)
+    {
+        constexpr std::size_t kOut = 1536u;
+        std::size_t const S = sources.size();
+        auto hostPos = alpaka::onHost::allocHost<double>(alpaka::Vec{S, std::size_t{3}});
+        auto hostVel = alpaka::onHost::allocHost<double>(alpaka::Vec{S, std::size_t{3}});
+        auto hostChg = alpaka::onHost::allocHost<double>(alpaka::Vec{S});
+        for(std::size_t i = 0; i < S; ++i)
+        {
+            for(std::size_t a = 0; a < 3u; ++a)
+            {
+                hostPos[alpaka::Vec<std::size_t, 2>{i, a}] = sources[i].pos[a];
+                hostVel[alpaka::Vec<std::size_t, 2>{i, a}] = sources[i].u[a];
+            }
+            hostChg[alpaka::Vec<std::size_t, 1>{i}] = -sources[i].w;
+        }
+        auto devPos = alpaka::onHost::allocLike(queue.getDevice(), hostPos);
+        auto devVel = alpaka::onHost::allocLike(queue.getDevice(), hostVel);
+        auto devChg = alpaka::onHost::allocLike(queue.getDevice(), hostChg);
+        alpaka::onHost::memcpy(queue, devPos, hostPos);
+        alpaka::onHost::memcpy(queue, devVel, hostVel);
+        alpaka::onHost::memcpy(queue, devChg, hostChg);
+        hostPos.keepAlive(queue);
+        hostVel.keepAlive(queue);
+        hostChg.keepAlive(queue);
+
+        auto pointBuf = alpaka::onHost::alloc<float>(queue.getDevice(), alpaka::Vec{std::size_t{1}, kOut});
+        auto bandBuf = alpaka::onHost::alloc<std::uint32_t>(queue.getDevice(), alpaka::Vec{std::size_t{1}, std::size_t{3}});
+        alpaka::nn::onHost::ops::fill(queue, exec, pointBuf, 0.0f);
+        alpaka::nn::onHost::ops::fill(queue, exec, bandBuf, 0u);
+        nb::enqueueTileWidePointField(
+            queue,
+            exec,
+            devPos,
+            devVel,
+            devChg,
+            S,
+            cells,
+            std::array<int, 3>{0, 0, 0},
+            std::array<int, 3>{1, 1, 1},
+            nearMax,
+            nearMax,
+            48.0,
+            true,
+            pointBuf,
+            bandBuf,
+            quadrupoleMid,
+            order4Mid);
+
+        std::vector<double> tile(kOut, 0.0);
+        auto pointHost = alpaka::onHost::allocHost<float>(alpaka::Vec{std::size_t{1}, kOut});
+        alpaka::onHost::memcpy(queue, pointHost, pointBuf);
+        for(std::size_t k = 0; k < kOut; ++k)
+            tile[k] += static_cast<double>(pointHost[alpaka::Vec<std::size_t, 2>{0u, k}]);
+
+        if(doExactPass && nearMax > 0.0)
+        {
+            std::vector<Src> near;
+            for(auto const& s : sources)
+                if(sourceNearBox(nb::Vec3d{s.pos[0], s.pos[1], s.pos[2]}, cells, nearMax))
+                    near.push_back(s);
+            std::size_t const N = near.size();
+            if(N > 0u)
+            {
+                auto hostSrc = alpaka::onHost::allocHost<double>(alpaka::Vec{N, std::size_t{6}});
+                auto hostW = alpaka::onHost::allocHost<double>(alpaka::Vec{N});
+                for(std::size_t i = 0; i < N; ++i)
+                {
+                    for(int c = 0; c < 6; ++c)
+                        hostSrc[alpaka::Vec<std::size_t, 2>{i, static_cast<std::size_t>(c)}]
+                            = c < 3 ? near[i].pos[c] : near[i].u[c - 3];
+                    hostW[alpaka::Vec<std::size_t, 1>{i}] = -near[i].w;
+                }
+                auto devSrc = alpaka::onHost::allocLike(queue.getDevice(), hostSrc);
+                auto devW = alpaka::onHost::allocLike(queue.getDevice(), hostW);
+                alpaka::onHost::memcpy(queue, devSrc, hostSrc);
+                alpaka::onHost::memcpy(queue, devW, hostW);
+                hostSrc.keepAlive(queue);
+                hostW.keepAlive(queue);
+                auto exactBuf = alpaka::onHost::alloc<float>(queue.getDevice(), alpaka::Vec{kOut});
+                nb::enqueueExactZero(queue, exec, exactBuf);
+                // Same launch-stack bound as the stage's exact path: the in-support quadrature needs
+                // ~21 KiB of local stack per thread, so cap the resident thread count by free memory.
+                double const freeBytes = static_cast<double>(queue.getDevice().getFreeGlobalMemBytes());
+                std::size_t const maxThreads
+                    = std::clamp<std::size_t>(static_cast<std::size_t>(freeBytes / (4u * 24u * 1024u)), 512u, 65536u);
+                nb::enqueueExactShapeFieldTileAccumulate<double>(
+                    queue,
+                    exec,
+                    devSrc,
+                    devW,
+                    N,
+                    cells,
+                    nb::ExactSettings{},
+                    exactBuf,
+                    maxThreads);
+                auto exactHost = alpaka::onHost::allocHost<float>(alpaka::Vec{kOut});
+                alpaka::onHost::memcpy(queue, exactHost, exactBuf);
+                for(std::size_t k = 0; k < kOut; ++k)
+                    tile[k] += static_cast<double>(exactHost[alpaka::Vec<std::size_t, 1>{k}]);
+            }
+        }
+        alpaka::onHost::wait(queue);
+        return tile;
+    }
+
+    // Largest |cand-ref| / (|ref|+eps) over the 256 points for one component c (0..5).
+    double componentMaxRel(std::vector<double> const& cand, std::vector<double> const& reference, std::size_t c)
+    {
+        double m = 0.0;
+        for(std::size_t p = 0; p < 256u; ++p)
+        {
+            std::size_t const slot = 6u * p + c;
+            m = std::max(m, std::abs(cand[slot] - reference[slot]) / (std::abs(reference[slot]) + 1.0e-300));
+        }
+        return m;
+    }
+
+    void report(char const* name, std::vector<double> const& cand, std::vector<double> const& reference)
+    {
+        char const* comp[6]{"Ex", "Ey", "Ez", "Bx", "By", "Bz"};
+        for(std::size_t c = 0; c < 6u; ++c)
+            std::cout << "  " << name << " " << comp[c] << " maxRel=" << componentMaxRel(cand, reference, c) << "\n";
+        std::cout << "  " << name << " gate_E=" << groupGate(cand, reference, 0u)
+                  << " gate_B=" << groupGate(cand, reference, 3u) << "\n";
+    }
+
+    /** Near-exact (source, tile) pair accounting for a single tile at the origin, mirroring the
+     * stage's ``tileWideNearExactPairs`` / ``tileWideSourceTilePairs`` counters. The exact pass runs
+     * only when the threshold is positive, so a zero threshold has zero exact pairs.
+     */
+    std::pair<std::size_t, std::size_t> nearPairCounts(
+        std::vector<Src> const& sources,
+        nb::Vec3d const& cells,
+        double const nearMax)
+    {
+        std::size_t exact = 0u;
+        if(nearMax > 0.0)
+            for(auto const& s : sources)
+                if(sourceNearBox(nb::Vec3d{s.pos[0], s.pos[1], s.pos[2]}, cells, nearMax))
+                    ++exact;
+        return {exact, sources.size()}; // one tile, so total (source, tile) pairs == sources
+    }
+
+    void reportPairs(char const* name, std::pair<std::size_t, std::size_t> const& pairs)
+    {
+        double const fraction = pairs.second != 0u
+                                    ? 100.0 * static_cast<double>(pairs.first) / static_cast<double>(pairs.second)
+                                    : 0.0;
+        std::cout << "  " << name << " near-exact pairs=" << pairs.first << "/" << pairs.second << " ("
+                  << fraction << "% of source-tile pairs)\n";
+    }
+
+    char const* compName(std::size_t c)
+    {
+        static char const* n[6]{"Ex", "Ey", "Ez", "Bx", "By", "Bz"};
+        return n[c];
+    }
+
+    int run(std::string const& backend)
+    {
+        nb::dispatchBackend(
+            backend,
+            [&](auto& device, auto const& exec)
+            {
+                (void) device;
+                auto queue = device.makeQueue();
+                // The default near band is params.bandedNearMaxCells (4 dx) -- the threshold the stage now passes to
+                // the point field and uses for the exact pass.
+                constexpr double kNearMax = 4.0;
+
+                // ---- Scenario A: coincident + in-support + far, isotropic --------------------------------------
+                // s0 sits exactly on the Ex staggered output at (i=3,j=2,k=1) -> slot 0 + 6*(3 + 8*(2 + 8*1)) = 498.
+                // s1 is inside the TSC support of several outputs; s2 is far (point field only).
+                std::vector<Src> a{
+                    {Src{{3.5, 2.0, 1.0}, {0.30, 0.20, 0.15}, 1.0}},
+                    {Src{{4.0, 4.0, 2.0}, {-0.15, 0.10, 0.20}, 0.7}},
+                    {Src{{60.0, 40.0, 20.0}, {0.10, 0.10, 0.00}, 0.5}}};
+                nb::Vec3d const cellsA{1.0, 1.0, 1.0};
+                std::size_t const coincidentSlot = 498u;
+
+                auto refA = ref::tile_field(ref::Vec3{0.0, 0.0, 0.0}, toReference(a), 1.0, 1.0, 1.0);
+                auto defaultA = tileWidePath(queue, exec, a, cellsA, kNearMax, true);
+                auto legacyA = tileWidePath(queue, exec, a, cellsA, 0.0, false);
+
+                bool defaultFinite = std::all_of(
+                    defaultA.begin(),
+                    defaultA.end(),
+                    [](double v) { return std::isfinite(v); });
+                check(defaultFinite, "A: default path finite over all 1536 outputs", 0.0);
+                check(
+                    std::isfinite(defaultA[coincidentSlot]),
+                    "A: coincident output finite (no NaN/Inf from the point kernel)",
+                    defaultA[coincidentSlot]);
+                check(
+                    !std::isfinite(legacyA[coincidentSlot]),
+                    "A: pre-fix point-field-only path is non-finite at the coincident output",
+                    legacyA[coincidentSlot]);
+
+                double const gateA_E = groupGate(defaultA, refA, 0u);
+                double const gateA_B = groupGate(defaultA, refA, 3u);
+                check(gateA_E <= 1.0e-3, "A: E group within the frozen 1e-3 gate", gateA_E);
+                check(gateA_B <= 1.0e-3, "A: B group within the frozen 1e-3 gate", gateA_B);
+                std::cout << "[A isotropic coincident] default vs exact reference\n";
+                report("default", defaultA, refA);
+                reportPairs("default", nearPairCounts(a, cellsA, kNearMax));
+                std::cout << "  coincident slot " << coincidentSlot << " (" << compName(coincidentSlot % 6u) << "): default="
+                          << defaultA[coincidentSlot] << " reference=" << refA[coincidentSlot] << " legacy="
+                          << legacyA[coincidentSlot] << "\n";
+
+                // ---- Scenario B: stationary source -> B == 0 exactly --------------------------------------------
+                std::vector<Src> b{{Src{{4.0, 4.0, 2.0}, {0.0, 0.0, 0.0}, 1.0}}};
+                auto refB = ref::tile_field(ref::Vec3{0.0, 0.0, 0.0}, toReference(b), 1.0, 1.0, 1.0);
+                auto defaultB = tileWidePath(queue, exec, b, cellsA, kNearMax, true);
+                double maxB = 0.0;
+                for(std::size_t p = 0; p < 256u; ++p)
+                    for(int c = 3; c < 6; ++c)
+                        maxB = std::max(maxB, std::abs(defaultB[6u * p + static_cast<std::size_t>(c)]));
+                check(maxB == 0.0, "B: stationary source yields B exactly 0", maxB);
+                check(
+                    std::isfinite(defaultB[coincidentSlot]), "B: all outputs finite", 0.0);
+                double const gateB_E = groupGate(defaultB, refB, 0u);
+                check(gateB_E <= 1.0e-3, "B: stationary E group within the 1e-3 gate", gateB_E);
+                std::cout << "[B isotropic stationary] default vs exact reference\n";
+                report("default", defaultB, refB);
+                reportPairs("default", nearPairCounts(b, cellsA, kNearMax));
+                std::cout << "  max|B| = " << maxB << " (must be exactly 0)\n";
+
+                // ---- Scenario C: anisotropic cells, in-support (pins the aspect-scaled near box + exact pass) ---
+                std::vector<Src> c{{Src{{3.0, 2.0, 1.0}, {0.25, 0.10, 0.15}, 1.0}},
+                                   {Src{{4.5, 3.0, 1.5}, {-0.10, 0.18, 0.05}, 0.8}}};
+                nb::Vec3d const cellsC{1.0, 2.0, 0.5};
+                auto refC = ref::tile_field(ref::Vec3{0.0, 0.0, 0.0}, toReference(c), 1.0, 2.0, 0.5);
+                auto defaultC = tileWidePath(queue, exec, c, cellsC, kNearMax, true);
+                bool defaultCFinite = std::all_of(defaultC.begin(), defaultC.end(), [](double v) { return std::isfinite(v); });
+                check(defaultCFinite, "C: anisotropic default path finite", 0.0);
+                double const gateC_E = groupGate(defaultC, refC, 0u);
+                double const gateC_B = groupGate(defaultC, refC, 3u);
+                check(gateC_E <= 1.0e-3, "C: anisotropic E group within the 1e-3 gate", gateC_E);
+                check(gateC_B <= 1.0e-3, "C: anisotropic B group within the 1e-3 gate", gateC_B);
+                std::cout << "[C anisotropic in-support] default vs exact reference\n";
+                report("default", defaultC, refC);
+                reportPairs("default", nearPairCounts(c, cellsC, kNearMax));
+
+                // ---- Scenario D: near-box partition contract ---------------------------------------------------
+                // A source just outside the tile is inside the near box (threshold 0.4) but farther than 0.4
+                // from the nearest staggered point (0.45). The pre-fix point field skips by exact distance, so
+                // it keeps this pair while the box-selected exact pass also adds it -- the contribution is
+                // counted twice. The post-fix point field skips by the identical box, so only the exact pass
+                // contributes. This pins the disjoint-and-exhaustive partition the default path relies on.
+                std::vector<Src> d{{Src{{8.05, 0.0, 0.0}, {0.20, 0.10, 0.05}, 1.0}}};
+                constexpr double kPartitionNearMax = 0.4;
+                auto refD = ref::tile_field(ref::Vec3{0.0, 0.0, 0.0}, toReference(d), 1.0, 1.0, 1.0);
+                auto defaultD = tileWidePath(queue, exec, d, cellsA, kPartitionNearMax, true);
+                bool const defaultDFinite
+                    = std::all_of(defaultD.begin(), defaultD.end(), [](double v) { return std::isfinite(v); });
+                check(defaultDFinite, "D: near-box partition path finite", 0.0);
+                double const gateD_E = groupGate(defaultD, refD, 0u);
+                double const gateD_B = groupGate(defaultD, refD, 3u);
+                check(gateD_E <= 1.0e-3, "D: box-near pair counted once (E group)", gateD_E);
+                check(gateD_B <= 1.0e-3, "D: box-near pair counted once (B group)", gateD_B);
+                std::cout << "[D near-box partition, threshold 0.4] default vs exact reference\n";
+                report("default", defaultD, refD);
+                reportPairs("default", nearPairCounts(d, cellsA, kPartitionNearMax));
+
+                // ---- Scenario E: zero near threshold -> legacy point-field-only path ---------------------------
+                // A zero threshold disables the near-band split: the point field skips nothing and the exact near
+                // pass must not run. If it did, this in-tile source (not on a staggered point, so the point value
+                // stays finite) would be added by both passes and the result would not match the legacy
+                // point-field-only path. The helper applies the same threshold gate as the stage.
+                std::vector<Src> e{{Src{{4.2, 3.7, 2.3}, {0.18, -0.12, 0.09}, 0.9}}};
+                constexpr double kZeroNearMax = 0.0;
+                auto zeroE = tileWidePath(queue, exec, e, cellsA, kZeroNearMax, true);
+                auto legacyE = tileWidePath(queue, exec, e, cellsA, kZeroNearMax, false);
+                double maxDiffE = 0.0;
+                for(std::size_t k = 0; k < 1536u; ++k)
+                    maxDiffE = std::max(maxDiffE, std::abs(zeroE[k] - legacyE[k]));
+                check(
+                    maxDiffE == 0.0,
+                    "E: threshold 0 skips the exact pass (equals legacy point-field-only)",
+                    maxDiffE);
+                bool const zeroEFinite
+                    = std::all_of(zeroE.begin(), zeroE.end(), [](double v) { return std::isfinite(v); });
+                check(zeroEFinite, "E: threshold-0 path finite", 0.0);
+                std::cout << "[E zero near threshold] exact pass skipped\n";
+                std::cout << "  max|threshold0 - legacy| = " << maxDiffE << " (must be exactly 0)\n";
+                reportPairs("threshold0", nearPairCounts(e, cellsA, kZeroNearMax));
+
+                // ---- Scenario F: near threshold 2.0, worst-position in-support source (T60 safety) ----
+                // A source at the TSC support edge of the tile x=0 edge slot (rel.x=-1.49, in-support to the slot
+                // at (0,0.5,0.5) since |dx|=1.49<1.5) must still be routed to the exact pass at nearMax=2.0
+                // (2.0 > 1.5 support), not the point field. Confirms lowering the near threshold to 2.0 keeps
+                // every in-support (source, slot) pair exact (analytic min threshold for iso cells is 1.5).
+                std::vector<Src> f{{Src{{-1.49, 0.5, 0.5}, {0.10, 0.10, 0.05}, 1.0}}};
+                constexpr double kThr2NearMax = 2.0;
+                auto refF = ref::tile_field(ref::Vec3{0.0, 0.0, 0.0}, toReference(f), 1.0, 1.0, 1.0);
+                auto defaultF = tileWidePath(queue, exec, f, cellsA, kThr2NearMax, true);
+                bool const fFinite = std::all_of(
+                    defaultF.begin(), defaultF.end(), [](double v) { return std::isfinite(v); });
+                check(fFinite, "F: thr=2.0 worst-position path finite", 0.0);
+                double const gateF_E = groupGate(defaultF, refF, 0u);
+                double const gateF_B = groupGate(defaultF, refF, 3u);
+                check(gateF_E <= 1.0e-3, "F: thr=2.0 keeps the in-support source exact (E group)", gateF_E);
+                check(gateF_B <= 1.0e-3, "F: thr=2.0 keeps the in-support source exact (B group)", gateF_B);
+                check(
+                    sourceNearBox(nb::Vec3d{-1.49, 0.5, 0.5}, cellsA, kThr2NearMax),
+                    "F: worst-position in-support source is inside the near box at thr=2.0", 0.0);
+                std::cout << "[F threshold 2.0, worst-position in-support] default vs exact reference\n";
+                report("default", defaultF, refF);
+                reportPairs("default", nearPairCounts(f, cellsA, kThr2NearMax));
+
+                // ---- Scenario G: aspect 10, in-support pair outside the fixed-dx band (T63) ----------------------
+                // A source at cell (4.0, -0.5, 2.0) (= dx 4.0, -5.0, 2.0): a cell corner in x and z, a TSC knot in y,
+                // 0.5 cell below the tile's bottom face. It is inside the true TSC support (to the bottom slots, ~1
+                // cell in y) but its y offset (-5.0 dx) is outside BOTH the pre-fix 4.0-dx and the 2.0-dx fixed bands,
+                // which only reach 4.0/2.0 cells_y = 0.4/0.2 cells_y on the y axis -- far short of the 1.5-cell TSC
+                // half-support. The pre-fix default therefore routed this in-support pair to the singular point field
+                // (wrong). The aspect-aware box (T63) scales the y margin to 2.0*10 = 20 dx (2.0 cells_y) and classifies
+                // it exact. This case FAILS on the pre-fix fixed-dx box and PASSES after the fix.
+                std::vector<Src> g{{Src{{4.0, -5.0, 2.0}, {0.10, 0.10, 0.05}, 1.0}}};
+                nb::Vec3d const cellsG{1.0, 10.0, 1.0};
+                constexpr double kAspectNearMax = 2.0;
+                nb::Vec3d const relG{4.0, -5.0, 2.0};
+                std::array<double, 3> const srcCellG{4.0, -5.0, 2.0};
+                std::array<double, 3> const originCellG{0.0, 0.0, 0.0};
+                tg::CellSizes const sizesG{1.0, 10.0, 1.0};
+                double const supportG = tg::minimumSupportDistanceCells(srcCellG, originCellG, sizesG);
+                check(supportG == 0.0, "G: aspect-10 pair is inside the true TSC support", supportG);
+                check(
+                    !sourceNearBoxFixed(relG, cellsG, 4.0),
+                    "G: pre-fix fixed 4.0-dx box mis-classifies the in-support pair as far (the bug)",
+                    0.0);
+                check(
+                    !sourceNearBoxFixed(relG, cellsG, kAspectNearMax),
+                    "G: pre-fix fixed 2.0-dx box (old default) also mis-classifies it as far",
+                    0.0);
+                check(
+                    sourceNearBox(relG, cellsG, kAspectNearMax),
+                    "G: aspect-aware box classifies the in-support pair as exact",
+                    0.0);
+                auto refG = ref::tile_field(ref::Vec3{0.0, 0.0, 0.0}, toReference(g), 1.0, 10.0, 1.0);
+                auto defaultG = tileWidePath(queue, exec, g, cellsG, kAspectNearMax, true);
+                bool const gFinite = std::all_of(
+                    defaultG.begin(), defaultG.end(), [](double v) { return std::isfinite(v); });
+                check(gFinite, "G: aspect-10 default path finite", 0.0);
+                double const gateG_E = groupGate(defaultG, refG, 0u);
+                double const gateG_B = groupGate(defaultG, refG, 3u);
+                check(gateG_E <= 1.0e-3, "G: aspect-10 in-support pair routed exact (E group within 1e-3)", gateG_E);
+                check(gateG_B <= 1.0e-3, "G: aspect-10 in-support pair routed exact (B group within 1e-3)", gateG_B);
+                std::cout << "[G aspect 10, in-support outside the fixed band] default vs exact reference\n";
+                report("default", defaultG, refG);
+                reportPairs("default", nearPairCounts(g, cellsG, kAspectNearMax));
+                std::cout << "  aspect-10 source: minSupportDistance=" << supportG << " dx, fixed-4.0="
+                          << (sourceNearBoxFixed(relG, cellsG, 4.0) ? "near" : "far")
+                          << ", fixed-2.0=" << (sourceNearBoxFixed(relG, cellsG, kAspectNearMax) ? "near" : "far")
+                          << ", aspect-aware-2.0=" << (sourceNearBox(relG, cellsG, kAspectNearMax) ? "near" : "far")
+                          << "\n";
+
+                // ---- Scenario H: mid-band quadrupole pin (T76) ---------------------------------------------------
+                // A source at (12.5, 4.0, 2.0) is 4.5 cells from the nearest staggered slot (8, 4, 2), outside the
+                // near box (threshold 4.0: x face at 12.0), in the mid band. The mid band does not meet the 1e-3
+                // near-band gate (param comment: "measured mean ~2.5%"); the quadrupole shape correction reduces the
+                // point-field error by a factor of ~3-8, which is the validated behaviour for d >= 4. The checks
+                // pin that the quadrupole is active (point+quad better than point-only) and that the residual is
+                // within the mid-band accuracy envelope (<10%), not the near-band 1e-3 gate.
+                std::vector<Src> h{{Src{{12.5, 4.0, 2.0}, {7.03562364, 7.03562364, 0.0}, 1.0}}};
+                nb::Vec3d const cellsH{1.0, 1.0, 1.0};
+                auto refH = ref::tile_field(ref::Vec3{0.0, 0.0, 0.0}, toReference(h), 1.0, 1.0, 1.0);
+                auto hQuad = tileWidePath(queue, exec, h, cellsH, kNearMax, true, true);
+                auto hPoint = tileWidePath(queue, exec, h, cellsH, kNearMax, true, false);
+                bool const hQuadFinite
+                    = std::all_of(hQuad.begin(), hQuad.end(), [](double v) { return std::isfinite(v); });
+                check(hQuadFinite, "H: mid-band quadrupole path finite", 0.0);
+                double const gateHQuad_E = groupGate(hQuad, refH, 0u);
+                double const gateHQuad_B = groupGate(hQuad, refH, 3u);
+                double const gateHPoint_E = groupGate(hPoint, refH, 0u);
+                double const gateHPoint_B = groupGate(hPoint, refH, 3u);
+                check(gateHQuad_E < gateHPoint_E, "H: quadrupole reduces E error vs point-only", gateHPoint_E - gateHQuad_E);
+                check(gateHQuad_B < gateHPoint_B, "H: quadrupole reduces B error vs point-only", gateHPoint_B - gateHQuad_B);
+                check(gateHQuad_E <= 0.1, "H: point+quad E within mid-band envelope (<10%)", gateHQuad_E);
+                check(gateHQuad_B <= 0.1, "H: point+quad B within mid-band envelope (<10%)", gateHQuad_B);
+                check(gateHPoint_E > 0.01, "H: point-only E error is significant (quad is doing work)", gateHPoint_E);
+                std::cout << "[H mid-band quadrupole, d=4.5, moving] default vs exact reference\n";
+                report("point+quad", hQuad, refH);
+                report("point-only", hPoint, refH);
+                reportPairs("point+quad", nearPairCounts(h, cellsH, kNearMax));
+
+                // ---- Scenario I: near-box boundary disjointness (T76) ---------------------------------------------
+                // A source exactly on the near-box face (x=12.0, threshold 4.0: maxX+thrX=12.0) is classified
+                // as near (exact pass); a source just outside (x=12.01) is classified as not near (point field).
+                // This pins the disjoint partition: no (source, tile) pair is handled by both passes.
+                nb::Vec3d const relI1{12.0, 4.0, 2.0};
+                nb::Vec3d const relI2{12.01, 4.0, 2.0};
+                check(
+                    sourceNearBox(relI1, cellsH, kNearMax),
+                    "I: source on the near-box face is classified near (exact pass)", 0.0);
+                check(
+                    !sourceNearBox(relI2, cellsH, kNearMax),
+                    "I: source just outside the near box is classified far (point field)", 0.0);
+                std::cout << "[I near-box boundary, threshold 4.0] disjointness\n";
+                std::cout << "  x=12.0 -> " << (sourceNearBox(relI1, cellsH, kNearMax) ? "near" : "far")
+                          << ", x=12.01 -> " << (sourceNearBox(relI2, cellsH, kNearMax) ? "near" : "far") << "\n";
+
+                // ---- Scenario J: worst-case pin at the p4 band boundary (T86) -------------------------------------
+                // Order-4 (hexadecapole) mid-band correction with the near threshold raised to 6.0 cells. A gamma-10
+                // oblique source 6 dx along y from slot (7, 1.875, 3.5) sits just outside the aspect-aware near box
+                // (y face 2.0 + 6 * 0.25 = 3.5 < 7.875), so every slot of this tile is a mid-band pair at |R| >= 6,
+                // the band boundary where point+quad+order4 must stay within 1e-3 worst case (measured
+                // 1.5e-4 over the 256 staggered cells). The E gate is the worst case over all 256 staggered
+                // cells, not the pooled L2: point+quad alone is ~2.7e-3 worst case here and would fail it while
+                // its pooled L2 stays below 1e-3, so pooled-L2-only logic is caught. The B group (derived,
+                // B = beta x E) uses the standard pooled 1e-3 gate, as in the other scenarios.
+                nb::Vec3d const cellsJ{1.0, 0.25, 1.0};
+                double const nearMaxJ = 6.0;
+                std::vector<Src> j{{Src{{7.0, 7.875, 3.5}, {7.03562364, 7.03562364, 0.0}, 1.0}}};
+                auto refJ = ref::tile_field(ref::Vec3{0.0, 0.0, 0.0}, toReference(j), 1.0, 0.25, 1.0);
+                auto jP4 = tileWidePath(queue, exec, j, cellsJ, nearMaxJ, true, true, true);
+                auto jP2 = tileWidePath(queue, exec, j, cellsJ, nearMaxJ, true, true, false);
+                auto jPoint = tileWidePath(queue, exec, j, cellsJ, nearMaxJ, true, false, false);
+                bool const jP4Finite
+                    = std::all_of(jP4.begin(), jP4.end(), [](double v) { return std::isfinite(v); });
+                check(jP4Finite, "J: p4 band-boundary path finite", 0.0);
+                // The B group is gated with the standard pooled gate: B = beta x E vanishes at
+                // cross-product nodes, so a per-cell relative B error is not a well-posed gate.
+                double const worstJ4_E = worstCaseGate(jP4, refJ, 0u);
+                double const pooledJ4_B = groupGate(jP4, refJ, 3u);
+                double const worstJ2_E = worstCaseGate(jP2, refJ, 0u);
+                double const worstJPoint_E = worstCaseGate(jPoint, refJ, 0u);
+                check(
+                    worstJ4_E <= 1.0e-3,
+                    "J: point+quad+order4 worst case within 1e-3 at the d=6 band boundary (E)",
+                    worstJ4_E);
+                check(
+                    pooledJ4_B <= 1.0e-3,
+                    "J: point+quad+order4 pooled B gate within 1e-3 at the d=6 band boundary",
+                    pooledJ4_B);
+                check(worstJ4_E < worstJ2_E, "J: order4 reduces the worst case vs point+quad", worstJ2_E - worstJ4_E);
+                check(
+                    worstJ2_E > 1.0e-3,
+                    "J: point+quad alone fails the 1e-3 worst-case gate (order4 is required)",
+                    worstJ2_E);
+                check(
+                    worstJPoint_E > 1.0e-2,
+                    "J: point-only worst case is significant (corrections are doing work)",
+                    worstJPoint_E);
+                std::cout << "[J p4 band boundary, T=6, source 6 dx along y, gamma-10 oblique] worst case over 256 cells\n";
+                std::cout << "  worst-case E: point=" << worstJPoint_E << "  point+quad=" << worstJ2_E
+                          << "  point+quad+order4=" << worstJ4_E << "  (pooled B order4=" << pooledJ4_B << ")\n";
+            });
+        return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+} // namespace
+
+int main(int argc, char** argv)
+{
+    std::string const backend = argc > 1 ? argv[1] : "cuda";
+    int const rc = run(backend);
+    if(failures != 0)
+    {
+        std::cerr << failures << " of " << checks << " near-band checks failed\n";
+        return EXIT_FAILURE;
+    }
+    std::cout << "nearBandAccuracyTest: " << checks << " checks OK\n";
+    return rc;
+}

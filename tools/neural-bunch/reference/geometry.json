@@ -1,0 +1,141 @@
+{
+  "format": "picongpu-neural-bunch-reference-geometry",
+  "version": 1,
+  "tile": {
+    "nx": 8,
+    "ny": 8,
+    "nz": 4,
+    "components": [
+      "Ex",
+      "Ey",
+      "Ez",
+      "Bx",
+      "By",
+      "Bz"
+    ],
+    "axis_order": "tile[i, j, k, c]",
+    "flatten": "c + 6*(i + 8*(j + 8*k))",
+    "flatten_axis_order": "c + 6*(i + 8*(j + 8*k))",
+    "num_outputs": 1536
+  },
+  "origin": {
+    "x_tile": "physical corner of cell (0,0,0)",
+    "output_position": "x = x_tile + ((i,j,k) + delta_c) * (dx, dy, dz)"
+  },
+  "offsets_cells": {
+    "Ex": [
+      0.5,
+      0.0,
+      0.0
+    ],
+    "Ey": [
+      0.0,
+      0.5,
+      0.0
+    ],
+    "Ez": [
+      0.0,
+      0.0,
+      0.5
+    ],
+    "Bx": [
+      0.0,
+      0.5,
+      0.5
+    ],
+    "By": [
+      0.5,
+      0.0,
+      0.5
+    ],
+    "Bz": [
+      0.5,
+      0.5,
+      0.0
+    ]
+  },
+  "offset_source": {
+    "file": "pico-pr17/include/picongpu/fields/YeeCell.hpp",
+    "lines": {
+      "Ex": 80,
+      "Ey": 81,
+      "Ez": 82,
+      "Bx": 124,
+      "By": 125,
+      "Bz": 126
+    }
+  },
+  "shape": {
+    "kind": "TSC",
+    "support_cells": [
+      -1.5,
+      1.5
+    ],
+    "support_width_cells": 3,
+    "formula": "W(x)=3/4-x^2 for |x|<1/2; W(x)=1/2*(3/2-|x|)^2 for 1/2<=|x|<3/2; 0 otherwise",
+    "separable_3d": "S(sx,sy,sz)=W(sx)*W(sy)*W(sz)",
+    "physical_offset": "(sx*dx, sy*dy, sz*dz)",
+    "normalization": "integral W ds = 1 per axis",
+    "source": {
+      "file": "pico-pr17/include/picongpu/particles/shapes/TSC.hpp",
+      "lines": "45,47-54,56-64,108-131"
+    }
+  },
+  "normalization": {
+    "length": "dx",
+    "per_unit_charge_field_E": "E_n = 4*pi*eps0*E/q",
+    "per_unit_charge_field_B": "B_n = 4*pi*eps0*c*B/q",
+    "tile_E": "E_tilde = E * 4*pi*eps0*dx^2/e = (q/e) * dx^2 * E_n",
+    "tile_B": "B_tilde = B * 4*pi*eps0*c*dx^2/e = (q/e) * dx^2 * B_n",
+    "charge": "q_i/e = -w_i",
+    "source": "MODEL-FORMAT.md:57-60"
+  },
+  "quadrature": {
+    "base_panels_per_axis": [
+      [
+        -1.5,
+        -0.5
+      ],
+      [
+        -0.5,
+        0.5
+      ],
+      [
+        0.5,
+        1.5
+      ]
+    ],
+    "near_detection": "physical distance to the TSC support box |max(|R_i|-1.5*cell_i,0)| < 2*max(dx,dy,dz); diagnostic only",
+    "near_error_estimate": "difference between the two orders on the same per-axis panels",
+    "near_panelling": "geometric per-axis grading around the projected target, order raised with the error pair",
+    "epsilon_regularization": false,
+    "starting_order": 4,
+    "error_pair": "order and order+2",
+    "tolerance": 1e-07,
+    "max_level": 5,
+    "max_order": 16
+  },
+  "angles": {
+    "a_y": "dy/dx",
+    "a_z": "dz/dx",
+    "domain": {
+      "a_y": [
+        0.1,
+        10.0
+      ],
+      "a_z": [
+        0.1,
+        10.0
+      ]
+    }
+  },
+  "momentum": {
+    "u": "p/(m_e c)",
+    "gamma": "sqrt(1+|u|^2)",
+    "beta": "u/gamma",
+    "domain_gamma": [
+      1.0,
+      100.0
+    ]
+  }
+}

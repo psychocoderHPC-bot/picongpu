@@ -1,0 +1,484 @@
+{
+  "format": "picongpu-neural-bunch",
+  "version": 1,
+  "dtype": "float32",
+  "endianness": "little",
+  "created_utc": "2026-10-31T22:05:21Z",
+  "code_sha": "838b44090f2d2480a3fbac46dfef5b163a69fd60",
+  "tile": {
+    "nx": 8,
+    "ny": 8,
+    "nz": 4,
+    "components": [
+      "Ex",
+      "Ey",
+      "Ez",
+      "Bx",
+      "By",
+      "Bz"
+    ],
+    "flatten": "c + 6*(i + nx*(j + ny*k))"
+  },
+  "features": {
+    "kind": "fourier_v1",
+    "octaves": [
+      -3,
+      6
+    ],
+    "inputs": [
+      "r_x",
+      "r_y",
+      "r_z",
+      "u_x",
+      "u_y",
+      "u_z",
+      "gamma",
+      "a_y",
+      "a_z"
+    ],
+    "dim": 69
+  },
+  "encoder": {
+    "kind": "mlp",
+    "activation": "silu",
+    "layers": [
+      {
+        "weight": "enc.0.w",
+        "bias": "enc.0.b",
+        "in": 69,
+        "out": 32
+      },
+      {
+        "weight": "enc.1.w",
+        "bias": "enc.1.b",
+        "in": 32,
+        "out": 32
+      },
+      {
+        "weight": "enc.2.w",
+        "bias": "enc.2.b",
+        "in": 32,
+        "out": 16
+      }
+    ],
+    "output_dim": 16,
+    "last_layer_activation": "none"
+  },
+  "decoder": {
+    "kind": "geometry_bank_bilinear",
+    "axes": {
+      "a_y": [
+        0.1,
+        0.31622776601683794,
+        1.0,
+        3.1622776601683795,
+        10.0
+      ],
+      "a_z": [
+        0.1,
+        0.31622776601683794,
+        1.0,
+        3.1622776601683795,
+        10.0
+      ]
+    },
+    "interpolation": "bilinear in log10(a), clamped at the outer anchors",
+    "matrix_shape": [
+      16,
+      1536
+    ],
+    "bias": false,
+    "bank": [
+      "dec.0.0.w",
+      "dec.0.1.w",
+      "dec.0.2.w",
+      "dec.0.3.w",
+      "dec.0.4.w",
+      "dec.1.0.w",
+      "dec.1.1.w",
+      "dec.1.2.w",
+      "dec.1.3.w",
+      "dec.1.4.w",
+      "dec.2.0.w",
+      "dec.2.1.w",
+      "dec.2.2.w",
+      "dec.2.3.w",
+      "dec.2.4.w",
+      "dec.3.0.w",
+      "dec.3.1.w",
+      "dec.3.2.w",
+      "dec.3.3.w",
+      "dec.3.4.w",
+      "dec.4.0.w",
+      "dec.4.1.w",
+      "dec.4.2.w",
+      "dec.4.3.w",
+      "dec.4.4.w"
+    ],
+    "bank_entry_shape": [
+      16,
+      1536
+    ]
+  },
+  "normalization": {
+    "length": "dx",
+    "charge": "q_i/e = -w_i",
+    "field_E": "E = e/(4*pi*eps0*L^2) * E_tilde",
+    "field_B": "B = e/(4*pi*eps0*c*L^2) * B_tilde",
+    "latent": "none"
+  },
+  "domain": {
+    "gamma": [
+      1.0,
+      100.0
+    ],
+    "a_y": [
+      0.1,
+      10.0
+    ],
+    "a_z": [
+      0.1,
+      10.0
+    ],
+    "d_min_cells": 4.0,
+    "d_max_cells": 512.0,
+    "distance_metric": "minimum over the 1536 staggered output points of |x_out - x_source(t)| / dx, with x_out in physical coordinates"
+  },
+  "reference": {
+    "shape": "TSC",
+    "shape_support_cells": [
+      2.0,
+      2.0,
+      2.0
+    ],
+    "integrator": "adaptive FP64 quadrature of the constant-velocity point kernel over the lab-frame shape",
+    "description": "FP64 reference implemented by reference/convkernel.py"
+  },
+  "fallback": {
+    "policy": "per (source, tile, component-group): reference if distance < d_min_cells or > d_max_cells or gamma/aspect outside domain",
+    "component_groups": {
+      "E": "Ex,Ey,Ez",
+      "B": "Bx,By,Bz"
+    }
+  },
+  "validation": {
+    "tolerance_field_rel_rms": 0.001,
+    "tolerance_force_rel_rms": 0.01,
+    "report": "validation_report.json"
+  },
+  "tensors": [
+    {
+      "name": "enc.0.w",
+      "offset_bytes": 0,
+      "count": 2208,
+      "shape": [
+        69,
+        32
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "enc.0.b",
+      "offset_bytes": 8832,
+      "count": 32,
+      "shape": [
+        32
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "enc.1.w",
+      "offset_bytes": 8960,
+      "count": 1024,
+      "shape": [
+        32,
+        32
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "enc.1.b",
+      "offset_bytes": 13056,
+      "count": 32,
+      "shape": [
+        32
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "enc.2.w",
+      "offset_bytes": 13184,
+      "count": 512,
+      "shape": [
+        32,
+        16
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "enc.2.b",
+      "offset_bytes": 15232,
+      "count": 16,
+      "shape": [
+        16
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.0.0.w",
+      "offset_bytes": 15296,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.0.1.w",
+      "offset_bytes": 113600,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.0.2.w",
+      "offset_bytes": 211904,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.0.3.w",
+      "offset_bytes": 310208,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.0.4.w",
+      "offset_bytes": 408512,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.1.0.w",
+      "offset_bytes": 506816,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.1.1.w",
+      "offset_bytes": 605120,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.1.2.w",
+      "offset_bytes": 703424,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.1.3.w",
+      "offset_bytes": 801728,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.1.4.w",
+      "offset_bytes": 900032,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.2.0.w",
+      "offset_bytes": 998336,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.2.1.w",
+      "offset_bytes": 1096640,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.2.2.w",
+      "offset_bytes": 1194944,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.2.3.w",
+      "offset_bytes": 1293248,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.2.4.w",
+      "offset_bytes": 1391552,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.3.0.w",
+      "offset_bytes": 1489856,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.3.1.w",
+      "offset_bytes": 1588160,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.3.2.w",
+      "offset_bytes": 1686464,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.3.3.w",
+      "offset_bytes": 1784768,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.3.4.w",
+      "offset_bytes": 1883072,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.4.0.w",
+      "offset_bytes": 1981376,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.4.1.w",
+      "offset_bytes": 2079680,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.4.2.w",
+      "offset_bytes": 2177984,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.4.3.w",
+      "offset_bytes": 2276288,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    },
+    {
+      "name": "dec.4.4.w",
+      "offset_bytes": 2374592,
+      "count": 24576,
+      "shape": [
+        16,
+        1536
+      ],
+      "order": "row_major_in_out"
+    }
+  ],
+  "artifact": {
+    "file": "model.bin",
+    "bytes": 2472896,
+    "sha256": "484b35b09d182adf3b20d36cf2e7698e99a2586bb1e6151b36ffcd82198dded1"
+  },
+  "license": "MPL-2.0"
+}
