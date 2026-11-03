@@ -458,3 +458,35 @@ runnable HDF5/ADIOS2 example.
 Reference implementation, generator, training code, golden vectors and the
 reproducibility contract are in
 [`tools/neural-bunch/`](../../tools/neural-bunch/README.md).
+## Near-field table path (T150)
+
+The in-support branch of the exact device path (`exactShapeFieldPoint` in
+`include/picongpu/particles/neuralBunch/ExactShapeField.hpp`) can be routed
+through a precomputed single-source near-field table instead of the
+in-support quadrature pair:
+
+```cpp
+nb::ExactSettings settings;
+settings.useNearTable = true;   // default false
+settings.nearTable = nb::uploadNearFieldTable(queue, hostData, grid, u, cells, gamma);
+```
+
+The table stores `K(r) = int W(s) Kpoint((r - s) cells, u) ds^3` on a graded
+displacement grid in cell units for one exact velocity and one cell aspect
+(schema `nktable/v1`; see
+[`tools/neural-bunch/near_table/TABLES.md`](../../tools/neural-bunch/near_table/TABLES.md)).
+The lookup (`NearFieldTable.hpp`) is a trilinear interpolation in global device
+memory: the kernel argument carries only the pointer, the 77-point grid and
+scalars, so no per-slot allocation and no per-thread local table happen.
+Wherever the table is out of domain (displacement beyond the grid, or
+velocity/aspect mismatch) the evaluation falls back to the quadrature path
+bit-identically, so the quadrature remains the selectable reference. The
+lookup result is scaled by `cells.x^2` to the dx-normalized convention of the
+quadrature path.
+
+Table generation and validation tooling:
+[`tools/neural-bunch/near_table/`](../../tools/neural-bunch/near_table/TABLES.md).
+Device coverage is pinned by the ctest `neuralBunchNearTableTest` (table on vs
+off, on/off grid, out-of-domain fallback, and the enlarged kernel-argument
+launch); per-pair throughput of both paths is reported by
+`neuralBunchExactBenchmark bench` and `bench-table <table.bin>`.

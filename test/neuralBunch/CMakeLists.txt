@@ -119,6 +119,24 @@ if(alpaka_DEP_CUDA)
             ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
     )
     add_test(NAME neuralBunchNearBandAccuracyTest COMMAND neuralBunchNearBandAccuracyTest cuda)
+    # T150 near-field table path: default-off parameter gate, trilinear device lookup, out-of-domain
+    # fallback to the quadrature, and the enlarged kernel-argument launch.
+    add_executable(neuralBunchNearTableTest nearTableTest.cu)
+    target_compile_features(neuralBunchNearTableTest PRIVATE cxx_std_20)
+    target_include_directories(neuralBunchNearTableTest PRIVATE "${PIConGPUapp_SOURCE_DIR}/..")
+    target_link_libraries(
+        neuralBunchNearTableTest
+        PRIVATE alpaka::nn alpakaVendor::alpakaVendor nlohmann_json::nlohmann_json OpenMP::OpenMP_CXX
+    )
+    alpaka_finalize(neuralBunchNearTableTest)
+    target_compile_definitions(
+        neuralBunchNearTableTest
+        PRIVATE
+            ALPAKA_CMAKE_TARGET_HEADERS_FINALIZE_CALLED
+            ALPAKA_CMAKE_TARGET_CUDA_FINALIZE_CALLED
+            ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
+    )
+    add_test(NAME neuralBunchNearTableTest COMMAND neuralBunchNearTableTest cuda)
 endif(alpaka_DEP_CUDA)
 
 # openPMD position-decode test: independent, equal and absent offset units.

@@ -27,6 +27,7 @@
 
 #include "Features.hpp"
 #include "Inference.hpp"
+#include "NearFieldTable.hpp"
 #include "PointField.hpp"
 
 #include <alpaka/alpaka.hpp>
@@ -84,6 +85,12 @@ namespace picongpu::particles::neuralBunch
         int nearBoxOrder = 12; // coarse in-support order of the Richardson pair
         int nearBoxOrderFine = 16; // fine in-support order of the Richardson pair
         double tol = 1.0e-7;
+        // T150: route in-support pairs through the precomputed near-field table instead of the
+        // in-support quadrature pair. Default off: with useNearTable == false (or an inactive
+        // table, or a point the table does not cover) the path is bit-identical to the
+        // quadrature behaviour, which remains the selectable reference.
+        bool useNearTable = false;
+        NearFieldTable nearTable{};
     };
 
     /** Distance policy for the exact device path.
@@ -604,6 +611,22 @@ namespace picongpu::particles::neuralBunch
         if(distance == 0.0)
         {
             result.inSupport = true;
+            if(settings.useNearTable && nearTableCovers(settings.nearTable, R0, u, cells))
+            {
+                double value[6]{};
+                Vec3d const r{R0.x / cells.x, R0.y / cells.y, R0.z / cells.z};
+                if(nearTableLookup(settings.nearTable, r, value))
+                {
+                    // The table stores the dx-independent per-unit-charge value; the quadrature
+                    // path returns the dx-normalized value, so restore the caller's convention.
+                    double const dx2 = cells.x * cells.x;
+                    result.E = {value[0] * dx2, value[1] * dx2, value[2] * dx2};
+                    result.B = {value[3] * dx2, value[4] * dx2, value[5] * dx2};
+                    result.error = 0.0;
+                    result.converged = true;
+                    return result;
+                }
+            }
             ExactAccumulator6<T_Type> coarse;
             ExactAccumulator6<T_Type> fine;
             exactBoxIntegral(R0, u, cells, settings.nearBoxOrder, table, coarse);
