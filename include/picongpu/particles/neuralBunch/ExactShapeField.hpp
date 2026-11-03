@@ -587,6 +587,7 @@ namespace picongpu::particles::neuralBunch
         GaussTable const& table)
     {
         double const half[3]{1.5 * cells.x, 1.5 * cells.y, 1.5 * cells.z};
+        double const r0[3]{R0.x, R0.y, R0.z};
         double out[3]{0.0, 0.0, 0.0};
         int const idx = exactOrderIndex(order);
         double const* const xn = table.nodes[idx];
@@ -595,7 +596,7 @@ namespace picongpu::particles::neuralBunch
             for(int sgn : {-1, 1})
             {
                 double const fixed = static_cast<double>(sgn) * half[axis];
-                double const df = R0[axis] - fixed;
+                double const df = r0[axis] - fixed;
                 int const o0 = (axis + 1) % 3;
                 int const o1 = (axis + 2) % 3;
                 double const h0 = half[o0];
@@ -616,6 +617,119 @@ namespace picongpu::particles::neuralBunch
                 out[axis] += static_cast<double>(sgn) * P;
             }
         return {out[0], out[1], out[2]};
+    }
+
+    // ---- Anisotropic (moving-source) kernel ---------------------------------
+    //
+    // The moving point kernel of pointFieldDx is
+    //     K_lab(R) = (1/gamma^2) R / D^{3/2},   D = r_par^2 + r_perp^2/gamma^2.
+    // With the rest-frame stretch A = gamma bhat bhat^T + (I - bhat bhat^T),
+    // R' = A R, |R'|^2 = gamma^2 D and K_lab = B (R'/|R'|^3) where
+    // B = bhat bhat^T + gamma (I - bhat bhat^T) is the field boost.  Hence
+    //     integral_box K_lab = B * (1/gamma) * (rest-frame box integral of K').
+    // The rest-frame support is A(box), a parallelepiped, and the divergence
+    // theorem gives integral K' = closed surface of 1/|R'-p'|.  Pulling that
+    // surface back with Nanson's formula (n' dS' = det(A) A^{-T} n dS = gamma A^{-1}
+    // n dS) converts it into a surface integral over the original axis-aligned
+    // box faces.  The face integrand 1/sqrt(D) = gamma/|R'-p'| is smooth, so plain
+    // Gauss converges and no oblique-face closed form is needed:
+    //     integral_box K_lab = A^{-2} S,   S = sum_faces sgn * int 1/sqrt(D) dS.
+    // For u -> 0, A -> I and the Coulomb result is recovered exactly.
+    struct ExactAniso
+    {
+        Vec3d bhat{};
+        double invG2 = 1.0;
+    };
+
+    ALPAKA_FN_HOST_ACC inline ExactAniso exactAniso(Vec3d const& u)
+    {
+        ExactAniso metric;
+        double const uu2 = u.x * u.x + u.y * u.y + u.z * u.z;
+        if(uu2 > 0.0)
+        {
+            double const speed = alpaka::math::sqrt(uu2);
+            metric.bhat = {u.x / speed, u.y / speed, u.z / speed};
+            metric.invG2 = 1.0 / (1.0 + uu2);
+        }
+        return metric;
+    }
+
+    ALPAKA_FN_HOST_ACC inline double exactAnisoInvNorm(
+        Vec3d const& R,
+        ExactAniso const& metric)
+    {
+        double const rPar = R.x * metric.bhat.x + R.y * metric.bhat.y + R.z * metric.bhat.z;
+        double const px = R.x - rPar * metric.bhat.x;
+        double const py = R.y - rPar * metric.bhat.y;
+        double const pz = R.z - rPar * metric.bhat.z;
+        double const D = rPar * rPar + (px * px + py * py + pz * pz) * metric.invG2;
+        return 1.0 / alpaka::math::sqrt(D);
+    }
+
+    ALPAKA_FN_HOST_ACC inline Vec3d exactAnisoKernel(
+        Vec3d const& R,
+        ExactAniso const& metric)
+    {
+        double const rPar = R.x * metric.bhat.x + R.y * metric.bhat.y + R.z * metric.bhat.z;
+        double const px = R.x - rPar * metric.bhat.x;
+        double const py = R.y - rPar * metric.bhat.y;
+        double const pz = R.z - rPar * metric.bhat.z;
+        double const D = rPar * rPar + (px * px + py * py + pz * pz) * metric.invG2;
+        if(D == 0.0)
+            return {0.0, 0.0, 0.0};
+        // E = (1/gamma^2) R / D^{3/2} is the moving point kernel of pointFieldDx.
+        double const inv = metric.invG2 / (D * alpaka::math::sqrt(D));
+        return {R.x * inv, R.y * inv, R.z * inv};
+    }
+
+    ALPAKA_FN_HOST_ACC inline Vec3d exactBoxFieldMoving(
+        Vec3d const& R0,
+        Vec3d const& u,
+        Vec3d const& cells,
+        int order,
+        GaussTable const& table)
+    {
+        ExactAniso const metric = exactAniso(u);
+        double const half[3]{1.5 * cells.x, 1.5 * cells.y, 1.5 * cells.z};
+        double out[3]{0.0, 0.0, 0.0};
+        int const idx = exactOrderIndex(order);
+        double const* const xn = table.nodes[idx];
+        double const* const wn = table.weights[idx];
+        for(int axis = 0; axis < 3; ++axis)
+            for(int sgn : {-1, 1})
+            {
+                double const fixed = static_cast<double>(sgn) * half[axis];
+                int const o0 = (axis + 1) % 3;
+                int const o1 = (axis + 2) % 3;
+                double const h0 = half[o0];
+                double const h1 = half[o1];
+                double P = 0.0;
+                for(int i = 0; i < order; ++i)
+                {
+                    double const v0 = h0 * xn[i];
+                    for(int j = 0; j < order; ++j)
+                    {
+                        double const v1 = h1 * xn[j];
+                        double p[3]{0.0, 0.0, 0.0};
+                        p[axis] = fixed;
+                        p[o0] = v0;
+                        p[o1] = v1;
+                        Vec3d const R{R0.x - p[0], R0.y - p[1], R0.z - p[2]};
+                        P += (h0 * h1) * wn[i] * wn[j] * exactAnisoInvNorm(R, metric);
+                    }
+                }
+                out[axis] += static_cast<double>(sgn) * P;
+            }
+        // The face integral above is gamma * S', with S' = closed surface of
+        // 1/|A(R0-p)|.  The rest-frame field is I = A^{-1} S' and the lab field
+        // is E = B I with B = gamma A^{-1}, so the singular part is
+        //     integral_box K_lab = A^{-2} S = (1/gamma^2 on bhat, 1 on perp) S.
+        double const sPar = out[0] * metric.bhat.x + out[1] * metric.bhat.y + out[2] * metric.bhat.z;
+        double const fac = metric.invG2 - 1.0;
+        return {
+            out[0] + fac * sPar * metric.bhat.x,
+            out[1] + fac * sPar * metric.bhat.y,
+            out[2] + fac * sPar * metric.bhat.z};
     }
 
     template<typename T_Type>
@@ -727,6 +841,166 @@ namespace picongpu::particles::neuralBunch
                 }
     }
 
+    // ---- Full-support smooth remainder for the analytic subtraction --------
+    //
+    // Integral over the WHOLE support box of (W(s) - W(t)) K(s).  The old
+    // implementation only covered the cell containing t, which drops the smooth
+    // remainder of the other 26 TSC sub-boxes (up to ~20% of the field).  Here
+    // those cells are integrated with plain Gauss (their integrand is smooth),
+    // while the containing cell keeps the pyramid decomposition whose r^2
+    // Jacobian cancels the 1/r^2 kernel.  Works for u = 0 and u != 0 because
+    // exactAnisoKernel reduces to the Coulomb kernel as u -> 0.
+    inline constexpr int kExactRemGaussOrder = 8;
+
+    template<typename T_Type>
+    ALPAKA_FN_HOST_ACC void exactRemainderSupportMoving(
+        Vec3d const& R0,
+        Vec3d const& u,
+        Vec3d const& cells,
+        int nang,
+        int nr,
+        int ng,
+        double wOffset,
+        GaussTable const& table,
+        ExactAccumulator6<T_Type>& accumulator)
+    {
+        ExactAniso const metric = exactAniso(u);
+        int const ia = exactOrderIndex(nang);
+        int const ir = exactOrderIndex(nr);
+        int const ig = exactOrderIndex(ng);
+        double const* const xa = table.nodes[ia];
+        double const* const wa = table.weights[ia];
+        double const* const xr = table.nodes[ir];
+        double const* const wr = table.weights[ir];
+        double const* const xg = table.nodes[ig];
+        double const* const wg = table.weights[ig];
+        double const t[3]{R0.x / cells.x, R0.y / cells.y, R0.z / cells.z};
+        double const boxLo[3]{-1.5, -1.5, -1.5};
+        for(int ix = 0; ix < 3; ++ix)
+            for(int iy = 0; iy < 3; ++iy)
+                for(int iz = 0; iz < 3; ++iz)
+                {
+                    double const lo[3]{boxLo[0] + ix, boxLo[1] + iy, boxLo[2] + iz};
+                    double const hi[3]{lo[0] + 1.0, lo[1] + 1.0, lo[2] + 1.0};
+                    bool contains = true;
+                    for(int a = 0; a < 3; ++a)
+                        contains = contains && lo[a] <= t[a] && t[a] <= hi[a];
+
+                    if(!contains)
+                    {
+                        for(int a0 = 0; a0 < ng; ++a0)
+                        {
+                            double const s0 = 0.5 * (lo[0] + hi[0]) + 0.5 * (hi[0] - lo[0]) * xg[a0];
+                            double const w0 = 0.5 * (hi[0] - lo[0]) * wg[a0];
+                            for(int a1 = 0; a1 < ng; ++a1)
+                            {
+                                double const s1
+                                    = 0.5 * (lo[1] + hi[1]) + 0.5 * (hi[1] - lo[1]) * xg[a1];
+                                double const w1 = 0.5 * (hi[1] - lo[1]) * wg[a1];
+                                for(int a2 = 0; a2 < ng; ++a2)
+                                {
+                                    double const s2
+                                        = 0.5 * (lo[2] + hi[2]) + 0.5 * (hi[2] - lo[2]) * xg[a2];
+                                    double const w2 = 0.5 * (hi[2] - lo[2]) * wg[a2];
+                                    double const W
+                                        = exactTscShape(s0) * exactTscShape(s1) * exactTscShape(s2);
+                                    double const Ww = W - wOffset;
+                                    if(Ww == 0.0)
+                                        continue;
+                                    Vec3d const R{
+                                        R0.x - s0 * cells.x,
+                                        R0.y - s1 * cells.y,
+                                        R0.z - s2 * cells.z};
+                                    Vec3d const K = exactAnisoKernel(R, metric);
+                                    double const ww = w0 * w1 * w2 * Ww;
+                                    accumulator.add(0, ww * K.x);
+                                    accumulator.add(1, ww * K.y);
+                                    accumulator.add(2, ww * K.z);
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    double segLo[3][2]{};
+                    double segHi[3][2]{};
+                    double segSgn[3][2]{};
+                    int segCnt[3]{};
+                    for(int a = 0; a < 3; ++a)
+                    {
+                        if(lo[a] < t[a])
+                        {
+                            segLo[a][segCnt[a]] = lo[a];
+                            segHi[a][segCnt[a]] = t[a];
+                            segSgn[a][segCnt[a]] = -1.0;
+                            ++segCnt[a];
+                        }
+                        if(t[a] < hi[a])
+                        {
+                            segLo[a][segCnt[a]] = t[a];
+                            segHi[a][segCnt[a]] = hi[a];
+                            segSgn[a][segCnt[a]] = 1.0;
+                            ++segCnt[a];
+                        }
+                    }
+                    for(int cx = 0; cx < segCnt[0]; ++cx)
+                        for(int cy = 0; cy < segCnt[1]; ++cy)
+                            for(int cz = 0; cz < segCnt[2]; ++cz)
+                            {
+                                double const L[3]{
+                                    segHi[0][cx] - segLo[0][cx],
+                                    segHi[1][cy] - segLo[1][cy],
+                                    segHi[2][cz] - segLo[2][cz]};
+                                if(L[0] <= 0.0 || L[1] <= 0.0 || L[2] <= 0.0)
+                                    continue;
+                                double const sgn[3]{segSgn[0][cx], segSgn[1][cy], segSgn[2][cz]};
+                                double const V = L[0] * L[1] * L[2];
+                                for(int face = 0; face < 3; ++face)
+                                {
+                                    int const o0 = (face + 1) % 3;
+                                    int const o1 = (face + 2) % 3;
+                                    for(int iu = 0; iu < nang; ++iu)
+                                    {
+                                        double const uu = 0.5 * (xa[iu] + 1.0);
+                                        double const wu = 0.5 * wa[iu];
+                                        for(int iv = 0; iv < nang; ++iv)
+                                        {
+                                            double const vv = 0.5 * (xa[iv] + 1.0);
+                                            double const wv = 0.5 * wa[iv];
+                                            double q[3]{0.0, 0.0, 0.0};
+                                            q[face] = sgn[face] * L[face];
+                                            q[o0] = sgn[o0] * uu * L[o0];
+                                            q[o1] = sgn[o1] * vv * L[o1];
+                                            for(int irr = 0; irr < nr; ++irr)
+                                            {
+                                                double const r = 0.5 * (xr[irr] + 1.0);
+                                                double const s[3]{
+                                                    t[0] + r * q[0],
+                                                    t[1] + r * q[1],
+                                                    t[2] + r * q[2]};
+                                                double const W = exactTscShape(s[0]) * exactTscShape(s[1])
+                                                    * exactTscShape(s[2]);
+                                                double const Ww = W - wOffset;
+                                                if(Ww == 0.0)
+                                                    continue;
+                                                Vec3d const R{
+                                                    R0.x - s[0] * cells.x,
+                                                    R0.y - s[1] * cells.y,
+                                                    R0.z - s[2] * cells.z};
+                                                Vec3d const K = exactAnisoKernel(R, metric);
+                                                double const ww = 0.5 * wr[irr] * wu * wv * V * r * r
+                                                    * Ww;
+                                                accumulator.add(0, ww * K.x);
+                                                accumulator.add(1, ww * K.y);
+                                                accumulator.add(2, ww * K.z);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                }
+    }
+
     ALPAKA_FN_HOST_ACC inline double exactRichardsonError(
         double const* a,
         double const* b)
@@ -768,13 +1042,25 @@ namespace picongpu::particles::neuralBunch
             if(uu2 == 0.0)
             {
                 // Stationary (Coulomb) in-support: analytic subtraction.
-                // E = W(t)/vol * box_field + pyramid_remainder(W(s)-W(t))
+                //     E = W(t)/vol * integral_box K + integral_box (W-W(t)) K
+                // The first term is the exact surface integral over the six box
+                // faces, the second is the FULL-support smooth remainder (the
+                // containing cell by pyramids, the other 26 TSC cells by Gauss).
                 double const t[3]{R0.x / cells.x, R0.y / cells.y, R0.z / cells.z};
                 double const Wt = exactTscShape(t[0]) * exactTscShape(t[1]) * exactTscShape(t[2]);
                 double const vol = cells.x * cells.y * cells.z;
                 Vec3d const S = exactBoxFieldCoulomb(R0, cells, kExactBoxFieldOrder, table);
                 ExactAccumulator6<T_Type> rem;
-                exactRemainderPyramidCoulomb<T_Type>(R0, cells, kExactRemNang, kExactRemNr, Wt, table, rem);
+                exactRemainderSupportMoving<T_Type>(
+                    R0,
+                    Vec3d{0.0, 0.0, 0.0},
+                    cells,
+                    kExactRemNang,
+                    kExactRemNr,
+                    kExactRemGaussOrder,
+                    Wt,
+                    table,
+                    rem);
                 double const scale = Wt / vol;
                 result.E = {
                     S.x * scale + static_cast<double>(rem.sum[0]),
@@ -786,7 +1072,10 @@ namespace picongpu::particles::neuralBunch
             }
             else
             {
-                // Moving in-support: anisotropic kernel, full box/pyramid.
+                // Moving in-support: the anisotropic kernel is not a gradient in
+                // the lab frame, so the rest-frame surface reduction is still
+                // experimental (see exactBoxFieldMoving).  Keep the validated
+                // full box/pyramid quadrature for moving sources.
                 ExactAccumulator6<T_Type> coarse;
                 ExactAccumulator6<T_Type> fine;
                 exactBoxIntegral(R0, u, cells, settings.nearAngularOrder,
