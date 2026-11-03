@@ -157,6 +157,7 @@ def main():
         d = {k: v[keep] for k, v in d.items()}
         print(f"rows-per-config {args.rows_per_config}: kept {keep.sum()} of {len(keep)}", flush=True)
     X, R, b, r, gamma, w, nrm, econ = derived(d, args.feature_set)
+    rcells = np.asarray(d["r_cells"], dtype=np.float64)
     Y = np.asarray(d["delta_E_hat"], dtype=np.float64)
     Xneg = None
     if args.augment:
@@ -190,7 +191,7 @@ def main():
     # weight: judge-sensitivity, but judge radii start at 0.5 cells; the pilot
     # deep bucket (r<0.5) is not judged, so suppress it and cap the tail.
     w = w.copy()
-    w[r < 0.45] *= args.deep_weight
+    w[rcells < 0.45] *= args.deep_weight
     cap = np.quantile(w[tr], args.weight_cap_pct / 100.0)
     w = np.minimum(w, cap)
 
@@ -251,7 +252,7 @@ def main():
                         gamma[va_idx], nrm[va_idx], r[va_idx])
             val_all = m["max_rel"]
             rel = m["rel"]
-            keep = r[va_idx] >= 0.45
+            keep = rcells[va_idx] >= 0.45
             val = float(np.max(rel[keep]))
             hist.append({"epoch": epoch, "train": tot / len(Xt), "val_max_rel": val,
                          "val_per_comp": m["per_comp"], "val_all": val_all})
@@ -301,7 +302,7 @@ def main():
         out["by_distance"] = bstrat
         rsel = r[sel]
         rel_all = m["rel"]
-        keep = rsel >= 0.45
+        keep = (rcells[sel] >= 0.45)
         out["max_rel_r045"] = float(np.max(rel_all[keep])) if keep.any() else None
         out["n"] = int(sel.sum())
         return out
