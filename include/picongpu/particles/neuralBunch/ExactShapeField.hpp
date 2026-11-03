@@ -43,8 +43,8 @@
 
 namespace picongpu::particles::neuralBunch
 {
-    inline constexpr int kExactMaxOrder = 96;
-    inline constexpr int kExactOrderCount = 10; // orders 4,8,12,16,20,24,32,48,64,96
+    inline constexpr int kExactMaxOrder = 32;
+    inline constexpr int kExactOrderCount = 7; // orders 4,8,12,16,20,24,32
 
     ALPAKA_FN_HOST_ACC inline constexpr int exactOrderIndex(int order)
     {
@@ -64,12 +64,6 @@ namespace picongpu::particles::neuralBunch
             return 5;
         case 32:
             return 6;
-        case 48:
-            return 7;
-        case 64:
-            return 8;
-        case 96:
-            return 9;
         default:
             return -1;
         }
@@ -82,8 +76,16 @@ namespace picongpu::particles::neuralBunch
         int smoothOrderClose = 24; // 1 <= distance < 2
         int smoothOrderVeryClose = 32; // 0 < distance < 1
         int nearBoxOrder = 12; // coarse in-support order of the Richardson pair
-        int nearBoxOrderFine = 16; // fine in-support order of the Richardson pair
+        int nearBoxOrderFine = 12; // fine in-support order of the Richardson pair
         double tol = 1.0e-7;
+        // In-support refinement, mirroring the validated reference quadrature policy
+        // (nearfield_judge/reference.py ORDER_IN/REFINE_IN, ORDER_MOVING_OUT/REFINE_MOVING_OUT,
+        // ORDER_OUT/REFINE_OUT). The 1/gamma pancake of a moving kernel crosses the in-support boxes for
+        // oblique motion, so the transformed coordinate is bisected (refine r -> 2^r sub-intervals per
+        // panel): order 12 + refine 3 resolves the gamma-100 oblique ridge to machine precision.
+        int nearBoxRefineInside = 3; // all |R/cells| < 1.5 (REFINE_IN)
+        int nearBoxRefineFaceMoving = 1; // some |R/cells| == 1.5, u != 0 (REFINE_MOVING_OUT)
+        int nearBoxRefineFaceStatic = 0; // some |R/cells| == 1.5, u == 0 (REFINE_OUT)
     };
 
     /** Distance policy for the exact device path.
@@ -153,7 +155,7 @@ namespace picongpu::particles::neuralBunch
         static GaussTable create()
         {
             GaussTable table;
-            constexpr int orders[kExactOrderCount]{4, 8, 12, 16, 20, 24, 32, 48, 64, 96};
+            constexpr int orders[kExactOrderCount]{4, 8, 12, 16, 20, 24, 32};
             for(int i = 0; i < kExactOrderCount; ++i)
                 gaussLegendre(orders[i], table.nodes[i], table.weights[i]);
             return table;
@@ -446,6 +448,10 @@ namespace picongpu::particles::neuralBunch
         tauPowP = u4 * tau; // tau**p = tau**5
     }
 
+    //! Max transformed sub-nodes per axis of the in-support box rule: 2^refine segments times the Gauss order.
+    //! The reference policy uses at most order 12 / refine 3 (96); 256 leaves headroom for a higher setting.
+    inline constexpr std::size_t kNearMaxSubNodes = 256;
+
     //! Append one in-support panel [eA, eB], anchored at the end nearest the kernel peak tAxis.
     ALPAKA_FN_HOST_ACC inline void exactAddPeakPanel(
         double const tAxis,
@@ -471,8 +477,14 @@ namespace picongpu::particles::neuralBunch
      * with c the panel end nearest the anchor, so the kernel peak (the singularity, and the 1/gamma pancake of
      * the moving kernel through it) is a panel endpoint of every box. The node clustering resolves the peak and
      * the Jacobian p * tau**(p-1) cancels the 1/r**2 corner singularity (transformed integrand vanishes like
-     * tau**2 for p = 5). No epsilon is added to the kernel. @p ng is the Gauss order of every panel; the caller
-     * runs the coarse/fine pair for the Richardson error estimate.
+     * tau**2 for p = 5). No epsilon is added to the kernel.
+     *
+     * @p ng is the Gauss order of every sub-panel and @p refine the transformed-coordinate refinement: each
+     * panel's tau in [0,1] is split into 2^refine sub-intervals, each carrying an ng-point Gauss rule. For an
+     * oblique 1/gamma ridge that crosses box interiors, refinement (not order) is the convergent knob: order 12
+     * + refine 3 matches the independent reference to machine precision. @p refine == 0 reproduces the single
+     * untransformed interval exactly (bit-identical to the unrefined rule). The caller runs the coarse/fine
+     * pair for the Richardson error estimate.
      */
     template<typename T_Type>
     ALPAKA_FN_HOST_ACC void exactBoxIntegral(
@@ -480,11 +492,38 @@ namespace picongpu::particles::neuralBunch
         Vec3d const& u,
         Vec3d const& cells,
         int ng,
+        int refine,
         GaussTable const& table,
         ExactAccumulator6<T_Type>& accumulator)
     {
         int const ig = exactOrderIndex(ng);
         double const t[3]{R0.x / cells.x, R0.y / cells.y, R0.z / cells.z};
+        int const nseg = 1 << refine;
+        int const subNodes = nseg * ng;
+        if(subNodes > static_cast<int>(kNearMaxSubNodes))
+            return; // settings exceed the bound; the in-support value is left to the caller's error estimate
+
+        // Transformed sub-nodes: each of the 2^refine sub-intervals of tau in [0,1] carries ng Gauss nodes, so
+        // panel [c, c + dx] is integrated over tau in [0,1] with 2^refine composite pieces. tauPowP/tauPowPm1/
+        // segHalfW depend only on (refine, ng, table), not on the panel, so they are computed once here rather
+        // than per (panel, node). At refine = 0 this reduces to the single interval tau = 0.5 * (node + 1) and
+        // the weight 0.5 * w * |dx| * p * tau**(p-1), i.e. the rule is bit-identical to the unrefined code.
+        double tauPowP[kNearMaxSubNodes];
+        double tauPowPm1[kNearMaxSubNodes];
+        double segHalfW[kNearMaxSubNodes];
+        for(int j = 0; j < subNodes; ++j)
+        {
+            int const seg = j / ng;
+            int const g = j % ng;
+            double const tau
+                = (seg + 0.5) / static_cast<double>(nseg)
+                  + (0.5 / static_cast<double>(nseg)) * table.nodes[ig][g];
+            double up = 0.0, upm1 = 0.0;
+            exactPeakPowers(tau, up, upm1);
+            tauPowP[j] = up;
+            tauPowPm1[j] = upm1;
+            segHalfW[j] = (0.5 / static_cast<double>(nseg)) * table.weights[ig][g];
+        }
 
         // Per-axis panels: the three TSC knot intervals, the one containing t[a] split at t[a]; at most 4 each.
         constexpr double baseA[3]{-1.5, -0.5, 0.5};
@@ -523,35 +562,26 @@ namespace picongpu::particles::neuralBunch
                     double const adx = alpaka::math::abs(dx);
                     double const ady = alpaka::math::abs(dy);
                     double const adz = alpaka::math::abs(dz);
-                    for(int i0 = 0; i0 < ng; ++i0)
+                    for(int j0 = 0; j0 < subNodes; ++j0)
                     {
-                        double const tau0 = 0.5 * (table.nodes[ig][i0] + 1.0);
-                        double up0 = 0.0, upm10 = 0.0;
-                        exactPeakPowers(tau0, up0, upm10);
-                        double const s0 = cx + dx * up0;
+                        double const s0 = cx + dx * tauPowP[j0];
                         double const w0
-                            = 0.5 * table.weights[ig][i0] * adx * kExactPeakPower * upm10 * exactTscShape(s0);
+                            = segHalfW[j0] * adx * kExactPeakPower * tauPowPm1[j0] * exactTscShape(s0);
                         if(w0 == 0.0)
                             continue;
-                        for(int i1 = 0; i1 < ng; ++i1)
+                        for(int j1 = 0; j1 < subNodes; ++j1)
                         {
-                            double const tau1 = 0.5 * (table.nodes[ig][i1] + 1.0);
-                            double up1 = 0.0, upm11 = 0.0;
-                            exactPeakPowers(tau1, up1, upm11);
-                            double const s1 = cy + dy * up1;
+                            double const s1 = cy + dy * tauPowP[j1];
                             double const wxy
-                                = w0 * (0.5 * table.weights[ig][i1] * ady * kExactPeakPower * upm11
+                                = w0 * (segHalfW[j1] * ady * kExactPeakPower * tauPowPm1[j1]
                                         * exactTscShape(s1));
                             if(wxy == 0.0)
                                 continue;
-                            for(int i2 = 0; i2 < ng; ++i2)
+                            for(int j2 = 0; j2 < subNodes; ++j2)
                             {
-                                double const tau2 = 0.5 * (table.nodes[ig][i2] + 1.0);
-                                double up2 = 0.0, upm12 = 0.0;
-                                exactPeakPowers(tau2, up2, upm12);
-                                double const s2 = cz + dz * up2;
+                                double const s2 = cz + dz * tauPowP[j2];
                                 double const weight
-                                    = wxy * (0.5 * table.weights[ig][i2] * adz * kExactPeakPower * upm12
+                                    = wxy * (segHalfW[j2] * adz * kExactPeakPower * tauPowPm1[j2]
                                              * exactTscShape(s2));
                                 if(weight == 0.0)
                                     continue;
@@ -604,10 +634,25 @@ namespace picongpu::particles::neuralBunch
         if(distance == 0.0)
         {
             result.inSupport = true;
+            // In-support refinement follows the reference quadrature policy: a target strictly inside the
+            // TSC box (all |R/cells| < 1.5) is integrated at refine 3; a target on the box face (some
+            // |R/cells| == 1.5) matches the reference's outside-moving (refine 1, u != 0) / outside-static
+            // (refine 0, u == 0) branch. The refined rule and the plain rule both collapse to the same value
+            // at a static face, so the face-static case is safe at refine 0.
+            double const tx = R0.x / cells.x;
+            double const ty = R0.y / cells.y;
+            double const tz = R0.z / cells.z;
+            bool const strictlyInside
+                = alpaka::math::abs(tx) < 1.5 && alpaka::math::abs(ty) < 1.5 && alpaka::math::abs(tz) < 1.5;
+            bool const moving = (u.x != 0.0) || (u.y != 0.0) || (u.z != 0.0);
+            int const fineRefine
+                = strictlyInside ? settings.nearBoxRefineInside
+                : (moving ? settings.nearBoxRefineFaceMoving : settings.nearBoxRefineFaceStatic);
+            int const coarseRefine = std::max(0, fineRefine - 1);
             ExactAccumulator6<T_Type> coarse;
             ExactAccumulator6<T_Type> fine;
-            exactBoxIntegral(R0, u, cells, settings.nearBoxOrder, table, coarse);
-            exactBoxIntegral(R0, u, cells, settings.nearBoxOrderFine, table, fine);
+            exactBoxIntegral(R0, u, cells, settings.nearBoxOrder, coarseRefine, table, coarse);
+            exactBoxIntegral(R0, u, cells, settings.nearBoxOrderFine, fineRefine, table, fine);
             double a[6], b[6];
             for(int i = 0; i < 6; ++i)
             {

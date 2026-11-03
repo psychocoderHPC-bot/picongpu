@@ -8,8 +8,10 @@
  * stage now uses -- the analytic point field for the mid/far bands plus a per-tile exact
  * quadrature pass for the near band, the two partitions split by the same near box -- and checks
  * it against the FP64 host reference under the frozen 1e-3 relative gate. It also reproduces the
- * pre-fix default (point field only, no near threshold) and shows it is non-finite at the
- * coincident point, and that a stationary source yields B == 0 exactly. A near-box partition case
+ * pre-fix default (point field only, no near threshold) and shows it is wrong at the
+ * coincident point (the point kernel's coincident-node guard turns the 0/0 into a dropped
+ * contribution, so the pre-fix value is finite but misses the source), and that a stationary
+ * source yields B == 0 exactly. A near-box partition case
  * (threshold 0.4, source just outside the tile) pins the disjoint point/exact split: the pre-fix
  * distance-based skip keeps a pair the box-selected exact pass also adds, which is counted twice.
  * A zero-threshold case pins that the exact pass is skipped there too: with threshold 0 the point
@@ -382,9 +384,15 @@ namespace
                     std::isfinite(defaultA[coincidentSlot]),
                     "A: coincident output finite (no NaN/Inf from the point kernel)",
                     defaultA[coincidentSlot]);
+                // The coincident-node guard in the point kernel (Features.hpp: denomBase == 0 -> 0) turns the
+                // pre-fix 0/0 into a zero contribution instead of NaN, so the legacy path is either non-finite
+                // (unguarded tree) or finite but drops the coincident source's contribution. Both are wrong at
+                // this output; pin whichever variant the tree produces.
                 check(
-                    !std::isfinite(legacyA[coincidentSlot]),
-                    "A: pre-fix point-field-only path is non-finite at the coincident output",
+                    !std::isfinite(legacyA[coincidentSlot])
+                        || std::abs(legacyA[coincidentSlot] - refA[coincidentSlot]) > 1.0e-5,
+                    "A: pre-fix point-field-only path is wrong at the coincident output (non-finite, or the "
+                    "guarded zero drops the source)",
                     legacyA[coincidentSlot]);
 
                 double const gateA_E = groupGate(defaultA, refA, 0u);
@@ -636,6 +644,56 @@ namespace
                 std::cout << "[J p4 band boundary, T=6, source 6 dx along y, gamma-10 oblique] worst case over 256 cells\n";
                 std::cout << "  worst-case E: point=" << worstJPoint_E << "  point+quad=" << worstJ2_E
                           << "  point+quad+order4=" << worstJ4_E << "  (pooled B order4=" << pooledJ4_B << ")\n";
+
+                // ---- Scenario K: oblique in-support worst case (T138) -------------------------------------------
+                // A gamma-100 oblique source projects strictly inside a staggered slot's TSC box. The 1/gamma
+                // pancake of the moving kernel then crosses the box interiors, so an unrefined tensor product
+                // misplaces its nodes against the ridge (measured 2.3e-1 worst case before this fix). The
+                // in-support rule now bisects the transformed coordinate (order 12, refine 3 -- the reference's
+                // inside policy), which resolves the ridge to machine precision. The oracle is the independent
+                // indfield reference (a different formulation, converged to ~1e-11), embedded below: the in-repo
+                // reference does not converge at gamma-100 oblique in-support, so it cannot anchor this case. The
+                // face-moving pin (id 747, anisotropic ay0.25) exercises the reference's outside-moving branch
+                // (order 12, refine 1) on the box face, where the in-support rule must still match it.
+                auto const pinObliqueInSupport = [&](
+                                             nb::Vec3d const& R0,
+                                             nb::Vec3d const& u,
+                                             nb::Vec3d const& cells,
+                                             std::array<double, 6> const& ref,
+                                             char const* name)
+                {
+                    auto const r
+                        = nb::exactShapeFieldPoint<double>(R0, u, cells, nb::ExactSettings{}, nb::GaussTable::create());
+                    check(r.inSupport, std::string(name) + ": in-support", 0.0);
+                    double const v[6] = {r.E.x, r.E.y, r.E.z, r.B.x, r.B.y, r.B.z};
+                    double worst = 0.0;
+                    for(int c = 0; c < 6; ++c)
+                        worst = std::max(worst, std::abs(v[c] - ref[c]) / (1.0 + std::abs(ref[c])));
+                    check(worst <= 3.0e-4, std::string(name) + ": within 3e-4 of the independent reference", worst);
+                    std::cout << "  " << name << " maxRel=" << worst << "\n";
+                };
+                pinObliqueInSupport(
+                    nb::Vec3d{0.2886751345948129, 0.2886751345948129, 0.2886751345948129},
+                    nb::Vec3d{60.16570039835636, 50.13808366529697, 62.17122374496824},
+                    nb::Vec3d{1.0, 1.0, 1.0},
+                    {-0.01862218468931988, 0.0732171553663154, -0.039690781650824125, -0.06542019879398786,
+                     0.012302596664463726, 0.05338842087769899},
+                    "K1 gamma100_oblique in-support (id 870)");
+                pinObliqueInSupport(
+                    nb::Vec3d{0.0, 0.5, 0.0},
+                    nb::Vec3d{5.986710947139653, 4.988925789283044, 6.1862679787109744},
+                    nb::Vec3d{1.0, 1.0, 1.0},
+                    {-0.3030567034895953, 0.8017695471195233, -0.31375861370133407, -0.652527971515537,
+                     0.0003592146873781241, 0.6311889928477453},
+                    "K2 gamma10_oblique in-support (id 434)");
+                pinObliqueInSupport(
+                    nb::Vec3d{0.0, -0.375, 0.0}, // R_cells (0,-1.5,0) times cells (1,0.25,1)
+                    nb::Vec3d{0.0, 0.0, 99.99499987499375},
+                    nb::Vec3d{1.0, 0.25, 1.0},
+                    {1.6653345369377348e-16, -2.2443690662061986, -2.883582669953709e-19, 2.2442568449473046,
+                     1.1102230246251565e-16, 0.0},
+                    "K3 face-moving ay0.25 (id 747)");
+                std::cout << "[K oblique in-support worst case, T138] device exact vs independent reference\n";
             });
         return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
