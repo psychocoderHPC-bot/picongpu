@@ -107,6 +107,16 @@ namespace picongpu::particles::neuralBunch
                    && relativeDx.z <= maxZ + thrZ;
         }
 
+        /** Tile-wide analytic point field kernel.
+         *
+         * ``TOrder4Mid`` is a compile-time switch for the order-4 mid-band shape correction. Its monomial
+         * table is an 8 KiB per-thread local-memory frame: instantiating the correction into a kernel
+         * reserves that frame for every thread even when the runtime flag is false, and the launch
+         * reservation OOMs the initializer on 32 GiB GPUs. The launcher therefore uses the correction-free
+         * ``TileWideKernel<false>`` by default and the ``TileWideKernel<true>`` specialization only when
+         * order4Mid is requested.
+         */
+        template<bool TOrder4Mid>
         struct TileWideKernel
         {
             Vec3d cellsDx{};
@@ -118,7 +128,6 @@ namespace picongpu::particles::neuralBunch
             double bandFarCells{};
             bool computeBands{};
             bool quadrupoleMid{};
-            bool order4Mid{};
 
             ALPAKA_FN_ACC void operator()(
                 auto const& acc,
@@ -204,7 +213,7 @@ namespace picongpu::particles::neuralBunch
                     auto field = pointFieldDx(R, u);
                     // Mid band only: add the quadrupole shape correction. The same band window the classifier uses
                     // keeps the near (exact quadrature) and far bands bit-identical to the point-field-only path.
-                    if(quadrupoleMid || order4Mid)
+                    if(quadrupoleMid || TOrder4Mid)
                     {
                         double const r2 = R.x * R.x + R.y * R.y + R.z * R.z;
                         if(r2 >= bandNearCells * bandNearCells && r2 <= bandFarCells * bandFarCells)
@@ -219,7 +228,10 @@ namespace picongpu::particles::neuralBunch
                                 field.B.y += corr.B.y;
                                 field.B.z += corr.B.z;
                             }
-                            if(order4Mid)
+                            // Compile-time gate, not just the runtime flag: order4CorrectionDx allocates the
+                            // 8 KiB per-thread monomial table in local memory, so the call must not be
+                            // instantiated into the default kernel at all.
+                            if constexpr (TOrder4Mid)
                             {
                                 auto const corr4 = order4CorrectionDx(R, u, cellsDx);
                                 field.E.x += corr4.E.x;
@@ -260,7 +272,9 @@ namespace picongpu::particles::neuralBunch
      *        that want the bare point field keep the previous behaviour.
      * @param order4Mid add the analytic order-4 (hexadecapole) shape correction on top of the quadrupole for
      *        mid-band pairs. Off by default; with the banded near threshold at 6.0 cells the worst-case
-     *        point+quad+order4 error at the band boundary is ~5e-4 (gamma-10, 60 deg oblique).
+     *        point+quad+order4 error at the band boundary is ~5e-4 (gamma-10, 60 deg oblique). Selecting it
+     *        launches the ``TileWideKernel<true>`` specialization, which carries the order-4 monomial table
+     *        in per-thread local memory (~8 KiB/thread); the default kernel does not.
      */
     template<typename TQueue, typename TExec>
     void enqueueTileWidePointField(
@@ -291,28 +305,40 @@ namespace picongpu::particles::neuralBunch
         auto const blocksPerTile
             = (static_cast<std::uint64_t>(tileGeometry::outputDimension) + tileWideDetail::blockSize - 1u)
               / tileWideDetail::blockSize;
-        queue.enqueue(
-            alpaka::onHost::FrameSpec{
-                Vec{static_cast<std::uint32_t>(tileCount * blocksPerTile)},
-                Vec{tileWideDetail::blockSize},
-                exec},
-            alpaka::KernelBundle{
-                tileWideDetail::TileWideKernel{
-                    cellsDx,
-                    offset,
-                    tileCounts,
-                    sourceCount,
-                    nearThresholdCells,
-                    bandNearCells,
-                    bandFarCells,
-                    computeBands,
-                    quadrupoleMid,
-                    order4Mid},
-                positions,
-                velocities,
-                charges,
-                tileValues,
-                bandCounts});
+        // Select the kernel specialization from the runtime flag: the order-4 specialization carries the
+        // 8 KiB per-thread local-memory table and is only launched when the caller actually asks for it,
+        // so the default kernel keeps the correction-free frame size.
+        auto const launch = [&](auto const& kernel)
+        {
+            queue.enqueue(
+                alpaka::onHost::FrameSpec{
+                    Vec{static_cast<std::uint32_t>(tileCount * blocksPerTile)},
+                    Vec{tileWideDetail::blockSize},
+                    exec},
+                alpaka::KernelBundle{kernel, positions, velocities, charges, tileValues, bandCounts});
+        };
+        if(order4Mid)
+            launch(tileWideDetail::TileWideKernel<true>{
+                cellsDx,
+                offset,
+                tileCounts,
+                sourceCount,
+                nearThresholdCells,
+                bandNearCells,
+                bandFarCells,
+                computeBands,
+                quadrupoleMid});
+        else
+            launch(tileWideDetail::TileWideKernel<false>{
+                cellsDx,
+                offset,
+                tileCounts,
+                sourceCount,
+                nearThresholdCells,
+                bandNearCells,
+                bandFarCells,
+                computeBands,
+                quadrupoleMid});
     }
 
 } // namespace picongpu::particles::neuralBunch
