@@ -1,0 +1,30 @@
+[g1-1.5] train=2851 val=627
+  ep 0 loss 3.919e-02 val_p99 6.289e-01 val_worst 8.161e-01
+  ep 200 loss 1.278e-04 val_p99 5.463e-02 val_worst 4.702e-01
+  ep 400 loss 1.308e-04 val_p99 4.870e-02 val_worst 4.718e-01
+  ep 600 loss 3.767e-05 val_p99 3.737e-02 val_worst 4.273e-01
+  ep 800 loss 1.224e-05 val_p99 3.163e-02 val_worst 4.340e-01
+  ep 1000 loss 9.053e-06 val_p99 3.161e-02 val_worst 4.341e-01
+[g1.5-3] train=1423 val=298
+  ep 0 loss 5.489e-02 val_p99 6.117e-01 val_worst 7.971e-01
+  ep 200 loss 3.603e-03 val_p99 1.800e-01 val_worst 4.022e-01
+  ep 400 loss 2.183e-04 val_p99 1.159e-01 val_worst 3.952e-01
+  ep 600 loss 9.517e-05 val_p99 1.043e-01 val_worst 4.322e-01
+  ep 800 loss 4.280e-05 val_p99 9.666e-02 val_worst 4.261e-01
+  ep 1000 loss 3.357e-05 val_p99 9.662e-02 val_worst 4.281e-01
+[g3-10] skipped train=0 val=0
+[g10-30] train=1419 val=282
+  ep 0 loss 6.099e-02 val_p99 7.934e-01 val_worst 1.502e+00
+  ep 200 loss 1.164e-03 val_p99 3.131e-01 val_worst 1.026e+00
+  ep 400 loss 3.855e-04 val_p99 3.278e-01 val_worst 8.959e-01
+  ep 600 loss 8.498e-05 val_p99 3.100e-01 val_worst 1.268e+00
+  ep 800 loss 4.394e-05 val_p99 3.104e-01 val_worst 1.155e+00
+  ep 1000 loss 3.329e-05 val_p99 3.063e-01 val_worst 1.153e+00
+[g30-100] train=1404 val=304
+  ep 0 loss 6.160e-02 val_p99 7.679e-01 val_worst 9.302e-01
+  ep 200 loss 1.598e-03 val_p99 3.318e-01 val_worst 1.356e+00
+  ep 400 loss 3.329e-04 val_p99 2.776e-01 val_worst 1.410e+00
+  ep 600 loss 1.323e-04 val_p99 2.690e-01 val_worst 1.332e+00
+  ep 800 loss 6.741e-05 val_p99 2.304e-01 val_worst 1.163e+00
+  ep 1000 loss 4.899e-05 val_p99 2.229e-01 val_worst 1.147e+00
+RESULT {"own_test": {"n": 1392, "worst": 0.7304358001425906, "p99": 0.17769929275166435, "median": 0.002134799621127598}}

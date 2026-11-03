@@ -1,0 +1,7 @@
+  ep 0 loss 6.303e+00 val_p99 7.616e-01 val_worst 9.390e-01
+  ep 200 loss 4.819e-02 val_p99 7.616e-01 val_worst 9.390e-01
+  ep 400 loss 9.852e-04 val_p99 4.277e-01 val_worst 2.020e+00
+  ep 600 loss 1.506e-04 val_p99 4.389e-01 val_worst 2.582e+00
+  ep 800 loss 8.953e-05 val_p99 4.346e-01 val_worst 2.702e+00
+  ep 1000 loss 6.177e-05 val_p99 4.387e-01 val_worst 2.688e+00
+RESULT {"train": {"n": 7097, "worst": 0.7989208496842067, "p99": 0.06756505397472722, "median": 0.0017786774379393883}, "own_test": {"n": 1392, "worst": 1.9455406233725845, "p99": 0.3019891729998643, "median": 0.0025115014358177996}}
