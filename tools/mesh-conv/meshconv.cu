@@ -9,12 +9,19 @@
 // so F_c[j] is the component at the STAGGERED position (j*h + o_c)*cells.
 //
 // All precision-critical work (deposit, kernel build, accumulation of rho) is
-// double.  `--fft float` only casts the two FFT inputs and runs cuFFT in single
-// precision, so the float-FTT experiment is isolated from the kernel accuracy.
+// double.  `--fft float` only casts the two FFT inputs and runs the transform in
+// single precision, so the float-FFT experiment is isolated from the kernel
+// accuracy.
 //
-// Build (rosi_v100):
-//   PATH=/usr/local/cuda/bin:$PATH nvcc -O3 -arch=sm_70 -std=c++17 \
-//        meshconv.cu -lcufft -o meshconv
+// FFT backend: alpakaVendor (https://github.com/psychocoderHPC/alpakaVendor),
+// pinned by PIConGPU to af24cc7b2bd125056e9889e270d3af7bdf972c6f.  The program
+// only calls the portable alpaka::fft API and never calls a vendor FFT API
+// directly.  alpakaVendor maps the plan to the platform FFT: the CUDA FFT
+// runtime on an Nvidia GPU, hipFFT on AMD, oneMKL DFT on SYCL and FFTW on the
+// CPU.  The build script links that runtime; see run_all.sh.
+
+#include <alpaka/alpaka.hpp>
+#include <alpaka/fft.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -24,15 +31,47 @@
 #include <string>
 #include <vector>
 #include <algorithm>
-#include <cufft.h>
+#include <type_traits>
 #include <cuda_runtime.h>
 
 #define CK(x) do { cudaError_t e_ = (x); if (e_ != cudaSuccess) { \
   fprintf(stderr, "CUDA error %s:%d: %s\n", __FILE__, __LINE__, \
           cudaGetErrorString(e_)); exit(1); } } while (0)
-#define FK(x) do { cufftResult r_ = (x); if (r_ != CUFFT_SUCCESS) { \
-  fprintf(stderr, "cuFFT error %s:%d: %d\n", __FILE__, __LINE__, (int)r_); \
-  exit(1); } } while (0)
+
+//: alpakaVendor commit pinned by PIConGPU (include/picongpu/CMakeLists.txt).
+static constexpr char const* kAlpakaVendorPin =
+    "af24cc7b2bd125056e9889e270d3af7bdf972c6f";
+
+// Device + queue used by every FFT.  The queue owns the CUDA stream the raw
+// kernels and the alpakaVendor plans are ordered on.
+struct Env
+{
+  using Device = decltype(alpaka::onHost::makeDeviceSelector(
+      alpaka::api::cuda, alpaka::deviceKind::nvidiaGpu).makeDevice(0));
+  using Queue = decltype(std::declval<Device&>().makeQueue());
+
+  Device device;
+  Queue queue;
+
+  explicit Env(Device d) : device{std::move(d)}, queue{device.makeQueue()}
+  {
+  }
+};
+
+static Env makeEnv()
+{
+  auto selector = alpaka::onHost::makeDeviceSelector(
+      alpaka::api::cuda, alpaka::deviceKind::nvidiaGpu);
+  if(!selector.isAvailable())
+  {
+    fprintf(stderr, "no CUDA/NVIDIA device available to alpaka\n");
+    exit(1);
+  }
+  Env env{selector.makeDevice(0)};
+  fprintf(stderr, "[env] device=\"%s\" fft=alpakaVendor pin=%s\n",
+          env.device.getName().c_str(), kAlpakaVendorPin);
+  return env;
+}
 
 // ---------------------------------------------------------------------------
 // physical constants / conventions
@@ -163,55 +202,46 @@ __global__ void depositK(const double* __restrict__ pos,
   }
 }
 
-__global__ void realToComplexD(const double* __restrict__ r,
-                               cufftDoubleComplex* __restrict__ c, int64_t n) {
+// The alpakaVendor Complex<T> is layout-compatible with the backend complex
+// type (the vendor reinterprets the pointer internally).  The kernels therefore
+// write/read the real and imaginary scalars directly and avoid any device-side
+// construction of the host-oriented Complex type.
+template<typename T_Complex>
+__global__ void realToComplex(const double* __restrict__ r,
+                              T_Complex* __restrict__ c, int64_t n) {
+  using R = typename T_Complex::value_type;
   int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n) return;
-  c[i].x = r[i];
-  c[i].y = 0.0;
+  R* p = reinterpret_cast<R*>(c) + 2 * i;
+  p[0] = static_cast<R>(r[i]);
+  p[1] = R(0);
 }
-__global__ void realToComplexF(const double* __restrict__ r,
-                               cufftComplex* __restrict__ c, int64_t n) {
+
+template<typename T_Complex>
+__global__ void mulComplex(T_Complex* __restrict__ a,
+                           const T_Complex* __restrict__ b, int64_t n) {
+  using R = typename T_Complex::value_type;
   int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n) return;
-  c[i].x = (float)r[i];
-  c[i].y = 0.0f;
+  R* pa = reinterpret_cast<R*>(a) + 2 * i;
+  const R* pb = reinterpret_cast<const R*>(b) + 2 * i;
+  const R ar = pa[0], ai = pa[1], br = pb[0], bi = pb[1];
+  pa[0] = ar * br - ai * bi;
+  pa[1] = ar * bi + ai * br;
 }
-__global__ void mulD(cufftDoubleComplex* __restrict__ a,
-                     const cufftDoubleComplex* __restrict__ b, int64_t n) {
-  int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
-  if (i >= n) return;
-  const double ar = a[i].x, ai = a[i].y, br = b[i].x, bi = b[i].y;
-  a[i].x = ar * br - ai * bi;
-  a[i].y = ar * bi + ai * br;
-}
-__global__ void mulF(cufftComplex* __restrict__ a,
-                     const cufftComplex* __restrict__ b, int64_t n) {
-  int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
-  if (i >= n) return;
-  const float ar = a[i].x, ai = a[i].y, br = b[i].x, bi = b[i].y;
-  a[i].x = ar * br - ai * bi;
-  a[i].y = ar * bi + ai * br;
-}
-__global__ void extractD(const cufftDoubleComplex* __restrict__ src, int M,
-                         double* __restrict__ out, int N, int64_t N3,
-                         double scale) {
+
+template<typename T_Complex>
+__global__ void extract(const T_Complex* __restrict__ src, int M,
+                        double* __restrict__ out, int N, int64_t N3,
+                        double scale) {
+  using R = typename T_Complex::value_type;
   int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= N3) return;
   const int i = (int)(idx % N);
   const int j = (int)((idx / N) % N);
   const int k = (int)(idx / ((int64_t)N * N));
-  out[idx] = src[i + (int64_t)M * (j + (int64_t)M * k)].x * scale;
-}
-__global__ void extractF(const cufftComplex* __restrict__ src, int M,
-                         float* __restrict__ out, int N, int64_t N3,
-                         float scale) {
-  int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= N3) return;
-  const int i = (int)(idx % N);
-  const int j = (int)((idx / N) % N);
-  const int k = (int)(idx / ((int64_t)N * N));
-  out[idx] = src[i + (int64_t)M * (j + (int64_t)M * k)].x * scale;
+  const int64_t src_idx = i + (int64_t)M * (j + (int64_t)M * k);
+  out[idx] = static_cast<double>(reinterpret_cast<const R*>(src)[2 * src_idx]) * scale;
 }
 
 // ---------------------------------------------------------------------------
@@ -223,17 +253,28 @@ static double nowEvents(cudaEvent_t a, cudaEvent_t b) {
   return (double)ms;
 }
 
-// Runs deposit + kernel build + FFT + readout.  particles already on device.
-// Returns F[c*N3 + i + N*(j + N*k)] on the host.
-static std::vector<double> runMesh(const Sim& s,
-                                   const double* d_pos, const double* d_w,
-                                   int P, bool useFloat, Phase* ph,
-                                   bool verbose) {
+// Runs deposit + kernel build + alpakaVendor FFT + readout.  particles already
+// on device.  Returns F[c*N3 + i + N*(j + N*k)] on the host.
+//
+// The plan is built once per call from pinned alpakaVendor and reused for all 13
+// transforms (1 rho + 6 kernels forward, 6 inverse).  All transforms are C2C and
+// in-place; every plan input is converted from the double-precision rho/K arrays
+// by the cast kernel.  T_Real selects the FFT precision.
+template<typename T_Real>
+static std::vector<double> runMeshImpl(Env& env,
+                                       const Sim& s,
+                                       const double* d_pos,
+                                       const double* d_w,
+                                       int P, Phase* ph, bool verbose)
+{
+  using Complex = alpaka::fft::Complex_t<T_Real>;
+  using Extents = alpaka::Vec<uint32_t, 3u>;
+
   const int N = s.N, M = s.M();
   const int64_t M3 = (int64_t)M * M * M;
   const int64_t N3 = (int64_t)N * N * N;
-  const double h3 = s.h * s.h * s.h;
 
+  cudaStream_t stream = env.queue.getNativeHandle();
   CK(cudaMemcpyToSymbol(c_off, kOffsets, sizeof(kOffsets)));
 
   double* d_rho = nullptr;
@@ -241,141 +282,143 @@ static std::vector<double> runMesh(const Sim& s,
   CK(cudaMalloc(&d_rho, sizeof(double) * M3));
   CK(cudaMalloc(&d_K, sizeof(double) * 6 * M3));
 
+  // Complex FFT working buffers.  rho_hat: FFT(rho); kbuf: reused for each
+  // component (FFT(K) -> multiply by rhoHat -> inverse -> compact extract).
+  // Both transforms are in-place, so only two M^3 complex buffers are needed.
+  Complex* d_rho_hat = nullptr;
+  Complex* d_kbuf = nullptr;
+  CK(cudaMalloc(&d_rho_hat, sizeof(Complex) * M3));
+  CK(cudaMalloc(&d_kbuf, sizeof(Complex) * M3));
+
+  // Non-owning alpaka views over the raw contiguous allocations.  Extents are
+  // (M, M, M); alpaka index 0 is the fastest axis, matching the kernels and the
+  // plan's default contiguous strides.
+  auto extents = Extents::fill(static_cast<uint32_t>(M));
+  auto rhoHat = alpaka::makeView(env.device, d_rho_hat, extents);
+  auto kbuf = alpaka::makeView(env.device, d_kbuf, extents);
+
+  // One portable plan, 3-D C2C, in-place, no normalization (vendor default).
+  auto plan = alpaka::fft::onHost::PlanBuilder<Complex, Extents>{extents}
+                  .c2c()
+                  .inPlace()
+                  .build(env.device);
+  static_assert(
+      std::is_same_v<decltype(alpaka::getApi(env.queue)), alpaka::api::Cuda>,
+      "this tool instantiates the alpakaVendor CUDA FFT backend");
+
   std::vector<double> hostF((size_t)6 * N3, 0.0);
+  double* d_out = nullptr;
+  CK(cudaMalloc(&d_out, sizeof(double) * 6 * N3));
+
   cudaEvent_t e0, e1;
   CK(cudaEventCreate(&e0));
   CK(cudaEventCreate(&e1));
 
   // ---- deposit -----------------------------------------------------------
-  CK(cudaEventRecord(e0));
-  CK(cudaMemset(d_rho, 0, sizeof(double) * M3));
-  if (P > 0) {
+  CK(cudaEventRecord(e0, stream));
+  CK(cudaMemsetAsync(d_rho, 0, sizeof(double) * M3, stream));
+  if(P > 0)
+  {
     const int thr = 256, blk = (P + thr - 1) / thr;
-    depositK<<<blk, thr>>>(d_pos, d_w, P, d_rho, N, M, s.h, s.cell[0],
-                           s.cell[1], s.cell[2]);
+    depositK<<<blk, thr, 0, stream>>>(d_pos, d_w, P, d_rho, N, M, s.h,
+                                      s.cell[0], s.cell[1], s.cell[2]);
     CK(cudaGetLastError());
   }
-  CK(cudaEventRecord(e1));
+  CK(cudaEventRecord(e1, stream));
   CK(cudaEventSynchronize(e1));
   ph->dep = nowEvents(e0, e1);
 
   // ---- kernel build ------------------------------------------------------
-  CK(cudaEventRecord(e0));
+  CK(cudaEventRecord(e0, stream));
   {
     const int thr = 256;
     const int64_t blk = (M3 + thr - 1) / thr;
-    buildKernelK<<<(int)blk, thr>>>(d_K, M, s.h, s.cell[0], s.cell[1],
-                                    s.cell[2], s.u[0], s.u[1], s.u[2]);
+    buildKernelK<<<(int)blk, thr, 0, stream>>>(
+        d_K, M, s.h, s.cell[0], s.cell[1], s.cell[2], s.u[0], s.u[1], s.u[2]);
     CK(cudaGetLastError());
   }
-  CK(cudaEventRecord(e1));
+  CK(cudaEventRecord(e1, stream));
   CK(cudaEventSynchronize(e1));
   ph->kern = nowEvents(e0, e1);
 
-  if (!useFloat) {
-    cufftDoubleComplex* d_rhoHat = nullptr;
-    CK(cudaMalloc(&d_rhoHat, sizeof(cufftDoubleComplex) * M3));
-    cufftDoubleComplex* hbuf[6];
-    for (int c = 0; c < 6; ++c)
-      CK(cudaMalloc(&hbuf[c], sizeof(cufftDoubleComplex) * M3));
-    cufftHandle plan;
-    FK(cufftPlan3d(&plan, M, M, M, CUFFT_Z2Z));
-    CK(cudaEventRecord(e0));
+  // ---- FFT convolution (alpakaVendor) ------------------------------------
+  // The 13 transforms run in-place on the alpaka queue's stream.  Each group is
+  // bracketed by CUDA events so the pure transform time is reported separately
+  // from the compact read-out kernels.
+  double fftMs = 0.0;
+  double extractMs = 0.0;
+  {
     const int thr = 256;
     const int64_t blk = (M3 + thr - 1) / thr;
-    realToComplexD<<<(int)blk, thr>>>(d_rho, d_rhoHat, M3);
-    CK(cudaGetLastError());
-    FK(cufftExecZ2Z(plan, d_rhoHat, d_rhoHat, CUFFT_FORWARD));
-    for (int c = 0; c < 6; ++c) {
-      realToComplexD<<<(int)blk, thr>>>(d_K + (int64_t)c * M3, hbuf[c], M3);
-      CK(cudaGetLastError());
-      FK(cufftExecZ2Z(plan, hbuf[c], hbuf[c], CUFFT_FORWARD));
-      mulD<<<(int)blk, thr>>>(hbuf[c], d_rhoHat, M3);
-      CK(cudaGetLastError());
-      FK(cufftExecZ2Z(plan, hbuf[c], hbuf[c], CUFFT_INVERSE));
-    }
-    CK(cudaEventRecord(e1));
-    CK(cudaEventSynchronize(e1));
-    ph->fft = nowEvents(e0, e1);
-
-    // ---- readout ---------------------------------------------------------
-    double* d_out = nullptr;
-    CK(cudaMalloc(&d_out, sizeof(double) * 6 * N3));
-    CK(cudaEventRecord(e0));
-    const double scale = 1.0 / (double)M3;  // cuFFT inverse is unnormalised
     const int64_t blkN = (N3 + thr - 1) / thr;
-    for (int c = 0; c < 6; ++c)
-      extractD<<<(int)blkN, thr>>>(hbuf[c], M, d_out + (int64_t)c * N3, N, N3,
-                                   scale);
-    CK(cudaGetLastError());
-    CK(cudaMemcpy(hostF.data(), d_out, sizeof(double) * 6 * N3,
-                  cudaMemcpyDeviceToHost));
-    CK(cudaEventRecord(e1));
-    CK(cudaEventSynchronize(e1));
-    ph->read = nowEvents(e0, e1);
+    const double scale = 1.0 / (double)M3;  // alpakaVendor: no normalization
 
-    for (int c = 0; c < 6; ++c) CK(cudaFree(hbuf[c]));
-    CK(cudaFree(d_rhoHat));
-    CK(cudaFree(d_out));
-    FK(cufftDestroy(plan));
-  } else {
-    cufftComplex *d_rhoHat = nullptr;
-    CK(cudaMalloc(&d_rhoHat, sizeof(cufftComplex) * M3));
-    cufftComplex* hbuf[6];
-    for (int c = 0; c < 6; ++c)
-      CK(cudaMalloc(&hbuf[c], sizeof(cufftComplex) * M3));
-    cufftHandle plan;
-    FK(cufftPlan3d(&plan, M, M, M, CUFFT_C2C));
-    CK(cudaEventRecord(e0));
-    const int thr = 256;
-    const int64_t blk = (M3 + thr - 1) / thr;
-    realToComplexF<<<(int)blk, thr>>>(d_rho, d_rhoHat, M3);
+    CK(cudaEventRecord(e0, stream));
+    realToComplex<Complex><<<(int)blk, thr, 0, stream>>>(d_rho, d_rho_hat, M3);
     CK(cudaGetLastError());
-    FK(cufftExecC2C(plan, d_rhoHat, d_rhoHat, CUFFT_FORWARD));
-    for (int c = 0; c < 6; ++c) {
-      realToComplexF<<<(int)blk, thr>>>(d_K + (int64_t)c * M3, hbuf[c], M3);
+    alpaka::fft::onHost::executeForward(env.queue, plan, rhoHat, rhoHat);
+    CK(cudaEventRecord(e1, stream));
+    CK(cudaEventSynchronize(e1));
+    fftMs += nowEvents(e0, e1);
+
+    for(int c = 0; c < 6; ++c)
+    {
+      CK(cudaEventRecord(e0, stream));
+      realToComplex<Complex><<<(int)blk, thr, 0, stream>>>(
+          d_K + (int64_t)c * M3, d_kbuf, M3);
       CK(cudaGetLastError());
-      FK(cufftExecC2C(plan, hbuf[c], hbuf[c], CUFFT_FORWARD));
-      mulF<<<(int)blk, thr>>>(hbuf[c], d_rhoHat, M3);
+      alpaka::fft::onHost::executeForward(env.queue, plan, kbuf, kbuf);
+      mulComplex<Complex><<<(int)blk, thr, 0, stream>>>(d_kbuf, d_rho_hat, M3);
       CK(cudaGetLastError());
-      FK(cufftExecC2C(plan, hbuf[c], hbuf[c], CUFFT_INVERSE));
+      alpaka::fft::onHost::executeBackward(env.queue, plan, kbuf, kbuf);
+      CK(cudaEventRecord(e1, stream));
+      CK(cudaEventSynchronize(e1));
+      fftMs += nowEvents(e0, e1);
+
+      CK(cudaEventRecord(e0, stream));
+      extract<Complex><<<(int)blkN, thr, 0, stream>>>(
+          d_kbuf, M, d_out + (int64_t)c * N3, N, N3, scale);
+      CK(cudaGetLastError());
+      CK(cudaEventRecord(e1, stream));
+      CK(cudaEventSynchronize(e1));
+      extractMs += nowEvents(e0, e1);
     }
-    CK(cudaEventRecord(e1));
-    CK(cudaEventSynchronize(e1));
-    ph->fft = nowEvents(e0, e1);
-
-    float* d_out = nullptr;
-    CK(cudaMalloc(&d_out, sizeof(float) * 6 * N3));
-    std::vector<float> tmp((size_t)6 * N3);
-    CK(cudaEventRecord(e0));
-    const float scale = 1.0f / (float)M3;
-    const int64_t blkN = (N3 + thr - 1) / thr;
-    for (int c = 0; c < 6; ++c)
-      extractF<<<(int)blkN, thr>>>(hbuf[c], M, d_out + (int64_t)c * N3, N, N3,
-                                   scale);
-    CK(cudaGetLastError());
-    CK(cudaMemcpy(tmp.data(), d_out, sizeof(float) * 6 * N3,
-                  cudaMemcpyDeviceToHost));
-    for (int64_t i = 0; i < 6 * N3; ++i) hostF[i] = (double)tmp[i];
-    CK(cudaEventRecord(e1));
-    CK(cudaEventSynchronize(e1));
-    ph->read = nowEvents(e0, e1);
-
-    for (int c = 0; c < 6; ++c) CK(cudaFree(hbuf[c]));
-    CK(cudaFree(d_rhoHat));
-    CK(cudaFree(d_out));
-    FK(cufftDestroy(plan));
   }
+  ph->fft = fftMs;
 
+  // ---- readout (device-to-host copy of the compact field) ----------------
+  CK(cudaEventRecord(e0, stream));
+  CK(cudaMemcpyAsync(hostF.data(), d_out, sizeof(double) * 6 * N3,
+                     cudaMemcpyDeviceToHost, stream));
+  CK(cudaEventRecord(e1, stream));
+  CK(cudaEventSynchronize(e1));
+  ph->read = extractMs + nowEvents(e0, e1);
+
+  CK(cudaFree(d_rho_hat));
+  CK(cudaFree(d_kbuf));
+  CK(cudaFree(d_out));
   CK(cudaFree(d_rho));
   CK(cudaFree(d_K));
   CK(cudaEventDestroy(e0));
   CK(cudaEventDestroy(e1));
-  if (verbose)
+  if(verbose)
     fprintf(stderr, "[run] N=%d M=%d P=%d dep=%.2fms kern=%.2fms "
                     "fft=%.2fms read=%.2fms\n",
             N, M, P, ph->dep, ph->kern, ph->fft, ph->read);
   return hostF;
+}
+
+// Runtime precision dispatch (deposit/kernel/readout kernels shared).
+static std::vector<double> runMesh(Env& env,
+                                   const Sim& s,
+                                   const double* d_pos,
+                                   const double* d_w,
+                                   int P, bool useFloat, Phase* ph,
+                                   bool verbose)
+{
+  if(useFloat)
+    return runMeshImpl<float>(env, s, d_pos, d_w, P, ph, verbose);
+  return runMeshImpl<double>(env, s, d_pos, d_w, P, ph, verbose);
 }
 
 static void vel(int gamma, double u[3]) {
@@ -410,7 +453,7 @@ static void upload(DevPart& dp, const std::vector<double>& pos,
 // ---------------------------------------------------------------------------
 // modes
 // ---------------------------------------------------------------------------
-static int modeValidate(bool useFloat) {
+static int modeValidate(Env& env, bool useFloat) {
   const int N = 48, pad = 4;
   const int gammas[3] = {1, 10, 100};
   const double aspects[3] = {0.25, 4.0, 1.0};
@@ -434,7 +477,7 @@ static int modeValidate(bool useFloat) {
       DevPart dp;
       upload(dp, pos, w);
       Phase ph;
-      std::vector<double> F = runMesh(s, dp.pos, dp.w, 1, useFloat, &ph, true);
+      std::vector<double> F = runMesh(env, s, dp.pos, dp.w, 1, useFloat, &ph, true);
       const int64_t N3 = (int64_t)N * N * N;
       for (int ax = 0; ax < 2; ++ax) {  // 0 = x axis, 1 = y axis
         for (int d = 2; d <= 16; ++d) {
@@ -452,7 +495,7 @@ static int modeValidate(bool useFloat) {
   return 0;
 }
 
-static int modeNopad() {
+static int modeNopad(Env& env) {
   const int N = 32, center = N / 2;
   Sim s;
   s.N = N; s.h = 1.0;
@@ -464,9 +507,9 @@ static int modeNopad() {
   upload(dp, pos, w);
   Phase p1, p2;
   s.pad = 1;
-  std::vector<double> F1 = runMesh(s, dp.pos, dp.w, 1, false, &p1, false);
+  std::vector<double> F1 = runMesh(env, s, dp.pos, dp.w, 1, false, &p1, false);
   s.pad = 2;
-  std::vector<double> F2 = runMesh(s, dp.pos, dp.w, 1, false, &p2, false);
+  std::vector<double> F2 = runMesh(env, s, dp.pos, dp.w, 1, false, &p2, false);
   const int64_t N3 = (int64_t)N * N * N;
   double worst = 0.0;
   int wi = -1, wj = -1, wk = -1, wc = -1;
@@ -491,7 +534,7 @@ static int modeNopad() {
   return 0;
 }
 
-static int modeBench(bool useFloat) {
+static int modeBench(Env& env, bool useFloat) {
   const int Ns[2] = {64, 128};          // 20-cell and 50-cell bunch containers
   const double bunch[2] = {20.0, 50.0};
   const int Ps[4] = {1000, 10000, 1000000, 2000000};
@@ -526,7 +569,7 @@ static int modeBench(bool useFloat) {
       DevPart dp;
       upload(dp, pos, w);
       Phase ph;
-      std::vector<double> F = runMesh(s, dp.pos, dp.w, P, useFloat, &ph, false);
+      std::vector<double> F = runMesh(env, s, dp.pos, dp.w, P, useFloat, &ph, false);
       const double tot = ph.dep + ph.kern + ph.fft + ph.read;
       printf("%d,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f\n", P, N, s.M(), ph.dep,
              ph.kern, ph.fft, ph.read, tot);
@@ -544,7 +587,7 @@ int main(int argc, char** argv) {
     if (a == "--mode" && i + 1 < argc) mode = argv[++i];
     else if (a == "--fft" && i + 1 < argc) useFloat = (std::string(argv[++i]) == "float");
     else if (a == "--help") {
-      printf("usage: %s --mode {validate,nopad,bench} [--fft double|float]\n",
+      printf("usage: %s --mode {validate,nopad,bench,info} [--fft double|float]\n",
              argv[0]);
       return 0;
     } else {
@@ -552,9 +595,17 @@ int main(int argc, char** argv) {
       return 2;
     }
   }
-  if (mode == "validate") return modeValidate(useFloat);
-  if (mode == "nopad") return modeNopad();
-  if (mode == "bench") return modeBench(useFloat);
+  if (mode == "info")
+  {
+    printf("fft_backend=alpakaVendor\nalpakaVendor_pin=%s\n", kAlpakaVendorPin);
+    printf("transform=3D C2C, in-place, Normalization::none\n");
+    printf("precision=float|double (PlanBuilder<Complex<{float,double}>,Vec<uint32_t,3>>)\n");
+    return 0;
+  }
+  Env env = makeEnv();
+  if (mode == "validate") return modeValidate(env, useFloat);
+  if (mode == "nopad") return modeNopad(env);
+  if (mode == "bench") return modeBench(env, useFloat);
   fprintf(stderr, "unknown mode %s\n", mode.c_str());
   return 2;
 }

@@ -3,6 +3,30 @@
 Self-contained implementation of the free-space mesh field used for the far-field
 part of the T151 hybrid. It does not touch PIConGPU.
 
+## FFT backend
+
+The delivered implementation uses **alpakaVendor**
+(https://github.com/psychocoderHPC/alpakaVendor), pinned by PIConGPU
+(`include/picongpu/CMakeLists.txt`, `FetchContent`) to
+`af24cc7b2bd125056e9889e270d3af7bdf972c6f`. The program calls only the portable
+`alpaka::fft::onHost` API:
+
+    auto plan = alpaka::fft::onHost::PlanBuilder<
+                    alpaka::fft::Complex_t<T_Real>, alpaka::Vec<uint32_t, 3>>{extents}
+                    .c2c().inPlace().build(device);
+    alpaka::fft::onHost::executeForward(queue, plan, in, out);
+    alpaka::fft::onHost::executeBackward(queue, plan, in, out);
+
+The vendor maps that plan to the platform FFT: the CUDA FFT runtime on an Nvidia
+GPU, hipFFT on AMD, oneMKL DFT on SYCL and FFTW on the CPU. The source contains
+no direct vendor FFT call. Both `float` and `double` are supported
+(`alpaka::fft::RealScalar`), selected by `--fft float|double`.
+
+This replaces the earlier prototype that called the CUDA FFT API directly.
+Both implementations give the same validated numbers and comparable timings
+(see Validation and Performance). The alpakaVendor version is the one that
+ships because the project requires the vendor FFT for backend portability.
+
 ## Formulation
 
 Reference (validated `indfield.py`):
@@ -21,21 +45,27 @@ Mesh (this program):
     D = |R|^2/(1+u^2) + (R.u)^2/(1+u^2)^2
     E = (1/(1+u^2)) R / D^1.5,  B = beta x E,  beta = u/sqrt(1+u^2)
 
-The convolution is a circular FFT convolution zero-padded to `M = pad*N`.  With
+The convolution is a circular FFT convolution zero-padded to `M = pad*N`. With
 `pad = 2` the linear convolution is exact for source/target separations `< N`.
 `pad = 1` is the deliberate no-padding control.
 
 ## Build (rosi_v100, CUDA 12.6)
 
-    PATH=/usr/local/cuda/bin:$PATH nvcc -O3 -arch=sm_70 -std=c++17 \
-         meshconv.cu -lcufft -o meshconv
+    ./run_all.sh
+
+The script clones alpakaVendor at the PIConGPU pin, builds `meshconv.cu` with
+`nvcc` and links the CUDA FFT runtime from the toolkit. The alpaka version is
+the one pinned by alpakaVendor (`extern/alpaka3`,
+`7b92361468d3280c260200198081ae7e98f0bc56`).
 
 ## Modes
 
-    CUDA_VISIBLE_DEVICES=2 ./meshconv --mode validate [--fft double|float]
-    CUDA_VISIBLE_DEVICES=2 ./meshconv --mode nopad
-    CUDA_VISIBLE_DEVICES=2 ./meshconv --mode bench  [--fft double|float]
+    CUDA_VISIBLE_DEVICES=3 ./meshconv --mode info
+    CUDA_VISIBLE_DEVICES=3 ./meshconv --mode validate [--fft double|float]
+    CUDA_VISIBLE_DEVICES=3 ./meshconv --mode nopad
+    CUDA_VISIBLE_DEVICES=3 ./meshconv --mode bench  [--fft double|float]
 
+* `info`: prints the FFT backend and the alpakaVendor pin.
 * `validate`: grid 48^3, pad 4, one unit source on the centre node, gamma in
   {1,10,100}, aspect y/x in {0.25, 4, 1}, distances d = 2..16 nodes along +x and
   +y.  Prints `gamma,aspect,axis,d,comp,mesh`.
@@ -47,10 +77,46 @@ The convolution is a circular FFT convolution zero-padded to `M = pad*N`.  With
 * `bench`: particle counts 1e3/1e4/1e6/2e6 in a uniform cube filling a 20-cell
   (N=64, M=128) and a 50-cell (N=128, M=256) box, h=1.  Times deposit, kernel
   build, FFT (1 rho + 6 kernel forwards, 6 products, 6 inverses), and read-out
-  (compact + device-to-host) separately with CUDA events.
+  (compact + device-to-host) separately with CUDA events on the alpaka queue's
+  stream.
 
 Precision: deposit, kernel build and rho accumulation are double.  `--fft float`
-casts only the two FFT inputs and runs cuFFT in single precision.
+casts only the FFT inputs and runs the transform in single precision.
+
+## Validation
+
+Reference: `indfield.py`, sha256
+`a135598041a3dbe134667585631ea53fc6bdb7cf7a84419b5a8d762202599519`,
+evaluated serially by `compare_ref.py`. The alpakaVendor build reproduces the
+earlier direct-FFT prototype **to every printed digit**.
+
+Worst per-component error over the far band d=12..16 (double FFT): 1.4e-4 to
+2.9e-4. Over the near-dominated d=2..16 band: 3.0e-2 to 7.2e-1, so the mesh
+alone is not a near-field method and needs the table inside the shell.
+
+No-padding control, N=32, pad=1 vs pad=2: the wraparound artefact is
+8.947e-3 at `(i,j,k) = (31,13,18)`, Ex. This is the forbidden periodic image
+sum; `pad = 2` is the default in both bench and validation.
+
+`--fft float` (same double deposit and kernel): peak-normalised roundoff is at
+most 3.968e-6, which passes the 3e-4 gate; as a fraction of the local double
+field it reaches 3.26, so float is not usable for the physics.
+
+## Performance
+
+V100-SXM2-32GB, N=2e6, double FFT, same GPU session, h=1, aspect 1:
+
+| implementation | 20-cell (N=64, M=128) | 50-cell (N=128, M=256) |
+|---|---|---|
+| alpakaVendor (delivered) | 10.0 ms | 105.5 ms |
+| direct-FFT prototype | 10.0 ms | 82.8 ms |
+
+The 50-cell total includes a 100.7 MB device-to-host copy; keeping the field on
+device gives about 85 ms for the alpakaVendor build. An earlier T151 run on an
+idle GPU measured 8.6 ms and 60.5 ms for the direct-FFT prototype; the
+same-session pair above is the apples-to-apples comparison. Extrapolating the
+measured numbers as M^3 log M to a 256^3 box projects about 0.9 s on device,
+2.3 s with the full host copy. That projection is not measured.
 
 ## Known gaps
 
@@ -62,18 +128,8 @@ casts only the two FFT inputs and runs cuFFT in single precision.
   as a fraction of the local field it fails, with roundoff 1.7e-4 at d=8 and up
   to 2.4 at d=16 on the beamed gamma=10/100 cases.
 * **Zero-padding to at least 2x per axis is mandatory.** With `pad = 1` the
-  periodic wrap contaminates the field. The no-pad control reproduces the
-  artefact at 8.947e-3 (`(i,j,k) = (31,13,18)`, Ex). `pad = 2` makes the linear
-  convolution exact for separations below N.
-* **Timings** (V100-SXM2-32GB, N=2e6, double FFT): 20-cell bunch 8.6 ms,
-  50-cell bunch 60.5 ms. The 50-cell figure includes a 100.7 MB host copy;
-  keeping the field on device gives about 38 ms. Scaling as M^3 log M to a
-  256^3 box projects about 0.32 s. The 256^3 number is extrapolated, not
-  measured.
-* **Accuracy splits into two bands.** Far field d=12..16: worst per-component
-  error 1.4e-4 to 2.9e-4. Near-dominated d=2..16: 3.0e-2 to 7.2e-1. The mesh
-  alone is not a near-field method. Inside the shell the near-field table is
-  required.
+  periodic wrap contaminates the field (8.947e-3 artefact above). `pad = 2`
+  makes the linear convolution exact for separations below N.
 
 ## PIConGPU integration plan
 
