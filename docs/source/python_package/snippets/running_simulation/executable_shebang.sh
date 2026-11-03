@@ -1,4 +1,0 @@
-#!/bin/bash
-# BEGIN-EXECUTABLE-SHEBANG
-./my_input.py
-# END-EXECUTABLE-SHEBANG
