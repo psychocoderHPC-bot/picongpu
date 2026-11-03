@@ -264,6 +264,11 @@ namespace picongpu::particles::neuralBunch
         Vec3d const rPerp{R.x - rPar * bhat.x, R.y - rPar * bhat.y, R.z - rPar * bhat.z};
         double const perp2 = rPerp.x * rPerp.x + rPerp.y * rPerp.y + rPerp.z * rPerp.z;
         double const denomBase = rPar * rPar + perp2 * invG2;
+        // The exact-coincident point R = 0 is a measure-zero quadrature node (high-order clustered
+        // rules can round a panel's anchored endpoint back to the kernel centre); the integral is
+        // unaffected by its value, so return zero rather than the 0/0 limit.
+        if(denomBase == 0.0)
+            return PointFieldDx{};
         double const denom = denomBase * alpaka::math::sqrt(denomBase);
 
         Vec3d const eMov{invG2 * R.x / denom, invG2 * R.y / denom, invG2 * R.z / denom};

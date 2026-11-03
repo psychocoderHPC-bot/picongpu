@@ -43,8 +43,8 @@
 
 namespace picongpu::particles::neuralBunch
 {
-    inline constexpr int kExactMaxOrder = 32;
-    inline constexpr int kExactOrderCount = 7; // orders 4,8,12,16,20,24,32
+    inline constexpr int kExactMaxOrder = 96;
+    inline constexpr int kExactOrderCount = 10; // orders 4,8,12,16,20,24,32,48,64,96
 
     ALPAKA_FN_HOST_ACC inline constexpr int exactOrderIndex(int order)
     {
@@ -64,6 +64,12 @@ namespace picongpu::particles::neuralBunch
             return 5;
         case 32:
             return 6;
+        case 48:
+            return 7;
+        case 64:
+            return 8;
+        case 96:
+            return 9;
         default:
             return -1;
         }
@@ -147,7 +153,7 @@ namespace picongpu::particles::neuralBunch
         static GaussTable create()
         {
             GaussTable table;
-            constexpr int orders[kExactOrderCount]{4, 8, 12, 16, 20, 24, 32};
+            constexpr int orders[kExactOrderCount]{4, 8, 12, 16, 20, 24, 32, 48, 64, 96};
             for(int i = 0; i < kExactOrderCount; ++i)
                 gaussLegendre(orders[i], table.nodes[i], table.weights[i]);
             return table;
