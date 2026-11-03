@@ -85,6 +85,23 @@ if(alpaka_DEP_CUDA)
     )
     # Device parity of the batched exact quadrature against the host FP64 reference plus the distance policy.
     add_test(NAME neuralBunchExactDeviceTest COMMAND neuralBunchExactBenchmark check cuda)
+    # Measurement bench for the stationary in-support path (not a ctest): isolated per-slot cost,
+    # the production per-tile pair loop, the 512-source batch pass, and the host/device azimuth grid.
+    add_executable(neuralBunchInSupportBench inSupportBench.cu)
+    target_compile_features(neuralBunchInSupportBench PRIVATE cxx_std_20)
+    target_include_directories(neuralBunchInSupportBench PRIVATE "${PIConGPUapp_SOURCE_DIR}/..")
+    target_link_libraries(
+        neuralBunchInSupportBench
+        PRIVATE alpaka::nn alpakaVendor::alpakaVendor nlohmann_json::nlohmann_json OpenMP::OpenMP_CXX
+    )
+    alpaka_finalize(neuralBunchInSupportBench)
+    target_compile_definitions(
+        neuralBunchInSupportBench
+        PRIVATE
+            ALPAKA_CMAKE_TARGET_HEADERS_FINALIZE_CALLED
+            ALPAKA_CMAKE_TARGET_CUDA_FINALIZE_CALLED
+            ALPAKA_CMAKE_TARGET_HOST_FINALIZE_CALLED
+    )
     add_executable(neuralBunchDevicePipelineTest devicePipelineTest.cu)
     target_compile_features(neuralBunchDevicePipelineTest PRIVATE cxx_std_20)
     target_include_directories(neuralBunchDevicePipelineTest PRIVATE "${PIConGPUapp_SOURCE_DIR}/..")
