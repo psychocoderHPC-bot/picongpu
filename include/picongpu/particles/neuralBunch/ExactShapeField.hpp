@@ -34,8 +34,8 @@
 
 namespace picongpu::particles::neuralBunch
 {
-    inline constexpr int kExactMaxOrder = 32;
-    inline constexpr int kExactOrderCount = 7; // orders 4,8,12,16,20,24,32
+    inline constexpr int kExactMaxOrder = 64;
+    inline constexpr int kExactOrderCount = 9; // orders 4,8,12,16,20,24,32,48,64
 
     ALPAKA_FN_HOST_ACC inline constexpr int exactOrderIndex(int order)
     {
@@ -55,6 +55,10 @@ namespace picongpu::particles::neuralBunch
             return 5;
         case 32:
             return 6;
+        case 48:
+            return 7;
+        case 64:
+            return 8;
         default:
             return -1;
         }
@@ -141,7 +145,7 @@ namespace picongpu::particles::neuralBunch
         static GaussTable create()
         {
             GaussTable table;
-            constexpr int orders[kExactOrderCount]{4, 8, 12, 16, 20, 24, 32};
+            constexpr int orders[kExactOrderCount]{4, 8, 12, 16, 20, 24, 32, 48, 64};
             for(int i = 0; i < kExactOrderCount; ++i)
                 gaussLegendre(orders[i], table.nodes[i], table.weights[i]);
             return table;
@@ -552,6 +556,177 @@ namespace picongpu::particles::neuralBunch
                 }
     }
 
+
+    // ---- Analytic singular-part subtraction for the stationary (u=0) in-support case ----
+    //
+    // The Coulomb kernel K(R) = R/|R|^3 = grad_p(-1/|R0-p|). By the divergence theorem,
+    // the integral of K over the uniform support box is a smooth surface integral of
+    // 1/|R0-p| over the six faces (the observation point is strictly interior, so the
+    // integrand is nonsingular). Gauss converges for this: spectrally for interior points,
+    // algebraically near faces (the error is weighted by W(t) which vanishes at the
+    // support boundary, keeping the absolute error small).
+    //
+    // The remainder (W(s)-W(t))*K(s) is O(1/r) instead of O(1/r^2). It is integrated
+    // with the pyramid (cone) decomposition: the sub-box containing t is split at t into
+    // corner boxes, each covered by three pyramids with the singularity at the apex. The
+    // r^2 radial Jacobian cancels 1/r^2 and (W-W(t)) adds O(r), so the integrand is O(r)
+    // and smooth; Gauss converges spectrally at low order.
+    //
+    // Valid ONLY for the isotropic Coulomb kernel (u=0). The relativistic kernel is
+    // anisotropic (D = r_par^2 + r_perp^2/gamma^2) and does not reduce to a surface
+    // integral; moving sources keep the full box/pyramid quadrature.
+
+    inline constexpr int kExactBoxFieldOrder = 64;
+    inline constexpr int kExactRemNang = 8;
+    inline constexpr int kExactRemNr = 8;
+
+    ALPAKA_FN_HOST_ACC inline Vec3d exactBoxFieldCoulomb(
+        Vec3d const& R0,
+        Vec3d const& cells,
+        int order,
+        GaussTable const& table)
+    {
+        double const half[3]{1.5 * cells.x, 1.5 * cells.y, 1.5 * cells.z};
+        double out[3]{0.0, 0.0, 0.0};
+        int const idx = exactOrderIndex(order);
+        double const* const xn = table.nodes[idx];
+        double const* const wn = table.weights[idx];
+        for(int axis = 0; axis < 3; ++axis)
+            for(int sgn : {-1, 1})
+            {
+                double const fixed = static_cast<double>(sgn) * half[axis];
+                double const df = R0[axis] - fixed;
+                int const o0 = (axis + 1) % 3;
+                int const o1 = (axis + 2) % 3;
+                double const h0 = half[o0];
+                double const h1 = half[o1];
+                double P = 0.0;
+                for(int i = 0; i < order; ++i)
+                {
+                    double const v0 = h0 * xn[i];
+                    double const d0 = v0 - R0[o0];
+                    double const d0sq = d0 * d0;
+                    for(int j = 0; j < order; ++j)
+                    {
+                        double const v1 = h1 * xn[j];
+                        double const d1 = v1 - R0[o1];
+                        P += (h0 * h1) * wn[i] * wn[j] / alpaka::math::sqrt(d0sq + d1 * d1 + df * df);
+                    }
+                }
+                out[axis] += static_cast<double>(sgn) * P;
+            }
+        return {out[0], out[1], out[2]};
+    }
+
+    template<typename T_Type>
+    ALPAKA_FN_HOST_ACC void exactRemainderPyramidCoulomb(
+        Vec3d const& R0,
+        Vec3d const& cells,
+        int nang,
+        int nr,
+        double wOffset,
+        GaussTable const& table,
+        ExactAccumulator6<T_Type>& accumulator)
+    {
+        int const ia = exactOrderIndex(nang);
+        int const ir = exactOrderIndex(nr);
+        double const* const xa = table.nodes[ia];
+        double const* const wa = table.weights[ia];
+        double const* const xr = table.nodes[ir];
+        double const* const wr = table.weights[ir];
+        double const t[3]{R0.x / cells.x, R0.y / cells.y, R0.z / cells.z};
+        double const boxLo[3]{-1.5, -1.5, -1.5};
+        for(int ix = 0; ix < 3; ++ix)
+            for(int iy = 0; iy < 3; ++iy)
+                for(int iz = 0; iz < 3; ++iz)
+                {
+                    double const lo[3]{boxLo[0] + ix, boxLo[1] + iy, boxLo[2] + iz};
+                    double const hi[3]{lo[0] + 1.0, lo[1] + 1.0, lo[2] + 1.0};
+                    bool contains = true;
+                    for(int a = 0; a < 3; ++a)
+                        contains = contains && lo[a] <= t[a] && t[a] <= hi[a];
+                    if(!contains)
+                        continue;
+                    double segLo[3][2]{};
+                    double segHi[3][2]{};
+                    double segSgn[3][2]{};
+                    int segCnt[3]{};
+                    for(int a = 0; a < 3; ++a)
+                    {
+                        if(lo[a] < t[a])
+                        {
+                            segLo[a][segCnt[a]] = lo[a];
+                            segHi[a][segCnt[a]] = t[a];
+                            segSgn[a][segCnt[a]] = -1.0;
+                            ++segCnt[a];
+                        }
+                        if(t[a] < hi[a])
+                        {
+                            segLo[a][segCnt[a]] = t[a];
+                            segHi[a][segCnt[a]] = hi[a];
+                            segSgn[a][segCnt[a]] = 1.0;
+                            ++segCnt[a];
+                        }
+                    }
+                    for(int cx = 0; cx < segCnt[0]; ++cx)
+                        for(int cy = 0; cy < segCnt[1]; ++cy)
+                            for(int cz = 0; cz < segCnt[2]; ++cz)
+                            {
+                                double const L[3]{
+                                    segHi[0][cx] - segLo[0][cx],
+                                    segHi[1][cy] - segLo[1][cy],
+                                    segHi[2][cz] - segLo[2][cz]};
+                                if(L[0] <= 0.0 || L[1] <= 0.0 || L[2] <= 0.0)
+                                    continue;
+                                double const sgn[3]{segSgn[0][cx], segSgn[1][cy], segSgn[2][cz]};
+                                double const V = L[0] * L[1] * L[2];
+                                for(int face = 0; face < 3; ++face)
+                                {
+                                    int const o0 = (face + 1) % 3;
+                                    int const o1 = (face + 2) % 3;
+                                    for(int iu = 0; iu < nang; ++iu)
+                                    {
+                                        double const uu = 0.5 * (xa[iu] + 1.0);
+                                        double const wu = 0.5 * wa[iu];
+                                        for(int iv = 0; iv < nang; ++iv)
+                                        {
+                                            double const vv = 0.5 * (xa[iv] + 1.0);
+                                            double const wv = 0.5 * wa[iv];
+                                            double q[3]{0.0, 0.0, 0.0};
+                                            q[face] = sgn[face] * L[face];
+                                            q[o0] = sgn[o0] * uu * L[o0];
+                                            q[o1] = sgn[o1] * vv * L[o1];
+                                            for(int irr = 0; irr < nr; ++irr)
+                                            {
+                                                double const r = 0.5 * (xr[irr] + 1.0);
+                                                double const s[3]{
+                                                    t[0] + r * q[0],
+                                                    t[1] + r * q[1],
+                                                    t[2] + r * q[2]};
+                                                double const W =
+                                                    exactTscShape(s[0]) * exactTscShape(s[1]) * exactTscShape(s[2]);
+                                                double const Ww = W - wOffset;
+                                                if(Ww == 0.0)
+                                                    continue;
+                                                double const Rx = R0.x - s[0] * cells.x;
+                                                double const Ry = R0.y - s[1] * cells.y;
+                                                double const Rz = R0.z - s[2] * cells.z;
+                                                double const r2 = Rx * Rx + Ry * Ry + Rz * Rz;
+                                                if(r2 == 0.0)
+                                                    continue;
+                                                double const inv = 1.0 / (r2 * alpaka::math::sqrt(r2));
+                                                double const ww = 0.5 * wr[irr] * wu * wv * V * r * r * Ww;
+                                                accumulator.add(0, ww * Rx * inv);
+                                                accumulator.add(1, ww * Ry * inv);
+                                                accumulator.add(2, ww * Rz * inv);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                }
+    }
+
     ALPAKA_FN_HOST_ACC inline double exactRichardsonError(
         double const* a,
         double const* b)
@@ -589,36 +764,46 @@ namespace picongpu::particles::neuralBunch
         if(distance == 0.0)
         {
             result.inSupport = true;
-            ExactAccumulator6<T_Type> coarse;
-            ExactAccumulator6<T_Type> fine;
-            exactBoxIntegral(
-                R0,
-                u,
-                cells,
-                settings.nearAngularOrder,
-                settings.nearRadialOrder,
-                settings.nearBoxOrder,
-                table,
-                coarse);
-            exactBoxIntegral(
-                R0,
-                u,
-                cells,
-                settings.nearAngularOrderFine,
-                settings.nearRadialOrder,
-                settings.nearBoxOrderFine,
-                table,
-                fine);
-            double a[6], b[6];
-            for(int i = 0; i < 6; ++i)
+            double const uu2 = u.x * u.x + u.y * u.y + u.z * u.z;
+            if(uu2 == 0.0)
             {
-                a[i] = static_cast<double>(coarse.sum[i]);
-                b[i] = static_cast<double>(fine.sum[i]);
+                // Stationary (Coulomb) in-support: analytic subtraction.
+                // E = W(t)/vol * box_field + pyramid_remainder(W(s)-W(t))
+                double const t[3]{R0.x / cells.x, R0.y / cells.y, R0.z / cells.z};
+                double const Wt = exactTscShape(t[0]) * exactTscShape(t[1]) * exactTscShape(t[2]);
+                double const vol = cells.x * cells.y * cells.z;
+                Vec3d const S = exactBoxFieldCoulomb(R0, cells, kExactBoxFieldOrder, table);
+                ExactAccumulator6<T_Type> rem;
+                exactRemainderPyramidCoulomb<T_Type>(R0, cells, kExactRemNang, kExactRemNr, Wt, table, rem);
+                double const scale = Wt / vol;
+                result.E = {
+                    S.x * scale + static_cast<double>(rem.sum[0]),
+                    S.y * scale + static_cast<double>(rem.sum[1]),
+                    S.z * scale + static_cast<double>(rem.sum[2])};
+                result.B = {0.0, 0.0, 0.0};
+                result.error = 0.0;
+                result.converged = true;
             }
-            result.error = exactRichardsonError(a, b);
-            result.converged = result.error <= settings.tol;
-            result.E = {static_cast<double>(fine.sum[0]), static_cast<double>(fine.sum[1]), static_cast<double>(fine.sum[2])};
-            result.B = {static_cast<double>(fine.sum[3]), static_cast<double>(fine.sum[4]), static_cast<double>(fine.sum[5])};
+            else
+            {
+                // Moving in-support: anisotropic kernel, full box/pyramid.
+                ExactAccumulator6<T_Type> coarse;
+                ExactAccumulator6<T_Type> fine;
+                exactBoxIntegral(R0, u, cells, settings.nearAngularOrder,
+                    settings.nearRadialOrder, settings.nearBoxOrder, table, coarse);
+                exactBoxIntegral(R0, u, cells, settings.nearAngularOrderFine,
+                    settings.nearRadialOrder, settings.nearBoxOrderFine, table, fine);
+                double a[6], b[6];
+                for(int i = 0; i < 6; ++i)
+                {
+                    a[i] = static_cast<double>(coarse.sum[i]);
+                    b[i] = static_cast<double>(fine.sum[i]);
+                }
+                result.error = exactRichardsonError(a, b);
+                result.converged = result.error <= settings.tol;
+                result.E = {static_cast<double>(fine.sum[0]), static_cast<double>(fine.sum[1]), static_cast<double>(fine.sum[2])};
+                result.B = {static_cast<double>(fine.sum[3]), static_cast<double>(fine.sum[4]), static_cast<double>(fine.sum[5])};
+            }
         }
         else
         {
