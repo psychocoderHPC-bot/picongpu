@@ -162,12 +162,46 @@ namespace picongpu
 
                 auto datasetName = baseName + "/" + group + "/" + dataset;
                 ::openPMD::Series& series = *params.openPMDSeries;
-                ::openPMD::MeshRecordComponent mrc
-                    = series.iterations[currentStep].open().meshes[baseName + "_" + group][dataset];
+                auto& meshes = series.iterations[currentStep].open().meshes;
+                std::string const meshName = baseName + "_" + group;
+                if(!meshes.contains(meshName))
+                {
+                    throw std::runtime_error(
+                        "openPMD: restart requires mesh '" + meshName
+                        + "', but it is not present in the checkpoint; a malformed mesh (for example missing "
+                          "geometry metadata) is rejected instead of being skipped silently");
+                }
+                auto& mesh = meshes[meshName];
+                for(char const* attribute : {"geometry", "axisLabels", "gridSpacing", "gridGlobalOffset", "timeOffset"})
+                {
+                    if(!mesh.containsAttribute(attribute))
+                    {
+                        log<picLog::INPUT_OUTPUT>(
+                            "openPMD: WARNING mesh '%1%' has no %2% metadata; using the backwards-compatible reading")
+                            % meshName % attribute;
+                    }
+                }
+                if(!mesh.contains(dataset))
+                {
+                    throw std::runtime_error(
+                        "openPMD: restart requires dataset '" + datasetName + "', but it is missing");
+                }
+                ::openPMD::MeshRecordComponent mrc = mesh[dataset];
+                auto const expectedDatatype = ::openPMD::determineDatatype<T_Scalar>();
+                if(mrc.getDatatype() != expectedDatatype)
+                {
+                    throw std::runtime_error(
+                        "openPMD: dataset '" + datasetName + "' stores "
+                        + ::openPMD::datatypeToString(mrc.getDatatype()) + " but the restart path requires "
+                        + ::openPMD::datatypeToString(expectedDatatype)
+                        + "; checkpoint datatype conversion is not supported");
+                }
                 auto ndim = mrc.getDimensionality();
                 if(ndim != simDim)
                 {
-                    throw std::runtime_error(std::string("Invalid dimensionality for ") + name);
+                    throw std::runtime_error(
+                        "openPMD: dataset '" + datasetName + "' has dimensionality " + std::to_string(ndim)
+                        + " but the deck requires " + std::to_string(simDim));
                 }
 
                 DataSpace<simDim> gridPos = Environment<simDim>::get().GridController().getPosition();

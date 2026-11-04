@@ -25,13 +25,16 @@
 #    include "picongpu/defines.hpp"
 #    include "picongpu/plugins/openPMD/GetComponentsType.hpp"
 #    include "picongpu/plugins/openPMD/openPMDWriter.def"
+#    include "picongpu/plugins/openPMD/restart/RestartDatatype.hpp"
 #    include "picongpu/traits/PICToOpenPMD.hpp"
 
+#    include <pmacc/Environment.hpp>
 #    include <pmacc/assert.hpp>
 #    include <pmacc/traits/GetComponentsType.hpp>
 #    include <pmacc/traits/GetNComponents.hpp>
 #    include <pmacc/traits/Resolve.hpp>
 
+#    include <iostream>
 #    include <memory>
 
 #    include <openPMD/openPMD.hpp>
@@ -77,17 +80,13 @@ namespace picongpu
                 std::string const name_lookup[] = {"x", "y", "z"};
 
                 std::shared_ptr<ComponentType> loadBfr;
-                if(elements > 0)
-                {
-                    loadBfr = std::shared_ptr<ComponentType>{
-                        new ComponentType[elements],
-                        [](ComponentType* ptr) { delete[] ptr; }};
-                }
 
                 for(uint32_t n = 0; n < components; ++n)
                 {
                     ::openPMD::Record record = particleSpecies[openPMDName()];
                     ::openPMD::RecordComponent rc = components > 1 ? record[name_lookup[n]] : record;
+                    std::string const recordName
+                        = components > 1 ? openPMDName() + "/" + name_lookup[n] : openPMDName();
 
                     ValueType* dataPtr = frame.getIdentifier(Identifier()).getPointer();
 
@@ -96,10 +95,20 @@ namespace picongpu
                         // avoid deadlock between not finished pmacc tasks and mpi
                         // calls in openPMD
                         eventSystem::getTransactionEvent().waitForFinished();
-                        rc.loadChunk<ComponentType>(
-                            loadBfr,
+                        bool converted = false;
+                        loadBfr = restartDatatype::loadChunkConverted<ComponentType>(
+                            rc,
+                            recordName,
                             ::openPMD::Offset{particlesOffset},
-                            ::openPMD::Extent{elements});
+                            ::openPMD::Extent{elements},
+                            [&]() { params->openPMDSeries->flush(); },
+                            converted);
+                        if(converted
+                           && Environment<simDim>::get().GridController().getGlobalRank() == 0)
+                            std::cerr << "openPMD: WARNING record '" << recordName << "' stores "
+                                      << ::openPMD::datatypeToString(rc.getDatatype()) << " and is converted to "
+                                      << ::openPMD::datatypeToString(::openPMD::determineDatatype<ComponentType>())
+                                      << " during chunk loading" << std::endl;
                     }
 
                     /** start a blocking read of all scheduled variables
