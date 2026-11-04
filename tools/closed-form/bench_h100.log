@@ -1,0 +1,50 @@
+===== stationary gamma=1 =====
+### --kernel extract --band in --order 4 --npairs 1048576
+  self-check (kernel vs CPU extract, 64 pairs): max rel err = 1.950e-16
+  bench: 1048576 pairs x 4 iters in 0.1144 s -> 3.6676e+07 pairs/s (1.5022e+11 nodes/s)  [0.027 us/pair]
+DONE kernel=extract band=in gamma=1 pairsPerSec=3.6676e+07
+### --kernel extract --band in --order 5 --npairs 1048576
+  self-check (kernel vs CPU extract, 64 pairs): max rel err = 1.560e-16
+  bench: 1048576 pairs x 4 iters in 0.2284 s -> 1.8366e+07 pairs/s (1.4692e+11 nodes/s)  [0.054 us/pair]
+DONE kernel=extract band=in gamma=1 pairsPerSec=1.8366e+07
+### --kernel extract --band in --order 6 --npairs 1048576
+  self-check (kernel vs CPU extract, 64 pairs): max rel err = 1.950e-16
+  bench: 1048576 pairs x 4 iters in 0.3748 s -> 1.1191e+07 pairs/s (1.5470e+11 nodes/s)  [0.089 us/pair]
+DONE kernel=extract band=in gamma=1 pairsPerSec=1.1191e+07
+### --kernel sing --band in --order 8 --refine 0 --npairs 1048576
+  bench: 1048576 pairs x 4 iters in 3.2845 s -> 1.2770e+06 pairs/s (4.1845e+10 nodes/s)  [0.783 us/pair]
+DONE kernel=sing band=in gamma=1 pairsPerSec=1.2770e+06
+### --kernel sing --band in --order 8 --refine 1 --npairs 262144
+  bench: 262144 pairs x 4 iters in 7.2612 s -> 1.4441e+05 pairs/s (3.7856e+10 nodes/s)  [6.925 us/pair]
+DONE kernel=sing band=in gamma=1 pairsPerSec=1.4441e+05
+### --kernel extract --band band --order 5 --npairs 1048576
+  self-check (kernel vs CPU extract, 64 pairs): max rel err = 3.861e-17
+  bench: 1048576 pairs x 4 iters in 0.2270 s -> 1.8474e+07 pairs/s (1.1084e+11 nodes/s)  [0.054 us/pair]
+DONE kernel=extract band=band gamma=1 pairsPerSec=1.8474e+07
+### --kernel extract --band band --order 6 --npairs 1048576
+  self-check (kernel vs CPU extract, 64 pairs): max rel err = 2.401e-17
+  bench: 1048576 pairs x 4 iters in 0.3736 s -> 1.1228e+07 pairs/s (1.1641e+11 nodes/s)  [0.089 us/pair]
+DONE kernel=extract band=band gamma=1 pairsPerSec=1.1228e+07
+### --kernel sing --band band --order 8 --refine 0 --npairs 1048576
+  bench: 1048576 pairs x 4 iters in 2.2293 s -> 1.8815e+06 pairs/s (2.6009e+10 nodes/s)  [0.532 us/pair]
+DONE kernel=sing band=band gamma=1 pairsPerSec=1.8815e+06
+===== moving gamma=10 axial (beta || z) =====
+### --kernel extract --band in --order 5 --gamma 10 --npairs 1048576
+  self-check (kernel vs CPU extract, 64 pairs): max rel err = 2.105e-16
+  bench: 1048576 pairs x 4 iters in 0.2546 s -> 1.6475e+07 pairs/s (1.3180e+11 nodes/s)  [0.061 us/pair]
+DONE kernel=extract band=in gamma=10 pairsPerSec=1.6475e+07
+### --kernel extract --band in --order 6 --gamma 10 --npairs 1048576
+  self-check (kernel vs CPU extract, 64 pairs): max rel err = 2.104e-16
+  bench: 1048576 pairs x 4 iters in 0.4198 s -> 9.9914e+06 pairs/s (1.3812e+11 nodes/s)  [0.100 us/pair]
+DONE kernel=extract band=in gamma=10 pairsPerSec=9.9914e+06
+### --kernel extract --band in --order 8 --gamma 10 --npairs 262144
+  self-check (kernel vs CPU extract, 64 pairs): max rel err = 1.122e-16
+  bench: 262144 pairs x 4 iters in 0.2632 s -> 3.9834e+06 pairs/s (1.3053e+11 nodes/s)  [0.251 us/pair]
+DONE kernel=extract band=in gamma=10 pairsPerSec=3.9834e+06
+### --kernel sing --band in --order 8 --refine 0 --gamma 10 --npairs 1048576
+  bench: 1048576 pairs x 4 iters in 3.3610 s -> 1.2479e+06 pairs/s (4.0892e+10 nodes/s)  [0.801 us/pair]
+DONE kernel=sing band=in gamma=10 pairsPerSec=1.2479e+06
+### --kernel sing --band in --order 8 --refine 1 --gamma 10 --npairs 262144
+  bench: 262144 pairs x 4 iters in 7.3604 s -> 1.4246e+05 pairs/s (3.7345e+10 nodes/s)  [7.019 us/pair]
+DONE kernel=sing band=in gamma=10 pairsPerSec=1.4246e+05
+ALL_DONE
