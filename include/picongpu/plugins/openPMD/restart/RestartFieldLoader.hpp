@@ -26,6 +26,7 @@
 #    include "picongpu/fields/absorber/pml/Field.hpp"
 #    include "picongpu/plugins/misc/ComponentNames.hpp"
 #    include "picongpu/plugins/openPMD/openPMDWriter.def"
+#    include "picongpu/plugins/openPMD/restart/RestartDatatype.hpp"
 #    include "picongpu/plugins/openPMD/restart/RestartFieldMetadata.hpp"
 #    include "picongpu/simulation/control/MovingWindow.hpp"
 #    include "picongpu/traits/IsFieldDomainBound.hpp"
@@ -39,6 +40,7 @@
 #    include <pmacc/particles/frame_types.hpp>
 #    include <pmacc/types.hpp>
 
+#    include <iostream>
 #    include <optional>
 #    include <sstream>
 #    include <stdexcept>
@@ -218,14 +220,6 @@ namespace picongpu
 
                     log<picLog::INPUT_OUTPUT>("openPMD: Read from field '%1%'") % objectName;
 
-                    auto const expectedDatatype = ::openPMD::determineDatatype<float_X>();
-                    if(rc.getDatatype() != expectedDatatype)
-                        throw std::runtime_error(
-                            "openPMD: record '" + recordName + "' stores "
-                            + ::openPMD::datatypeToString(rc.getDatatype()) + " but the restart path requires "
-                            + ::openPMD::datatypeToString(expectedDatatype)
-                            + "; checkpoint datatype conversion is not supported");
-
                     double conversionFactor = 1.0;
                     if(rc.containsAttribute("unitSI"))
                     {
@@ -261,7 +255,20 @@ namespace picongpu
                      * @todo float_X should be some kind of gridBuffer's
                      *       GetComponentsType<ValueType>::type
                      */
-                    std::shared_ptr<float_X> field_container = rc.loadChunk<float_X>(start, count);
+                    bool converted = false;
+                    std::shared_ptr<float_X> field_container
+                        = restartDatatype::loadChunkConverted<float_X>(
+                            rc,
+                            recordName,
+                            start,
+                            count,
+                            [&mesh]() { mesh.seriesFlush(); },
+                            converted);
+                    if(converted && Environment<simDim>::get().GridController().getGlobalRank() == 0)
+                        std::cerr << "openPMD: WARNING record '" << recordName << "' stores "
+                                  << ::openPMD::datatypeToString(rc.getDatatype()) << " and is converted to "
+                                  << ::openPMD::datatypeToString(::openPMD::determineDatatype<float_X>())
+                                  << " during chunk loading" << std::endl;
 
                     /* start a blocking read of all scheduled variables */
                     mesh.seriesFlush();

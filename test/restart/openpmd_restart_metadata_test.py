@@ -83,16 +83,54 @@ def break_id_provider_metadata(path, step):
 def break_field_datatype(path, step):
     with h5py.File(path, "r+") as handle:
         mesh = handle[f"{checkpoint_step_path(path, step)}/E"]
-        component = mesh["x"]
-        data = component[:]
-        attributes = dict(component.attrs)
-        del mesh["x"]
-        replacement = mesh.create_dataset("x", data=data.astype(np.float64))
-        for name, value in attributes.items():
-            replacement.attrs[name] = value
+        rewrite_dataset(mesh, "x", np.float64)
 
 
-def run_restart(args, workdir, checkpoint_dir, periodic):
+def rewrite_dataset(group, name, dtype):
+    dataset = group[name]
+    data = dataset[:]
+    attributes = dict(dataset.attrs)
+    del group[name]
+    replacement = group.create_dataset(name, data=data.astype(dtype))
+    for attribute, value in attributes.items():
+        replacement.attrs[attribute] = value
+    return replacement
+
+
+def convert_floating_records_to_double(path, step):
+    with h5py.File(path, "r+") as handle:
+        fields = handle[checkpoint_step_path(path, step)]
+        for mesh_name in list(fields.keys()):
+            mesh = fields[mesh_name]
+            if not isinstance(mesh, h5py.Group):
+                continue
+            for component_name in list(mesh.keys()):
+                component = mesh[component_name]
+                if isinstance(component, h5py.Dataset) and component.dtype.kind == "f":
+                    rewrite_dataset(mesh, component_name, np.float64)
+
+        particles = handle[f"data/{step}/particles"]
+        for species_name in list(particles.keys()):
+            species = particles[species_name]
+            for record_name in list(species.keys()):
+                record = species[record_name]
+                if isinstance(record, h5py.Dataset):
+                    if record.dtype.kind == "f":
+                        rewrite_dataset(species, record_name, np.float64)
+                else:
+                    for component_name in list(record.keys()):
+                        component = record[component_name]
+                        if isinstance(component, h5py.Dataset) and component.dtype.kind == "f":
+                            rewrite_dataset(record, component_name, np.float64)
+
+
+def break_particle_datatype(path, step, species, record):
+    with h5py.File(path, "r+") as handle:
+        group = handle[f"data/{step}/particles/{species}"]
+        rewrite_dataset(group, record, np.int32)
+
+
+def run_restart(args, workdir, checkpoint_dir, periodic, extra_arguments=None):
     run_dir = os.path.join(workdir, "run")
     shutil.rmtree(run_dir, ignore_errors=True)
     os.makedirs(run_dir)
@@ -122,6 +160,8 @@ def run_restart(args, workdir, checkpoint_dir, periodic):
         "-s",
         str(args.steps),
     ]
+    if extra_arguments:
+        command.extend(extra_arguments)
     environment = dict(os.environ)
     environment.pop("LD_PRELOAD", None)
     environment["CUDA_VISIBLE_DEVICES"] = str(args.device)
@@ -206,17 +246,128 @@ def scenario_id_provider(args, source, workdir):
     print("PASS malformed idProvider metadata is rejected with a clear error")
 
 
-def scenario_datatype(args, source, workdir):
-    checkpoint_dir = os.path.join(workdir, "datatype", "checkpoint")
+def scenario_double_conversion(args, source, workdir):
+    checkpoint_dir = os.path.join(workdir, "double", "checkpoint")
     path = copy_checkpoint(source, checkpoint_dir)
-    break_field_datatype(path, args.step)
-    result, _ = run_restart(args, os.path.join(workdir, "datatype"), checkpoint_dir, args.periodic)
-    check(result.returncode != 0, "incompatible field datatype was accepted")
-    check(
-        "checkpoint datatype conversion is not supported" in result.stdout,
-        "incompatible datatype did not produce the expected error:\n" + result.stdout[-2000:],
+    convert_floating_records_to_double(path, args.step)
+
+    baseline_checkpoints = os.path.join(workdir, "double", "baseline-checkpoints")
+    baseline_dir = os.path.join(workdir, "double-baseline", "checkpoint")
+    copy_checkpoint(source, baseline_dir)
+    baseline, baseline_run = run_restart(
+        args,
+        os.path.join(workdir, "double-baseline"),
+        baseline_dir,
+        args.periodic,
+        ["--checkpoint.period", "1", "--checkpoint.directory", baseline_checkpoints],
     )
-    print("PASS incompatible field datatype is rejected with a clear error")
+    check(baseline.returncode == 0, "float32 baseline restart failed:\n" + baseline.stdout[-2000:])
+
+    converted_checkpoints = os.path.join(workdir, "double", "converted-checkpoints")
+    result, run_dir = run_restart(
+        args,
+        os.path.join(workdir, "double"),
+        checkpoint_dir,
+        args.periodic,
+        ["--checkpoint.period", "1", "--checkpoint.directory", converted_checkpoints],
+    )
+    check(result.returncode == 0, "double-record restart failed:\n" + result.stdout[-2000:])
+    check(
+        "is converted to" in result.stdout,
+        "double-record restart did not warn about the conversion:\n" + result.stdout[-2000:],
+    )
+
+    output_step = args.step + args.steps
+    for name in FIELDS:
+        for component in "xyz":
+            reference = read_field(
+                os.path.join(baseline_run, "openPMD", f"{name}_{output_step:06d}.h5"),
+                output_step,
+                name,
+                component,
+            )
+            converted = read_field(
+                os.path.join(run_dir, "openPMD", f"{name}_{output_step:06d}.h5"),
+                output_step,
+                name,
+                component,
+            )
+            check(
+                np.allclose(reference, converted, rtol=1e-6, atol=1e-9),
+                f"{name}/{component} differs after double-to-float conversion: "
+                f"max abs diff {np.max(np.abs(reference - converted))}",
+            )
+
+    baseline_particles = read_checkpoint_particles(
+        os.path.join(baseline_checkpoints, f"checkpoint_{output_step:06d}.h5"),
+        output_step,
+    )
+    converted_particles = read_checkpoint_particles(
+        os.path.join(converted_checkpoints, f"checkpoint_{output_step:06d}.h5"),
+        output_step,
+    )
+    check(
+        baseline_particles.keys() == converted_particles.keys(),
+        "particle record sets differ after double-to-float conversion",
+    )
+    for key, reference in baseline_particles.items():
+        converted = converted_particles[key]
+        check(
+            np.allclose(reference, converted, rtol=1e-6, atol=1e-9),
+            f"particle record {key} differs after double-to-float conversion: "
+            f"max abs diff {np.max(np.abs(reference.astype(np.float64) - converted.astype(np.float64)))}",
+        )
+    print("PASS double field and particle records are converted to float")
+
+
+def scenario_integer_field(args, source, workdir):
+    checkpoint_dir = os.path.join(workdir, "integer-field", "checkpoint")
+    path = copy_checkpoint(source, checkpoint_dir)
+    with h5py.File(path, "r+") as handle:
+        mesh = handle[f"{checkpoint_step_path(path, args.step)}/E"]
+        rewrite_dataset(mesh, "x", np.int32)
+    result, _ = run_restart(args, os.path.join(workdir, "integer-field"), checkpoint_dir, args.periodic)
+    check(result.returncode != 0, "integer field datatype was accepted")
+    check(
+        "only FLOAT and DOUBLE checkpoint data can be converted" in result.stdout
+        and "E/x" in result.stdout,
+        "integer field datatype did not produce the expected error:\n" + result.stdout[-2000:],
+    )
+    print("PASS integer field datatype is rejected with a clear error")
+
+
+def scenario_integer_particle(args, source, workdir):
+    checkpoint_dir = os.path.join(workdir, "integer-particle", "checkpoint")
+    path = copy_checkpoint(source, checkpoint_dir)
+    break_particle_datatype(path, args.step, "electrons", "weighting")
+    result, _ = run_restart(
+        args, os.path.join(workdir, "integer-particle"), checkpoint_dir, args.periodic
+    )
+    check(result.returncode != 0, "integer particle record was accepted")
+    check(
+        "only FLOAT and DOUBLE checkpoint data can be converted" in result.stdout
+        and "weighting" in result.stdout,
+        "integer particle record did not produce the expected error:\n" + result.stdout[-2000:],
+    )
+    print("PASS integer particle record is rejected with a clear error")
+
+
+def read_checkpoint_particles(path, step):
+    result = {}
+    with h5py.File(path, "r") as handle:
+        particles = handle[f"data/{step}/particles"]
+        for species_name in particles:
+            species = particles[species_name]
+            for record_name in species:
+                if record_name == "particlePatches":
+                    continue
+                record = species[record_name]
+                if isinstance(record, h5py.Dataset):
+                    result[(species_name, record_name)] = record[:]
+                else:
+                    for component_name in record:
+                        result[(species_name, record_name, component_name)] = record[component_name][:]
+    return result
 
 
 def check(condition, message):
@@ -250,7 +401,9 @@ def main():
     scenario_grid_spacing(args, args.checkpoint, args.workdir)
     scenario_missing_pml(args, args.checkpoint, args.workdir)
     scenario_id_provider(args, args.checkpoint, args.workdir)
-    scenario_datatype(args, args.checkpoint, args.workdir)
+    scenario_double_conversion(args, args.checkpoint, args.workdir)
+    scenario_integer_field(args, args.checkpoint, args.workdir)
+    scenario_integer_particle(args, args.checkpoint, args.workdir)
     print("all restart metadata tests passed")
 
 

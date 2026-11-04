@@ -30,7 +30,11 @@ openPMD metadata, and runs `picongpu --checkpoint.restart`. It checks:
 4. a checkpoint without `Convolutional PML` records restarts with periodic
    boundaries,
 5. a malformed `picongpu_idProvider` mesh is rejected,
-6. a non-`float_X` field dataset is rejected with the datatype in the error.
+6. double field and particle records are converted to `float_X` with a warning
+   and produce the same step-1 fields and particles as the float32 input,
+7. an integer field dataset where a floating-point value is expected is rejected,
+8. an integer particle record where a floating-point value is expected is
+   rejected.
 
 ```bash
 env -u LD_PRELOAD python3 test/restart/openpmd_restart_metadata_test.py \
