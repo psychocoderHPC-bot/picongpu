@@ -40,8 +40,9 @@ namespace picongpu
                 {
                     float_X const eField2 = pmacc::math::l2norm2(eField);
                     /* l2norm2 is a sum of squares of finite inputs and therefore >= 0, so
-                     * zero is the exact zero-field case. jion ~ eField/|eField|^2 is
-                     * undefined there; return no current instead of dividing by zero. */
+                     * only a zero or underflowed-to-zero field (flush-to-zero) reaches this
+                     * branch. jion ~ eField/|eField|^2 is undefined there; return no current
+                     * instead of dividing by zero. */
                     if(eField2 <= float_X(0.0))
                     {
                         return float3_X::create(0.0);

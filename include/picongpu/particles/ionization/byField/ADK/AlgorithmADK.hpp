@@ -101,9 +101,12 @@ namespace picongpu
                         float_X const effectiveCharge = chargeState + float_X(1.0);
                         /* effective principal quantum number (unitless) */
                         float_X const nEff = effectiveCharge / math::sqrt(float_X(2.0) * iEnergy);
-                        /* ADK rate in the log domain: pow(dBase, 2 nEff) overflows to Inf while
-                         * exp(-2 Zeff^3/(3 nEff^3 eInAU)) underflows to 0 for strong fields, and
-                         * 0*Inf is NaN. The logarithm is algebraically identical in the safe regime:
+                        /* ADK rate in the log domain: dBase = 16 e iEnergy^2/(eInAU Zeff) grows as
+                         * eInAU falls, so for weak fields (small eInAU) and/or large nEff the
+                         * power pow(dBase, 2 nEff) overflows to Inf while the exponential
+                         * exp(-2 Zeff^3/(3 nEff^3 eInAU)) underflows to 0, and 0*Inf is NaN.
+                         * At strong fields the power underflows and the exponential is ~1.
+                         * The logarithm is algebraically identical in the safe regime:
                          *   ln(dBase) = ln(4 e Zeff^3) - ln(eInAU) - 4 ln(nEff)
                          *   ln(rate)  = ln(eInAU) + 2 nEff ln(dBase) - ln(8 pi) - ln(Zeff)
                          *               - 2 Zeff^3/(3 nEff^3 eInAU)

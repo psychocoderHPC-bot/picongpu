@@ -37,9 +37,8 @@ namespace picongpu::particles::atomicPhysics
         template<typename T_Ion>
         DINLINE void operator()(T_Ion& ion, float_X numberBoundElectrons)
         {
-            /* Clamp instead of asserting: float subtraction can underflow below zero
-             * (or overshoot numberOfProtons), see #1850. An out-of-range value here
-             * is rounding, so store the nearest physical bound rather than trap. */
+            /* Clamp instead of asserting, see #1850: float subtraction can underflow
+             * below zero, and an out-of-range caller can overshoot numberOfProtons. */
             constexpr float_X numberOfProtons = picongpu::traits::GetAtomicNumbers<T_Ion>::type::numberOfProtons;
             ion[boundElectrons_] = (numberBoundElectrons < float_X(0.0))      ? float_X(0.0)
                                    : (numberBoundElectrons > numberOfProtons) ? numberOfProtons
