@@ -184,6 +184,7 @@ TEST_CASE("ADK: guards, clamp and log-domain parity", "[ionization][ADK]")
     float_X const probability = adkProbability<false>(eField);
     REQUIRE(probability > 0.0_X);
     REQUIRE(probability < 1.0_X);
+    // 1e-4 assumes strict-IEEE host math; a fast-math host build may need a looser bound.
     CHECK(probability == Catch::Approx(reference).epsilon(1e-4));
 
     float3_X const strongField = fieldForAU(float_X(2.0) / float_X(3.0));
@@ -225,6 +226,7 @@ TEST_CASE("BSI effective charge: guard branches", "[ionization][BSI]")
     // one, so any field ionized. Both must now return {0, 0}.
     ZeroEnergyHalfChargeIon zeroEnergyIon(1.0_X);
     checkNoIonization(zeroEnergyIon);
+    // NegativeChargeTable is deliberately unphysical; this only exercises the ZEff < 0 input guard.
     NegativeChargeIon negativeChargeIon(1.0_X);
     checkNoIonization(negativeChargeIon);
 }
