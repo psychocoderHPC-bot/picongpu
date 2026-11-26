@@ -155,6 +155,22 @@ namespace picongpu
 
                     float_64 const densityUnit
                         = static_cast<float_64>(particleToGrid::derivedAttributes::Density().getUnit()[0]);
+
+                    /** lower ion density cutoff
+                     *
+                     * The Thomas-Fermi model yields unphysical artifacts for low densities.
+                     * If `density` is lower than a user-definable ion number density value the model will not be
+                     * applied.
+                     */
+                    constexpr float_X lowerDensityCutoff = particles::ionization::thomasFermi::CUTOFF_LOW_DENSITY;
+
+                    /* Apply the density cutoff first: avgKinEnergy divides by density, which
+                     * is 0/0 or x/0 for an empty cell. Do not form NaN/Inf below the cutoff. */
+                    if(density * densityUnit < lowerDensityCutoff)
+                    {
+                        return numNewFreeMacroElectrons;
+                    }
+
                     float_64 const kinEnergyDensityUnit
                         = static_cast<float_64>(particleToGrid::derivedAttributes::EnergyDensity().getUnit()[0]);
                     /* convert from kinetic energy density to average kinetic energy per particle */
@@ -184,13 +200,6 @@ namespace picongpu
                     /** mass density in units of g/cm^3 */
                     float_64 const massDensity = density * convToMassDensity;
 
-                    /** lower ion density cutoff
-                     *
-                     * The Thomas-Fermi model yields unphysical artifacts for low densities.
-                     * If `density` is lower than a user-definable ion number density value the model will not be
-                     * applied.
-                     */
-                    constexpr float_X lowerDensityCutoff = particles::ionization::thomasFermi::CUTOFF_LOW_DENSITY;
                     /** lower electron temperature cutoff
                      *
                      * The Thomas-Fermi model also yields partly unphysical artifacts for low electron temperatures.
@@ -200,7 +209,7 @@ namespace picongpu
                     constexpr float_X lowerTemperatureCutoff
                         = particles::ionization::thomasFermi::CUTOFF_LOW_TEMPERATURE_EV;
 
-                    if(density * densityUnit >= lowerDensityCutoff && temperature >= lowerTemperatureCutoff)
+                    if(temperature >= lowerTemperatureCutoff)
                     {
                         float_64 const chargeState = picongpu::traits::attribute::getChargeState(parentIon);
                         /* @TODO replace the float_64 with float_X and make sure the values are scaled to PIConGPU
