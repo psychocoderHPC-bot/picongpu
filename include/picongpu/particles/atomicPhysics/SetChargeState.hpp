@@ -34,8 +34,9 @@ namespace picongpu::particles::atomicPhysics
     struct SetChargeState
     {
         //! @attention invalidates the atomicStateCollectionIndex attribute of macro ions
+        // pure attribute setter, needs a host variant for host-side unit tests and host callers; no device-only code
         template<typename T_Ion>
-        DINLINE void operator()(T_Ion& ion, float_X numberBoundElectrons)
+        HDINLINE void operator()(T_Ion& ion, float_X numberBoundElectrons)
         {
             /* Clamp instead of asserting, see #1850: float subtraction can underflow
              * below zero, and an out-of-range caller can overshoot numberOfProtons. */
