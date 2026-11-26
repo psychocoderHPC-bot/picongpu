@@ -87,31 +87,41 @@ namespace picongpu
                         /* electric field in atomic units - only absolute value */
                         float_X const eInAU = sim.pic.conv().eField2auEField(pmacc::math::l2norm(eField));
 
+                        /* no tunneling without a field or without a bound electron: both make
+                         * nEff and dBase diverge (division by zero, 0^Inf). l2norm is >= 0, so
+                         * zero is the only reachable edge; inputs from outside are finite. */
+                        if(eInAU <= float_X(0.0) || iEnergy <= float_X(0.0))
+                        {
+                            return IonizerReturn{0.0, 0u};
+                        }
+
                         /* the charge that attracts the electron that is to be ionized:
                          * equals `protonNumber - #allInnerElectrons`
                          */
                         float_X const effectiveCharge = chargeState + float_X(1.0);
                         /* effective principal quantum number (unitless) */
                         float_X const nEff = effectiveCharge / math::sqrt(float_X(2.0) * iEnergy);
-                        /* nameless variable for convenience dFromADK*/
-                        float_X const dBase = float_X(4.0) * math::exp(1._X) * util::cube(effectiveCharge)
-                                              / (eInAU * util::quad(nEff));
-                        float_X const dFromADK = math::pow(dBase, nEff);
-
-                        /* ionization rate (for CIRCULAR polarization)*/
-                        float_X rateADK = eInAU * util::square(dFromADK) / (float_X(8.0) * pi * effectiveCharge)
-                                          * math::exp(
-                                              float_X(-2.0) * util::cube(effectiveCharge)
-                                              / (float_X(3.0) * util::cube(nEff) * eInAU));
+                        /* ADK rate in the log domain: pow(dBase, 2 nEff) overflows to Inf while
+                         * exp(-2 Zeff^3/(3 nEff^3 eInAU)) underflows to 0 for strong fields, and
+                         * 0*Inf is NaN. The logarithm is algebraically identical in the safe regime:
+                         *   ln(dBase) = ln(4 e Zeff^3) - ln(eInAU) - 4 ln(nEff)
+                         *   ln(rate)  = ln(eInAU) + 2 nEff ln(dBase) - ln(8 pi) - ln(Zeff)
+                         *               - 2 Zeff^3/(3 nEff^3 eInAU)
+                         * Every log argument is > 0 because of the guard above. */
+                        float_X const lnDBase = math::log(float_X(4.0) * math::exp(1._X) * util::cube(effectiveCharge))
+                                                - math::log(eInAU) - float_X(4.0) * math::log(nEff);
+                        float_X lnRate
+                            = math::log(eInAU) + float_X(2.0) * nEff * lnDBase - math::log(float_X(8.0) * pi)
+                              - math::log(effectiveCharge)
+                              - float_X(2.0) * util::cube(effectiveCharge) / (float_X(3.0) * util::cube(nEff) * eInAU);
 
                         /* in case of linear polarization the rate is modified by an additional factor */
                         if(T_linPol)
                         {
                             /* factor from averaging over one laser cycle with LINEAR polarization */
-                            float_X const polarizationFactor = math::sqrt(
-                                float_X(3.0) * util::cube(nEff) * eInAU / (pi * util::cube(effectiveCharge)));
-
-                            rateADK *= polarizationFactor;
+                            lnRate += float_X(0.5)
+                                      * (math::log(float_X(3.0)) + float_X(3.0) * math::log(nEff) + math::log(eInAU)
+                                         - math::log(pi) - float_X(3.0) * math::log(effectiveCharge));
                         }
 
                         /* simulation time step in atomic units */
@@ -124,8 +134,13 @@ namespace picongpu
                          * the whole ensemble should then follow
                          * P = 1 - exp(-rate * time step) if the laser wavelength is
                          * sampled well enough
+                         *
+                         * Clamp the linearized probability to [0,1]: rate*dt > 1 already means
+                         * certain ionization, and the Monte-Carlo test randNr < prob needs a
+                         * probability in that range.
                          */
-                        float_X const probADK = rateADK * timeStepAU;
+                        float_X const lnProb = lnRate + math::log(timeStepAU);
+                        float_X const probADK = (lnProb >= float_X(0.0)) ? float_X(1.0) : math::exp(lnProb);
 
                         /* ionization condition */
                         if(randNr < probADK)
