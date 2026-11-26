@@ -74,6 +74,13 @@ namespace picongpu
                             typename picongpu::traits::GetIonizationEnergies<ParticleType>::type{}[cs];
                         float_X const ZEff =
                             typename picongpu::traits::GetEffectiveNuclearCharge<ParticleType>::type{}[cs];
+                        /* The critical field is iEnergy^2/(4 ZEff), undefined for ZEff <= 0
+                         * (Inf or NaN, handled only by IEEE comparison luck) and zero for
+                         * iEnergy = 0, which would ionize without any bound energy. */
+                        if(ZEff <= float_X(0.0) || iEnergy <= float_X(0.0))
+                        {
+                            return IonizerReturn{0.0, 0u};
+                        }
                         /* critical field strength in atomic units */
                         float_X critField = iEnergy * iEnergy / (float_X(4.0) * ZEff);
 

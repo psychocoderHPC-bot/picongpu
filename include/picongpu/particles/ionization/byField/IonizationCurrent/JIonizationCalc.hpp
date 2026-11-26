@@ -32,12 +32,22 @@ namespace picongpu
             struct JIonizationCalc
             {
                 /** Functor calculating ionization current.
-                 * Is only called if ionization energy is not zero,
-                 * thus we ensure the field is different from zero.
+                 * A non-zero ionization energy does not imply a non-zero field: the
+                 * caller may pass a field interpolated at a different position, so the
+                 * current has to handle a vanishing field itself.
                  */
                 HDINLINE float3_X operator()(float_X const ionizationEnergy, float3_X const eField)
                 {
-                    float3_X jion = ionizationEnergy * eField / pmacc::math::l2norm2(eField) / sim.pic.getDt()
+                    float_X const eField2 = pmacc::math::l2norm2(eField);
+                    /* l2norm2 is a sum of squares of finite inputs and therefore >= 0, so
+                     * only a zero or underflowed-to-zero field (flush-to-zero) reaches this
+                     * branch. jion ~ eField/|eField|^2 is undefined there; return no current
+                     * instead of dividing by zero. */
+                    if(eField2 <= float_X(0.0))
+                    {
+                        return float3_X::create(0.0);
+                    }
+                    float3_X jion = ionizationEnergy * eField / eField2 / sim.pic.getDt()
                                     / sim.pic.getCellSize().productOfComponents();
                     return jion;
                 }

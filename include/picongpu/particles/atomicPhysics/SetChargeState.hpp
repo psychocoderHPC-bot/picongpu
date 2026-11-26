@@ -34,15 +34,16 @@ namespace picongpu::particles::atomicPhysics
     struct SetChargeState
     {
         //! @attention invalidates the atomicStateCollectionIndex attribute of macro ions
+        // pure attribute setter, needs a host variant for host-side unit tests and host callers; no device-only code
         template<typename T_Ion>
-        DINLINE void operator()(T_Ion& ion, float_X numberBoundElectrons)
+        HDINLINE void operator()(T_Ion& ion, float_X numberBoundElectrons)
         {
-            PMACC_DEVICE_ASSERT_MSG(numberBoundElectrons >= 0._X, "Number of bound electrons must be >= 0");
-            PMACC_DEVICE_ASSERT_MSG(
-                numberBoundElectrons <= picongpu::traits::GetAtomicNumbers<T_Ion>::type::numberOfProtons,
-                "Number of bound electrons must be <= numberOfProtons species");
-
-            ion[boundElectrons_] = numberBoundElectrons;
+            /* Clamp instead of asserting, see #1850: float subtraction can underflow
+             * below zero, and an out-of-range caller can overshoot numberOfProtons. */
+            constexpr float_X numberOfProtons = picongpu::traits::GetAtomicNumbers<T_Ion>::type::numberOfProtons;
+            ion[boundElectrons_] = (numberBoundElectrons < float_X(0.0))      ? float_X(0.0)
+                                   : (numberBoundElectrons > numberOfProtons) ? numberOfProtons
+                                                                              : numberBoundElectrons;
 
             if constexpr(traits::hasParticleTypeTag<Tags::Ion, T_Ion>())
             {

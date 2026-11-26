@@ -79,6 +79,15 @@ namespace picongpu
                         /* electric field in atomic units - only absolute value */
                         float_X eInAU = sim.pic.conv().eField2auEField(pmacc::math::l2norm(eField));
 
+                        /* The rate multiplies iEnergy by sqrt(1/charExpArg) and exp(-charExpArg)
+                         * with charExpArg = sqrt(8 iEnergy^3)/eInAU. iEnergy = 0 makes
+                         * charExpArg 0 or 0/0, so the product is Inf or NaN; eInAU = 0 divides
+                         * by zero. Both are not tunneling situations, so return early. */
+                        if(eInAU <= float_X(0.0) || iEnergy <= float_X(0.0))
+                        {
+                            return IonizerReturn{0.0, 0u};
+                        }
+
                         /* factor two avoid calculation math::pow(2,5./4.); */
                         float_X const twoToFiveQuarters = 2.3784142300054;
 
